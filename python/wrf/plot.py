@@ -109,9 +109,9 @@ _VAR_STYLES: Dict[str, Dict[str, Any]] = {
     "srh3":   dict(cmap="RdPu", levels=np.arange(0, 525, 25), extend="max"),
     "srh":    dict(cmap="RdPu", levels=np.arange(0, 525, 25), extend="max"),
     "effective_srh": dict(cmap="RdPu", levels=np.arange(0, 525, 25), extend="max"),
-    "shear_0_1km": dict(cmap="plasma", levels=np.arange(0, 42, 2), extend="max"),
-    "shear_0_6km": dict(cmap="plasma", levels=np.arange(0, 42, 2), extend="max"),
-    "bulk_shear":  dict(cmap="plasma", levels=np.arange(0, 42, 2), extend="max"),
+    "shear_0_1km": dict(cmap="YlOrRd", levels=np.arange(0, 42, 2), extend="max"),
+    "shear_0_6km": dict(cmap="YlOrRd", levels=np.arange(0, 42, 2), extend="max"),
+    "bulk_shear":  dict(cmap="YlOrRd", levels=np.arange(0, 42, 2), extend="max"),
 
     # ---- Severe composites ----
     "stp":           dict(cmap="Reds", levels=np.arange(0, 11, 1), extend="max"),
@@ -124,15 +124,15 @@ _VAR_STYLES: Dict[str, Dict[str, Any]] = {
     "critical_angle": dict(cmap="RdYlBu_r", levels=np.arange(0, 200, 10), extend="max"),
 
     # ---- Temperature ----
-    "temp":   dict(cmap="RdBu_r", center_zero=False, extend="both"),
+    "temp":   dict(cmap="Spectral_r", extend="both"),
     "tc":     dict(cmap="RdBu_r", center_zero=True, extend="both"),
-    "theta":  dict(cmap="RdYlBu_r", extend="both"),
-    "theta_e": dict(cmap="RdYlBu_r", extend="both"),
-    "tv":     dict(cmap="RdBu_r", center_zero=False, extend="both"),
-    "twb":    dict(cmap="RdBu_r", center_zero=False, extend="both"),
-    "td":     dict(cmap="BrBG", extend="both"),
-    "dp2m":   dict(cmap="BrBG", levels=np.arange(-20, 82, 2), extend="both"),
-    "theta_w": dict(cmap="RdYlBu_r", extend="both"),
+    "theta":  dict(cmap="Spectral_r", extend="both"),
+    "theta_e": dict(cmap="Spectral_r", extend="both"),
+    "tv":     dict(cmap="Spectral_r", extend="both"),
+    "twb":    dict(cmap="Spectral_r", extend="both"),
+    "td":     dict(cmap="RdYlGn", extend="both"),
+    "dp2m":   dict(cmap="RdYlGn", levels=np.arange(-20, 82, 2), extend="both"),
+    "theta_w": dict(cmap="Spectral_r", extend="both"),
 
     # ---- Moisture ----
     "rh":     dict(cmap="YlGnBu", levels=np.arange(0, 105, 5), extend="neither"),
@@ -184,7 +184,9 @@ _VAR_STYLES: Dict[str, Dict[str, Any]] = {
     # ---- Updraft helicity ----
     "uhel":    dict(cmap="RdPu", levels=np.arange(0, 210, 10), extend="max"),
 
-    # ---- Vertical velocity ----
+    # ---- Wind components ----
+    "ua":      dict(cmap="RdBu_r", center_zero=True, extend="both"),
+    "va":      dict(cmap="RdBu_r", center_zero=True, extend="both"),
     "wa":      dict(cmap="RdBu_r", center_zero=True, extend="both"),
     "omega":   dict(cmap="RdBu_r", center_zero=True, extend="both"),
 
@@ -527,10 +529,10 @@ def plot_field(
 
     # -- Map decorations --
     if is_geo and borders:
-        ax.coastlines(linewidth=0.6)
-        ax.add_feature(cfeature.BORDERS, linewidth=0.5, edgecolor="grey")
+        ax.coastlines(linewidth=1.0, color="black")
+        ax.add_feature(cfeature.BORDERS, linewidth=0.7, edgecolor="#333333")
         try:
-            ax.add_feature(cfeature.STATES, linewidth=0.3, edgecolor="grey")
+            ax.add_feature(cfeature.STATES, linewidth=0.5, edgecolor="#555555")
         except Exception:
             pass
 
@@ -557,8 +559,10 @@ def plot_field(
         desc = _get_var_description(varname)
         cbar_label = f"{desc} ({units_label})" if units_label else desc
         cb = fig.colorbar(cf, ax=ax, orientation="horizontal",
-                          pad=0.05, shrink=0.85, aspect=35)
-        cb.set_label(cbar_label, fontsize=11)
+                          pad=0.06, shrink=0.8, aspect=40,
+                          extendrect=True)
+        cb.set_label(cbar_label, fontsize=10)
+        cb.ax.tick_params(labelsize=9)
 
     # -- Title --
     if title is not None:
