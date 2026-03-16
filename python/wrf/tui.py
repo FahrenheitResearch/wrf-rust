@@ -108,8 +108,9 @@ class WrfTui(App):
         self.start_path = start_path or os.getcwd()
         self.all_files: list[str] = []
         self.all_vars: list[dict] = []
-        self.selected_files: list[str] = []  # ordered list of selected file paths
+        self.selected_files: list[str] = []
         self.selected_vars: list[str] = []
+        self._opts: dict = {}
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -122,12 +123,31 @@ class WrfTui(App):
             yield OptionList(id="file-list")
             yield Static(id="file-info")
 
-        # Center: variable picker
+        # Center: variable picker + parameters
         with Vertical(id="vars-panel"):
-            yield Label("[bold]Variables[/bold]  [dim]Enter = toggle select[/dim]", classes="panel-title")
+            yield Label("[bold]Variables[/bold]  [dim]Enter = toggle[/dim]", classes="panel-title")
             yield Input(placeholder="Filter variables...", id="var-filter")
             yield OptionList(id="var-list")
             yield Static(id="var-detail")
+            yield Label("[bold]Parameters[/bold]  [dim](applied to all selected vars)[/dim]", classes="panel-title")
+            yield Label("Parcel type [dim](sb/ml/mu)[/dim]:")
+            yield Input(placeholder="sb, ml, or mu", id="opt-parcel-type")
+            yield Label("Units [dim](degC, knots, hPa...)[/dim]:")
+            yield Input(placeholder="", id="opt-units")
+            yield Label("Top m / Bottom m [dim](AGL)[/dim]:")
+            yield Input(placeholder="e.g. 3000", id="opt-top-m")
+            yield Input(placeholder="e.g. 0", id="opt-bottom-m")
+            yield Label("Top p / Bottom p [dim](hPa)[/dim]:")
+            yield Input(placeholder="e.g. 500", id="opt-top-p")
+            yield Input(placeholder="e.g. 700", id="opt-bottom-p")
+            yield Label("SRH depth m [dim](e.g. 1000)[/dim]:")
+            yield Input(placeholder="", id="opt-depth-m")
+            yield Label("Storm motion [dim](u,v m/s)[/dim]:")
+            yield Input(placeholder="e.g. 10,5", id="opt-storm-motion")
+            yield Label("Layer type [dim](fixed/effective)[/dim]:")
+            yield Input(placeholder="fixed", id="opt-layer-type")
+            yield Label("Use virtual temp [dim](true/false)[/dim]:")
+            yield Input(placeholder="", id="opt-use-virtual")
 
         # Right: selections + actions
         with Vertical(id="action-panel"):
@@ -360,6 +380,63 @@ class WrfTui(App):
 
     # ── Actions ──
 
+    def _get_opts(self) -> dict:
+        """Collect all parameter inputs into a kwargs dict for getvar."""
+        opts = {}
+
+        v = self.query_one("#opt-parcel-type", Input).value.strip()
+        if v:
+            opts["parcel_type"] = v
+
+        v = self.query_one("#opt-units", Input).value.strip()
+        if v:
+            opts["units"] = v
+
+        v = self.query_one("#opt-top-m", Input).value.strip()
+        if v:
+            try: opts["top_m"] = float(v)
+            except ValueError: pass
+
+        v = self.query_one("#opt-bottom-m", Input).value.strip()
+        if v:
+            try: opts["bottom_m"] = float(v)
+            except ValueError: pass
+
+        v = self.query_one("#opt-top-p", Input).value.strip()
+        if v:
+            try: opts["top_p"] = float(v)
+            except ValueError: pass
+
+        v = self.query_one("#opt-bottom-p", Input).value.strip()
+        if v:
+            try: opts["bottom_p"] = float(v)
+            except ValueError: pass
+
+        v = self.query_one("#opt-depth-m", Input).value.strip()
+        if v:
+            try: opts["depth_m"] = float(v)
+            except ValueError: pass
+
+        v = self.query_one("#opt-storm-motion", Input).value.strip()
+        if v and "," in v:
+            try:
+                parts = v.split(",")
+                opts["storm_motion"] = (float(parts[0]), float(parts[1]))
+            except (ValueError, IndexError):
+                pass
+
+        v = self.query_one("#opt-layer-type", Input).value.strip()
+        if v:
+            opts["layer_type"] = v
+
+        v = self.query_one("#opt-use-virtual", Input).value.strip().lower()
+        if v in ("true", "1", "yes"):
+            opts["use_virtual"] = True
+        elif v in ("false", "0", "no"):
+            opts["use_virtual"] = False
+
+        return opts
+
     def _pre_check(self) -> bool:
         if not self.selected_files:
             self.notify("Select files first", severity="warning")
@@ -372,11 +449,13 @@ class WrfTui(App):
     @on(Button.Pressed, "#btn-export")
     def _on_export(self) -> None:
         if self._pre_check():
+            self._opts = self._get_opts()
             self._run_export()
 
     @on(Button.Pressed, "#btn-plot")
     def _on_plot(self) -> None:
         if self._pre_check():
+            self._opts = self._get_opts()
             self._run_plot()
 
     @on(Button.Pressed, "#btn-gif")
@@ -386,11 +465,13 @@ class WrfTui(App):
         if len(self.selected_files) < 2:
             self.notify("Select 2+ files for GIF animation", severity="warning")
             return
+        self._opts = self._get_opts()
         self._run_gif()
 
     @on(Button.Pressed, "#btn-stats")
     def _on_stats(self) -> None:
         if self._pre_check():
+            self._opts = self._get_opts()
             self._run_stats()
 
     @work(thread=True)
@@ -409,7 +490,7 @@ class WrfTui(App):
                                   f"Exporting {varname} from {fname}  ({i+1}/{total})")
             try:
                 wf = _load_wrf(fpath)
-                data = getvar(wf, varname, timeidx=0)
+                data = getvar(wf, varname, timeidx=0, **self._opts)
                 tag = fname.replace("wrfout_d01_", "").replace(":", "")
                 outpath = os.path.join(outdir, f"{varname}_{tag}.npy")
                 np.save(outpath, data)
@@ -445,7 +526,7 @@ class WrfTui(App):
                                   f"Plotting {varname} from {fname}  ({i+1}/{total})")
             try:
                 wf = _load_wrf(fpath)
-                fig, _ = plot_field(wf, varname, timeidx=0)
+                fig, _ = plot_field(wf, varname, timeidx=0, **self._opts)
                 tag = fname.replace("wrfout_d01_", "").replace(":", "")
                 outpath = os.path.join(outdir, f"{varname}_{tag}.png")
                 fig.savefig(outpath, dpi=150, bbox_inches="tight")
@@ -486,7 +567,7 @@ class WrfTui(App):
             for fpath in self.selected_files:
                 try:
                     wf = _load_wrf(fpath)
-                    data = getvar(wf, varname, timeidx=0)
+                    data = getvar(wf, varname, timeidx=0, **self._opts)
                     if data.ndim == 3:
                         data = data[0]
                     valid = data[np.isfinite(data)]
@@ -511,7 +592,9 @@ class WrfTui(App):
                                       f"GIF: {varname}  frame {fi+1}/{nfiles}")
                 try:
                     wf = _load_wrf(fpath)
-                    kwargs = {"levels": fixed_levels} if fixed_levels is not None else {}
+                    kwargs = dict(self._opts)
+                    if fixed_levels is not None:
+                        kwargs["levels"] = fixed_levels
                     fig, _ = plot_field(wf, varname, timeidx=0, **kwargs)
                     png_path = os.path.join(outdir, f"_gif_{varname}_{fi:04d}.png")
                     fig.savefig(png_path, dpi=120, bbox_inches="tight")
@@ -571,7 +654,7 @@ class WrfTui(App):
             units = info["units"] if info else ""
             try:
                 wf = _load_wrf(fpath)
-                data = getvar(wf, varname, timeidx=0)
+                data = getvar(wf, varname, timeidx=0, **self._opts)
                 valid = data[np.isfinite(data)]
                 row = [varname]
                 if multi_file:
