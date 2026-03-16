@@ -129,7 +129,13 @@ def getvar(
     parcel_type=None,
     storm_motion=None,
     top_m=None,
+    bottom_m=None,
     depth_m=None,
+    parcel_pressure=None,
+    parcel_temperature=None,
+    parcel_dewpoint=None,
+    layer_type=None,
+    use_virtual=None,
     squeeze=True,
 ):
     """Compute a diagnostic variable from a WRF file.
@@ -151,9 +157,25 @@ def getvar(
     storm_motion : tuple of (float, float), optional
         Custom storm motion (u, v) in m/s for SRH variables.
     top_m : float, optional
-        Integration top in metres AGL (e.g. 3000 for 0-3 km CAPE).
+        Top of layer in metres AGL. Used by CAPE (truncated integration),
+        shear, mean wind, lapse rates, updraft helicity.
+    bottom_m : float, optional
+        Bottom of layer in metres AGL. Used by shear, mean wind, lapse
+        rates, updraft helicity.
     depth_m : float, optional
-        Layer depth in metres AGL for configurable-depth variables.
+        Layer depth in metres AGL for SRH (e.g. 1000 for 0-1 km).
+    parcel_pressure : float, optional
+        Custom parcel starting pressure in hPa. Use with
+        ``parcel_temperature`` and ``parcel_dewpoint`` for the generic
+        ``cape``/``cin``/``lcl``/``lfc``/``el`` variables.
+    parcel_temperature : float, optional
+        Custom parcel starting temperature in deg C.
+    parcel_dewpoint : float, optional
+        Custom parcel starting dewpoint in deg C.
+    layer_type : str, optional
+        ``"fixed"`` (default) or ``"effective"`` for STP, SRH.
+    use_virtual : bool, optional
+        If True, use virtual temperature for lapse rate computation.
     squeeze : bool
         If True (default), remove length-1 leading dimensions.
 
@@ -165,34 +187,31 @@ def getvar(
     """
     wf = _ensure_wrffile(wrffile)
 
+    kwargs = dict(
+        units=units,
+        parcel_type=parcel_type,
+        storm_motion=storm_motion,
+        top_m=top_m,
+        bottom_m=bottom_m,
+        depth_m=depth_m,
+        parcel_pressure=parcel_pressure,
+        parcel_temperature=parcel_temperature,
+        parcel_dewpoint=parcel_dewpoint,
+        layer_type=layer_type,
+        use_virtual=use_virtual,
+    )
+
     if timeidx is ALL_TIMES:
-        # Stack all time steps
         arrays = []
         for t in range(wf.nt):
-            arr = wf._inner.getvar(
-                name,
-                timeidx=t,
-                units=units,
-                parcel_type=parcel_type,
-                storm_motion=storm_motion,
-                top_m=top_m,
-                depth_m=depth_m,
-            )
+            arr = wf._inner.getvar(name, timeidx=t, **kwargs)
             arrays.append(arr)
         result = np.stack(arrays, axis=0)
         if squeeze and result.shape[0] == 1:
             result = result[0]
         return result
     else:
-        return wf._inner.getvar(
-            name,
-            timeidx=timeidx,
-            units=units,
-            parcel_type=parcel_type,
-            storm_motion=storm_motion,
-            top_m=top_m,
-            depth_m=depth_m,
-        )
+        return wf._inner.getvar(name, timeidx=timeidx, **kwargs)
 
 
 def list_variables():

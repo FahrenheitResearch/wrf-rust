@@ -12,10 +12,22 @@ pub struct ComputeOpts {
     pub parcel_type: Option<String>,
     /// Custom storm motion (u, v) in m/s for SRH.
     pub storm_motion: Option<(f64, f64)>,
-    /// Integration top for CAPE/SRH (meters AGL).
+    /// Integration top (meters AGL) for CAPE, lapse rates, updraft helicity, etc.
     pub top_m: Option<f64>,
+    /// Bottom of layer (meters AGL) for shear, mean wind, lapse rates, UH, etc.
+    pub bottom_m: Option<f64>,
     /// Depth for SRH (meters AGL). Default varies by variable.
     pub depth_m: Option<f64>,
+    /// Custom parcel starting pressure (hPa).
+    pub parcel_pressure: Option<f64>,
+    /// Custom parcel starting temperature (deg C).
+    pub parcel_temperature: Option<f64>,
+    /// Custom parcel starting dewpoint (deg C).
+    pub parcel_dewpoint: Option<f64>,
+    /// Layer type: "fixed" (default) or "effective" (for STP, SRH).
+    pub layer_type: Option<String>,
+    /// Use virtual temperature instead of absolute temperature (for lapse rates).
+    pub use_virtual: Option<bool>,
 }
 
 /// The result of computing a WRF variable.

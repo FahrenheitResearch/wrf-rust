@@ -70,16 +70,7 @@ impl WrfFile {
     }
 
     /// Compute a diagnostic variable.
-    ///
-    /// Args:
-    ///     name: Variable name (e.g. "temp", "slp", "sbcape").
-    ///     timeidx: Time index (default 0).
-    ///     units: Desired output units (e.g. "degC", "hPa", "knots").
-    ///     parcel_type: Parcel type for CAPE ("sb", "ml", "mu").
-    ///     storm_motion: Custom storm motion (u, v) in m/s for SRH.
-    ///     top_m: Integration top in meters AGL.
-    ///     depth_m: Layer depth in meters AGL.
-    #[pyo3(signature = (name, timeidx=None, units=None, parcel_type=None, storm_motion=None, top_m=None, depth_m=None))]
+    #[pyo3(signature = (name, timeidx=None, units=None, parcel_type=None, storm_motion=None, top_m=None, bottom_m=None, depth_m=None, parcel_pressure=None, parcel_temperature=None, parcel_dewpoint=None, layer_type=None, use_virtual=None))]
     fn getvar<'py>(
         &self,
         py: Python<'py>,
@@ -89,14 +80,26 @@ impl WrfFile {
         parcel_type: Option<String>,
         storm_motion: Option<(f64, f64)>,
         top_m: Option<f64>,
+        bottom_m: Option<f64>,
         depth_m: Option<f64>,
+        parcel_pressure: Option<f64>,
+        parcel_temperature: Option<f64>,
+        parcel_dewpoint: Option<f64>,
+        layer_type: Option<String>,
+        use_virtual: Option<bool>,
     ) -> PyResult<PyObject> {
         let opts = wrf_core::ComputeOpts {
             units,
             parcel_type,
             storm_motion,
             top_m,
+            bottom_m,
             depth_m,
+            parcel_pressure,
+            parcel_temperature,
+            parcel_dewpoint,
+            layer_type,
+            use_virtual,
         };
 
         let result = wrf_core::getvar(&self.inner, name, timeidx, &opts)

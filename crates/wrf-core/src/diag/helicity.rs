@@ -23,8 +23,8 @@ pub fn compute_uhel(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<
     let dx = f.dx;
     let dy = f.dy;
 
-    // Default integration layer: 2-5 km AGL
-    let z_bot = opts.depth_m.unwrap_or(2000.0);
+    // Integration layer bounds (default 2-5 km AGL), configurable
+    let z_bot = opts.bottom_m.unwrap_or(2000.0);
     let z_top = opts.top_m.unwrap_or(5000.0);
 
     // Compute relative vorticity at each level

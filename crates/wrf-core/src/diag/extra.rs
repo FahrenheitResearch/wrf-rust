@@ -250,3 +250,76 @@ pub fn compute_hdw(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<
         })
         .collect())
 }
+
+/// Generic configurable lapse rate (°C/km). `[ny, nx]`
+///
+/// Layer bounds are controlled via `opts.bottom_m` and `opts.top_m` (meters AGL).
+/// Defaults to the 0-3 km layer when not specified.
+/// If `opts.use_virtual` is `Some(true)`, virtual temperature
+/// Tv = T * (1 + 0.61 * qv) is used instead of absolute temperature.
+pub fn compute_lapse_rate(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    let bottom_m = opts.bottom_m.unwrap_or(0.0);
+    let top_m = opts.top_m.unwrap_or(3000.0);
+    let use_virtual = opts.use_virtual == Some(true);
+
+    let tc = f.temperature_c(t)?;
+    let h_agl = f.height_agl(t)?;
+    let qv = if use_virtual {
+        Some(f.qvapor(t)?)
+    } else {
+        None
+    };
+
+    let nx = f.nx;
+    let ny = f.ny;
+    let nz = f.nz;
+    let nxy = nx * ny;
+
+    let depth_km = (top_m - bottom_m) / 1000.0;
+
+    let mut lr = vec![0.0f64; nxy];
+    lr.par_iter_mut().enumerate().for_each(|(ij, lr_val)| {
+        // Helper: temperature (or virtual temperature) at a 3-D index
+        let temp_at = |idx: usize| -> f64 {
+            let t_c = tc[idx];
+            if use_virtual {
+                let q = qv.as_ref().unwrap()[idx].max(0.0);
+                // Tv in °C: convert to K, apply virtual factor, convert back
+                let t_k = t_c + 273.15;
+                let tv_k = t_k * (1.0 + 0.61 * q);
+                tv_k - 273.15
+            } else {
+                t_c
+            }
+        };
+
+        // Interpolate temperature at a target height AGL
+        let interp = |target_h: f64| -> f64 {
+            // If target is at or below lowest level, use lowest level value
+            if h_agl[ij] >= target_h {
+                return temp_at(ij);
+            }
+            for k in 1..nz {
+                let idx = k * nxy + ij;
+                let h = h_agl[idx];
+                if h >= target_h {
+                    let idx_prev = (k - 1) * nxy + ij;
+                    let h_prev = h_agl[idx_prev];
+                    let frac = (target_h - h_prev) / (h - h_prev);
+                    let t_prev = temp_at(idx_prev);
+                    let t_cur = temp_at(idx);
+                    return t_prev + frac * (t_cur - t_prev);
+                }
+            }
+            // Above model top – return highest level value
+            temp_at((nz - 1) * nxy + ij)
+        };
+
+        let t_bot = interp(bottom_m);
+        let t_top = interp(top_m);
+
+        *lr_val = -(t_top - t_bot) / depth_km;
+    });
+
+    Ok(lr)
+}
