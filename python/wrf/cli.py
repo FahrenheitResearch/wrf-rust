@@ -81,7 +81,10 @@ def _dim(text: str) -> str:
 def cmd_info(args: argparse.Namespace) -> None:
     """Print file dimensions, grid spacing, projection, available times."""
     wf = _open(args.file)
-    times = wf.times()
+    try:
+        times = wf.times()
+    except Exception:
+        times = ["(unavailable)"]
 
     proj = _projection_name(args.file)
 
@@ -188,7 +191,10 @@ def cmd_plot(args: argparse.Namespace) -> None:
         data = data[level]
 
     units_label = args.units or _default_units(args.variable)
-    title_time = wf.times()[tidx] if tidx < wf.nt else ""
+    try:
+        title_time = wf.times()[tidx] if tidx < wf.nt else ""
+    except Exception:
+        title_time = f"t={tidx}"
 
     fig, ax = plt.subplots(figsize=(10, 8))
     im = ax.pcolormesh(data, cmap=args.cmap or "viridis", shading="auto")

@@ -22,7 +22,30 @@ Usage:
     temp = getvar(nc, "temp", timeidx=0)
 """
 
+import os
+import sys
+
 import numpy as np
+
+# On Windows, NetCDF/HDF5 DLLs may not be on PATH. Try common conda locations.
+if sys.platform == "win32":
+    _dll_dirs = [
+        os.environ.get("NETCDF_DIR", ""),
+        os.environ.get("HDF5_DIR", ""),
+        os.path.join(os.environ.get("CONDA_PREFIX", ""), "Library", "bin"),
+    ]
+    # Also check wrfplot env specifically
+    _home = os.path.expanduser("~")
+    for _base in ("miniforge3", "miniconda3", "anaconda3"):
+        _dll_dirs.append(os.path.join(_home, _base, "envs", "wrfplot", "Library", "bin"))
+        _dll_dirs.append(os.path.join(_home, _base, "Library", "bin"))
+    for _d in _dll_dirs:
+        _d = os.path.join(_d, "bin") if _d and not _d.endswith("bin") and os.path.isdir(os.path.join(_d, "bin")) else _d
+        if _d and os.path.isdir(_d):
+            try:
+                os.add_dll_directory(_d)
+            except (OSError, AttributeError):
+                pass
 
 from wrf._wrf import WrfFile as _WrfFile
 from wrf._wrf import list_variables as _list_variables
