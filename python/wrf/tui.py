@@ -1,8 +1,8 @@
 """
 wrf-rust Terminal UI.
 
-Browse WRF files, select variables, then explicitly compute/export/plot.
-Nothing computes until you press a button.
+Browse WRF files (multi-select for timesteps), select variables, then
+explicitly compute/export/plot/gif. Nothing computes until you press a button.
 
 Launch:
     python -m wrf tui [directory_or_file]
@@ -13,7 +13,6 @@ from __future__ import annotations
 import glob
 import os
 import sys
-import time
 
 import numpy as np
 
@@ -42,11 +41,11 @@ from rich import box
 
 def _find_wrf_files(path: str) -> list[str]:
     if os.path.isfile(path):
-        return [path]
+        return [os.path.abspath(path)]
     files = []
     for pattern in ("wrfout*", "wrfout_*", "*.nc", "*.nc4"):
         files.extend(glob.glob(os.path.join(path, pattern)))
-    return sorted(set(files))
+    return sorted(set(os.path.abspath(f) for f in files))
 
 
 def _load_wrf(path: str):
@@ -57,21 +56,6 @@ def _load_wrf(path: str):
 def _get_var_list() -> list[dict]:
     from wrf import list_variables
     return list_variables()
-
-
-def _parse_timesteps(text: str, nt: int) -> list[int]:
-    """Parse timestep input like '0', '0-5', '0,2,4', 'all'."""
-    text = text.strip().lower()
-    if text in ("all", "*", ""):
-        return list(range(nt))
-    if "-" in text and "," not in text:
-        parts = text.split("-")
-        start = int(parts[0])
-        end = int(parts[1])
-        return list(range(start, min(end + 1, nt)))
-    if "," in text:
-        return [int(x.strip()) for x in text.split(",") if x.strip().isdigit()]
-    return [int(text)]
 
 
 # ── App ──────────────────────────────────────────────────────────────────────
@@ -96,7 +80,8 @@ class WrfTui(App):
     #file-info { height: auto; margin-bottom: 1; }
     #var-detail { height: auto; margin-bottom: 1; }
 
-    #selected-list { height: 1fr; margin-bottom: 1; }
+    #selected-vars-list { height: auto; max-height: 10; margin-bottom: 1; }
+    #selected-files-list { height: auto; max-height: 6; margin-bottom: 1; }
 
     .panel-title {
         text-style: bold;
@@ -104,33 +89,16 @@ class WrfTui(App):
         color: $accent;
     }
 
-    #progress-bar {
-        height: auto;
-        margin: 1 0;
-    }
-
-    #progress-label {
-        height: auto;
-        color: $text-muted;
-    }
-
-    #output-log {
-        height: auto;
-        max-height: 12;
-        overflow-y: auto;
-        margin-top: 1;
-    }
-
-    .action-btn {
-        margin-bottom: 1;
-        width: 100%;
-    }
+    #progress-bar { height: auto; margin: 1 0; }
+    #progress-label { height: auto; color: $text-muted; }
+    #output-log { height: auto; max-height: 12; margin-top: 1; }
+    .action-btn { margin-bottom: 1; width: 100%; }
     """
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
-        Binding("a", "select_all", "Select all"),
-        Binding("c", "clear_selected", "Clear"),
+        Binding("a", "select_all_vars", "All vars"),
+        Binding("c", "clear_all", "Clear"),
     ]
 
     TITLE = "wrf-rust"
@@ -138,17 +106,17 @@ class WrfTui(App):
     def __init__(self, start_path: str | None = None):
         super().__init__()
         self.start_path = start_path or os.getcwd()
-        self.wf = None
-        self.wf_path: str | None = None
+        self.all_files: list[str] = []
         self.all_vars: list[dict] = []
+        self.selected_files: list[str] = []  # ordered list of selected file paths
         self.selected_vars: list[str] = []
 
     def compose(self) -> ComposeResult:
         yield Header()
 
-        # Left: file browser
+        # Left: file browser (multi-select = timesteps)
         with Vertical(id="files-panel"):
-            yield Label("[bold]Files[/bold]", classes="panel-title")
+            yield Label("[bold]Files[/bold]  [dim]Enter = toggle select (order = timesteps)[/dim]", classes="panel-title")
             yield Input(placeholder="Filter files...", id="file-filter")
             yield OptionList(id="file-list")
             yield Static(id="file-info")
@@ -160,15 +128,15 @@ class WrfTui(App):
             yield OptionList(id="var-list")
             yield Static(id="var-detail")
 
-        # Right: selected + actions
+        # Right: selections + actions
         with Vertical(id="action-panel"):
-            yield Label("[bold]Selected[/bold]", classes="panel-title")
-            yield OptionList(id="selected-list")
-            yield Label("Timesteps [dim](e.g. 0  or  0-5  or  all)[/dim]:", classes="panel-title")
-            yield Input(value="0", id="timestep-input")
+            yield Label("[bold]Selected files[/bold]  [dim](= timesteps)[/dim]", classes="panel-title")
+            yield OptionList(id="selected-files-list")
+            yield Label("[bold]Selected variables[/bold]", classes="panel-title")
+            yield OptionList(id="selected-vars-list")
             yield Button("Export to .npy", id="btn-export", variant="primary", classes="action-btn")
             yield Button("Plot to .png", id="btn-plot", variant="default", classes="action-btn")
-            yield Button("Plot to .gif", id="btn-gif", variant="default", classes="action-btn")
+            yield Button("Animate to .gif", id="btn-gif", variant="default", classes="action-btn")
             yield Button("Compute stats", id="btn-stats", variant="default", classes="action-btn")
             yield Label("", id="progress-label")
             yield ProgressBar(id="progress-bar", total=100, show_eta=False)
@@ -179,125 +147,157 @@ class WrfTui(App):
     def on_mount(self) -> None:
         self.all_vars = _get_var_list()
         self._populate_var_list(self.all_vars)
-        self._scan_files(self.start_path)
-        self._refresh_selected_list()
-        # Hide progress bar initially
-        self.query_one("#progress-bar", ProgressBar).update(total=100, progress=0)
+        self.all_files = _find_wrf_files(self.start_path)
+        self._populate_file_list(self.all_files)
+        self._refresh_selected_files()
+        self._refresh_selected_vars()
 
-    # ── File list ──
+        # Auto-select all files if given a directory
+        if os.path.isdir(self.start_path) and self.all_files:
+            self.selected_files = list(self.all_files)
+            self._populate_file_list(self.all_files)
+            self._refresh_selected_files()
+            self._load_first_file()
 
-    def _scan_files(self, path: str) -> None:
-        file_list = self.query_one("#file-list", OptionList)
-        file_list.clear_options()
-        files = _find_wrf_files(path)
+        # Auto-select single file
+        if os.path.isfile(self.start_path) and self.all_files:
+            self.selected_files = list(self.all_files)
+            self._populate_file_list(self.all_files)
+            self._refresh_selected_files()
+            self._load_first_file()
+
+    # ── File list (multi-select) ──
+
+    def _populate_file_list(self, files: list[str]) -> None:
+        fl = self.query_one("#file-list", OptionList)
+        fl.clear_options()
         if not files:
-            file_list.add_option(Option("[dim]No WRF files found[/dim]", id="__none__"))
+            fl.add_option(Option("[dim]No WRF files found[/dim]", id="__none__"))
             return
         for f in files:
-            file_list.add_option(Option(os.path.basename(f), id=f))
+            name = os.path.basename(f)
+            marker = "[green]\u2713[/green] " if f in self.selected_files else "  "
+            fl.add_option(Option(f"{marker}{name}", id=f))
 
     @on(Input.Changed, "#file-filter")
     def _on_file_filter(self, event: Input.Changed) -> None:
         q = event.value.lower().strip()
-        file_list = self.query_one("#file-list", OptionList)
-        file_list.clear_options()
-        for f in _find_wrf_files(self.start_path):
-            name = os.path.basename(f)
-            if q and q not in name.lower():
-                continue
-            file_list.add_option(Option(name, id=f))
+        if q:
+            filtered = [f for f in self.all_files if q in os.path.basename(f).lower()]
+        else:
+            filtered = list(self.all_files)
+        self._populate_file_list(filtered)
 
-    @on(OptionList.OptionSelected, "#file-list")
-    def _on_file_select(self, event: OptionList.OptionSelected) -> None:
+    @on(OptionList.OptionHighlighted, "#file-list")
+    def _on_file_highlight(self, event: OptionList.OptionHighlighted) -> None:
         if not event.option or event.option.id == "__none__":
             return
-        self._load_file(str(event.option.id))
+        path = str(event.option.id)
+        self._show_file_info(path)
+
+    @on(OptionList.OptionSelected, "#file-list")
+    def _on_file_toggle(self, event: OptionList.OptionSelected) -> None:
+        """Toggle file selection."""
+        if not event.option or event.option.id == "__none__":
+            return
+        path = str(event.option.id)
+        if path in self.selected_files:
+            self.selected_files.remove(path)
+        else:
+            self.selected_files.append(path)
+        # Re-sort to match file order
+        self.selected_files.sort(key=lambda f: self.all_files.index(f) if f in self.all_files else 0)
+        self._populate_file_list(
+            [f for f in self.all_files
+             if not self.query_one("#file-filter", Input).value.strip()
+             or self.query_one("#file-filter", Input).value.lower() in os.path.basename(f).lower()]
+            or self.all_files
+        )
+        self._refresh_selected_files()
+
+        # Load first selected file to populate grid info
+        if self.selected_files:
+            self._load_first_file()
 
     @work(thread=True)
-    def _load_file(self, path: str) -> None:
-        self.call_from_thread(self._set_progress_label, f"Loading {os.path.basename(path)}...")
+    def _show_file_info(self, path: str) -> None:
         try:
             wf = _load_wrf(path)
-            self.wf = wf
-            self.wf_path = path
-
-            try:
-                times = wf.times()
-            except Exception:
-                times = []
-
             tbl = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
             tbl.add_column("", style="bold cyan", width=8)
             tbl.add_column("")
             tbl.add_row("Grid", f"{wf.nx} x {wf.ny} x {wf.nz}")
-            tbl.add_row("Times", str(wf.nt))
             tbl.add_row("dx", f"{wf.dx:g} m")
-            if times:
-                tbl.add_row("Start", times[0])
-                if len(times) > 1:
-                    tbl.add_row("End", times[-1])
-
             self.call_from_thread(
                 self.query_one("#file-info", Static).update,
-                Panel(tbl, title=os.path.basename(path), border_style="green"),
+                Panel(tbl, title=os.path.basename(path), border_style="cyan"),
             )
-            self.call_from_thread(self._set_subtitle, os.path.basename(path))
-            self.call_from_thread(self._set_progress_label, f"Loaded {os.path.basename(path)}")
-
         except Exception as e:
             self.call_from_thread(
                 self.query_one("#file-info", Static).update,
-                Panel(f"[red]{e}[/red]", title="Error", border_style="red"),
+                f"[red]{e}[/red]",
             )
-            self.call_from_thread(self._set_progress_label, "")
 
-    def _set_subtitle(self, text: str) -> None:
-        self.sub_title = text
+    def _load_first_file(self) -> None:
+        if self.selected_files:
+            name = os.path.basename(self.selected_files[0])
+            n = len(self.selected_files)
+            self.sub_title = f"{name}  [{n} file{'s' if n > 1 else ''}]"
 
-    def _set_progress_label(self, text: str) -> None:
-        self.query_one("#progress-label", Label).update(text)
+    @on(OptionList.OptionSelected, "#selected-files-list")
+    def _on_deselect_file(self, event: OptionList.OptionSelected) -> None:
+        if not event.option or event.option.id == "__none__":
+            return
+        path = str(event.option.id)
+        if path in self.selected_files:
+            self.selected_files.remove(path)
+            self._populate_file_list(self.all_files)
+            self._refresh_selected_files()
 
-    # ── Variable list (just browse + toggle, NO computation) ──
+    def _refresh_selected_files(self) -> None:
+        sl = self.query_one("#selected-files-list", OptionList)
+        sl.clear_options()
+        if not self.selected_files:
+            sl.add_option(Option("[dim]None[/dim]", id="__none__"))
+            return
+        for i, f in enumerate(self.selected_files):
+            sl.add_option(Option(f"[bold]t={i}[/bold]  {os.path.basename(f)}", id=f))
+
+    # ── Variable list ──
 
     def _populate_var_list(self, vars_list: list[dict]) -> None:
-        var_list = self.query_one("#var-list", OptionList)
-        var_list.clear_options()
+        vl = self.query_one("#var-list", OptionList)
+        vl.clear_options()
         for v in vars_list:
             marker = "[green]\u2713[/green] " if v["name"] in self.selected_vars else "  "
             label = f"{marker}[bold]{v['name']}[/bold]  [dim]{v['units']}[/dim]"
-            var_list.add_option(Option(label, id=v["name"]))
+            vl.add_option(Option(label, id=v["name"]))
 
     @on(Input.Changed, "#var-filter")
     def _on_var_filter(self, event: Input.Changed) -> None:
         q = event.value.lower().strip()
         if q:
-            filtered = [
-                v for v in self.all_vars
-                if q in v["name"].lower() or q in v["description"].lower()
-                or q in v["units"].lower()
-            ]
+            filtered = [v for v in self.all_vars
+                        if q in v["name"].lower() or q in v["description"].lower()
+                        or q in v["units"].lower()]
         else:
             filtered = list(self.all_vars)
         self._populate_var_list(filtered)
 
     @on(OptionList.OptionHighlighted, "#var-list")
     def _on_var_highlight(self, event: OptionList.OptionHighlighted) -> None:
-        """Just show metadata. Zero computation."""
         if not event.option or not event.option.id:
             return
         varname = str(event.option.id)
         info = next((v for v in self.all_vars if v["name"] == varname), None)
-        if not info:
-            return
-        detail = self.query_one("#var-detail", Static)
-        detail.update(Panel(
-            f"[bold]{info['name']}[/bold]\n{info['description']}\nUnits: {info['units']}",
-            border_style="blue",
-        ))
+        if info:
+            self.query_one("#var-detail", Static).update(Panel(
+                f"[bold]{info['name']}[/bold]\n{info['description']}\nUnits: {info['units']}",
+                border_style="blue",
+            ))
 
     @on(OptionList.OptionSelected, "#var-list")
     def _on_var_toggle(self, event: OptionList.OptionSelected) -> None:
-        """Toggle checkmark. Zero computation."""
         if not event.option or not event.option.id:
             return
         varname = str(event.option.id)
@@ -306,121 +306,114 @@ class WrfTui(App):
         else:
             self.selected_vars.append(varname)
         self._refresh_var_marks()
-        self._refresh_selected_list()
+        self._refresh_selected_vars()
 
-    @on(OptionList.OptionSelected, "#selected-list")
-    def _on_deselect(self, event: OptionList.OptionSelected) -> None:
-        """Remove from selected list on click."""
+    @on(OptionList.OptionSelected, "#selected-vars-list")
+    def _on_deselect_var(self, event: OptionList.OptionSelected) -> None:
         if not event.option or event.option.id == "__none__":
             return
         varname = str(event.option.id)
         if varname in self.selected_vars:
             self.selected_vars.remove(varname)
             self._refresh_var_marks()
-            self._refresh_selected_list()
+            self._refresh_selected_vars()
 
     def _refresh_var_marks(self) -> None:
         q = self.query_one("#var-filter", Input).value.lower().strip()
         if q:
-            filtered = [
-                v for v in self.all_vars
-                if q in v["name"].lower() or q in v["description"].lower()
-            ]
+            filtered = [v for v in self.all_vars
+                        if q in v["name"].lower() or q in v["description"].lower()]
         else:
             filtered = list(self.all_vars)
         self._populate_var_list(filtered)
 
-    def _refresh_selected_list(self) -> None:
-        sel_list = self.query_one("#selected-list", OptionList)
-        sel_list.clear_options()
+    def _refresh_selected_vars(self) -> None:
+        sl = self.query_one("#selected-vars-list", OptionList)
+        sl.clear_options()
         if not self.selected_vars:
-            sel_list.add_option(Option("[dim]None selected[/dim]", id="__none__"))
+            sl.add_option(Option("[dim]None[/dim]", id="__none__"))
             return
         for name in self.selected_vars:
             info = next((v for v in self.all_vars if v["name"] == name), None)
             units = info["units"] if info else ""
-            sel_list.add_option(Option(f"{name}  [dim]{units}[/dim]", id=name))
+            sl.add_option(Option(f"{name}  [dim]{units}[/dim]", id=name))
 
-    def action_select_all(self) -> None:
+    def action_select_all_vars(self) -> None:
         self.selected_vars = [v["name"] for v in self.all_vars]
         self._refresh_var_marks()
-        self._refresh_selected_list()
+        self._refresh_selected_vars()
         self.notify(f"Selected {len(self.selected_vars)} variables")
 
-    def action_clear_selected(self) -> None:
+    def action_clear_all(self) -> None:
         self.selected_vars.clear()
+        self.selected_files.clear()
         self._refresh_var_marks()
-        self._refresh_selected_list()
-        self.notify("Cleared")
+        self._refresh_selected_vars()
+        self._populate_file_list(self.all_files)
+        self._refresh_selected_files()
+        self.notify("Cleared all")
 
-    # ── Actions (only compute when button is pressed) ──
+    # ── Actions ──
 
-    def _pre_action_check(self) -> bool:
-        if not self.wf:
-            self.notify("Open a file first", severity="warning")
+    def _pre_check(self) -> bool:
+        if not self.selected_files:
+            self.notify("Select files first", severity="warning")
             return False
         if not self.selected_vars:
             self.notify("Select variables first", severity="warning")
             return False
         return True
 
-    def _get_timesteps(self) -> list[int]:
-        text = self.query_one("#timestep-input", Input).value
-        nt = self.wf.nt if self.wf else 1
-        try:
-            return _parse_timesteps(text, nt)
-        except Exception:
-            return [0]
-
     @on(Button.Pressed, "#btn-export")
     def _on_export(self) -> None:
-        if self._pre_action_check():
+        if self._pre_check():
             self._run_export()
 
     @on(Button.Pressed, "#btn-plot")
     def _on_plot(self) -> None:
-        if self._pre_action_check():
+        if self._pre_check():
             self._run_plot()
 
     @on(Button.Pressed, "#btn-gif")
     def _on_gif(self) -> None:
-        if self._pre_action_check():
-            ts = self._get_timesteps()
-            if len(ts) < 2:
-                self.notify("Need 2+ timesteps for GIF (e.g. '0-5' or 'all')", severity="warning")
-                return
-            self._run_gif()
+        if not self._pre_check():
+            return
+        if len(self.selected_files) < 2:
+            self.notify("Select 2+ files for GIF animation", severity="warning")
+            return
+        self._run_gif()
 
     @on(Button.Pressed, "#btn-stats")
     def _on_stats(self) -> None:
-        if self._pre_action_check():
+        if self._pre_check():
             self._run_stats()
 
     @work(thread=True)
     def _run_export(self) -> None:
         from wrf import getvar
-        outdir = os.path.dirname(self.wf_path) if self.wf_path else "."
-        timesteps = self._get_timesteps()
-        jobs = [(v, t) for v in self.selected_vars for t in timesteps]
+        outdir = os.path.dirname(self.selected_files[0])
+        jobs = [(f, v) for f in self.selected_files for v in self.selected_vars]
         total = len(jobs)
         log_lines = []
 
         self.call_from_thread(self._reset_progress, total)
 
-        for i, (varname, t) in enumerate(jobs):
+        for i, (fpath, varname) in enumerate(jobs):
+            fname = os.path.basename(fpath)
             self.call_from_thread(self._set_progress_label,
-                                  f"Exporting {varname} t={t}  ({i+1}/{total})")
-            suffix = f"_t{t:04d}" if len(timesteps) > 1 else ""
-            outpath = os.path.join(outdir, f"{varname}{suffix}.npy")
+                                  f"Exporting {varname} from {fname}  ({i+1}/{total})")
             try:
-                data = getvar(self.wf, varname, timeidx=t)
+                wf = _load_wrf(fpath)
+                data = getvar(wf, varname, timeidx=0)
+                tag = fname.replace("wrfout_d01_", "").replace(":", "")
+                outpath = os.path.join(outdir, f"{varname}_{tag}.npy")
                 np.save(outpath, data)
-                log_lines.append(f"[green]\u2713[/green] {varname} t={t}  {data.shape}")
+                log_lines.append(f"[green]\u2713[/green] {varname} {fname}  {data.shape}")
             except Exception as e:
-                log_lines.append(f"[red]\u2717[/red] {varname} t={t}: {e}")
+                log_lines.append(f"[red]\u2717[/red] {varname} {fname}: {e}")
             self.call_from_thread(self._advance_progress, i + 1, total)
 
-        self.call_from_thread(self._set_progress_label, f"Done - {total} exports to {outdir}")
+        self.call_from_thread(self._set_progress_label, f"Done - {total} exports")
         self.call_from_thread(self._set_log, "\n".join(log_lines))
 
     @work(thread=True)
@@ -434,88 +427,130 @@ class WrfTui(App):
             self.call_from_thread(self.notify, "matplotlib not installed", severity="error")
             return
 
-        outdir = os.path.dirname(self.wf_path) if self.wf_path else "."
-        timesteps = self._get_timesteps()
-        jobs = [(v, t) for v in self.selected_vars for t in timesteps]
+        outdir = os.path.dirname(self.selected_files[0])
+        jobs = [(f, v) for f in self.selected_files for v in self.selected_vars]
         total = len(jobs)
         log_lines = []
 
         self.call_from_thread(self._reset_progress, total)
 
-        for i, (varname, t) in enumerate(jobs):
+        for i, (fpath, varname) in enumerate(jobs):
+            fname = os.path.basename(fpath)
             self.call_from_thread(self._set_progress_label,
-                                  f"Plotting {varname} t={t}  ({i+1}/{total})")
-            suffix = f"_t{t:04d}" if len(timesteps) > 1 else ""
-            outpath = os.path.join(outdir, f"{varname}{suffix}.png")
+                                  f"Plotting {varname} from {fname}  ({i+1}/{total})")
             try:
-                fig, _ = plot_field(self.wf, varname, timeidx=t)
+                wf = _load_wrf(fpath)
+                fig, _ = plot_field(wf, varname, timeidx=0)
+                tag = fname.replace("wrfout_d01_", "").replace(":", "")
+                outpath = os.path.join(outdir, f"{varname}_{tag}.png")
                 fig.savefig(outpath, dpi=150, bbox_inches="tight")
                 plt.close(fig)
-                log_lines.append(f"[green]\u2713[/green] {varname} t={t}")
+                log_lines.append(f"[green]\u2713[/green] {varname} {fname}")
             except Exception as e:
-                log_lines.append(f"[red]\u2717[/red] {varname} t={t}: {e}")
+                log_lines.append(f"[red]\u2717[/red] {varname} {fname}: {e}")
             self.call_from_thread(self._advance_progress, i + 1, total)
 
-        self.call_from_thread(self._set_progress_label, f"Done - {total} plots to {outdir}")
+        self.call_from_thread(self._set_progress_label, f"Done - {total} plots")
         self.call_from_thread(self._set_log, "\n".join(log_lines))
 
     @work(thread=True)
     def _run_gif(self) -> None:
         try:
-            from wrf.plot import render_timesteps
+            from wrf.plot import plot_field, _get_style, _auto_levels
             import matplotlib
             matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
         except ImportError:
             self.call_from_thread(self.notify, "matplotlib not installed", severity="error")
             return
 
-        outdir = os.path.dirname(self.wf_path) if self.wf_path else "."
-        timesteps = self._get_timesteps()
-        total = len(self.selected_vars)
+        outdir = os.path.dirname(self.selected_files[0])
+        total_vars = len(self.selected_vars)
+        nfiles = len(self.selected_files)
         log_lines = []
 
-        self.call_from_thread(self._reset_progress, total)
+        self.call_from_thread(self._reset_progress, total_vars)
 
-        for i, varname in enumerate(self.selected_vars):
+        for vi, varname in enumerate(self.selected_vars):
             self.call_from_thread(self._set_progress_label,
-                                  f"Rendering {varname} ({len(timesteps)} frames)  ({i+1}/{total})")
-            gif_path = os.path.join(outdir, f"{varname}.gif")
-            try:
-                def _progress(cur, tot, vn):
-                    self.call_from_thread(self._set_progress_label,
-                                          f"Rendering {vn} frame {cur}/{tot}  (var {i+1}/{total})")
+                                  f"GIF: {varname}  scanning {nfiles} files for scale...")
 
-                render_timesteps(
-                    self.wf, varname,
-                    timesteps=timesteps,
-                    outdir=outdir,
-                    gif=True,
-                    gif_path=gif_path,
-                    fixed_scale=True,
-                    progress_callback=_progress,
-                )
-                log_lines.append(f"[green]\u2713[/green] {varname}  -> {os.path.basename(gif_path)}")
-            except Exception as e:
-                log_lines.append(f"[red]\u2717[/red] {varname}: {e}")
+            # Pass 1: find global min/max across all files for consistent scale
+            from wrf import getvar
+            all_mins, all_maxs = [], []
+            for fpath in self.selected_files:
+                try:
+                    wf = _load_wrf(fpath)
+                    data = getvar(wf, varname, timeidx=0)
+                    if data.ndim == 3:
+                        data = data[0]
+                    valid = data[np.isfinite(data)]
+                    if len(valid) > 0:
+                        all_mins.append(float(np.percentile(valid, 2)))
+                        all_maxs.append(float(np.percentile(valid, 98)))
+                except Exception:
+                    pass
 
-            self.call_from_thread(self._advance_progress, i + 1, total)
+            style = _get_style(varname)
+            if "levels" in style and style["levels"] is not None:
+                fixed_levels = style["levels"]
+            elif all_mins and all_maxs:
+                fixed_levels = np.linspace(min(all_mins), max(all_maxs), 20)
+            else:
+                fixed_levels = None
 
-        self.call_from_thread(self._set_progress_label, f"Done - {total} GIFs to {outdir}")
+            # Pass 2: render each file as a frame
+            png_paths = []
+            for fi, fpath in enumerate(self.selected_files):
+                self.call_from_thread(self._set_progress_label,
+                                      f"GIF: {varname}  frame {fi+1}/{nfiles}")
+                try:
+                    wf = _load_wrf(fpath)
+                    kwargs = {"levels": fixed_levels} if fixed_levels is not None else {}
+                    fig, _ = plot_field(wf, varname, timeidx=0, **kwargs)
+                    png_path = os.path.join(outdir, f"_gif_{varname}_{fi:04d}.png")
+                    fig.savefig(png_path, dpi=120, bbox_inches="tight")
+                    plt.close(fig)
+                    png_paths.append(png_path)
+                except Exception:
+                    pass
+
+            # Assemble GIF
+            if len(png_paths) >= 2:
+                gif_path = os.path.join(outdir, f"{varname}.gif")
+                try:
+                    from wrf.plot import _make_gif
+                    _make_gif(png_paths, gif_path, fps=4)
+                    log_lines.append(f"[green]\u2713[/green] {varname}  -> {os.path.basename(gif_path)}  ({len(png_paths)} frames)")
+                except Exception as e:
+                    log_lines.append(f"[red]\u2717[/red] {varname} gif: {e}")
+                # Clean up temp PNGs
+                for p in png_paths:
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+            else:
+                log_lines.append(f"[yellow]![/yellow] {varname}: not enough frames")
+
+            self.call_from_thread(self._advance_progress, vi + 1, total_vars)
+
+        self.call_from_thread(self._set_progress_label, f"Done - {total_vars} GIFs")
         self.call_from_thread(self._set_log, "\n".join(log_lines))
 
     @work(thread=True)
     def _run_stats(self) -> None:
         from wrf import getvar
-        timesteps = self._get_timesteps()
-        jobs = [(v, t) for v in self.selected_vars for t in timesteps]
+        jobs = [(f, v) for f in self.selected_files for v in self.selected_vars]
         total = len(jobs)
+        multi_file = len(self.selected_files) > 1
 
         self.call_from_thread(self._reset_progress, total)
 
         tbl = Table(box=box.ROUNDED, padding=(0, 1))
         tbl.add_column("Variable", style="bold")
-        if len(timesteps) > 1:
-            tbl.add_column("t", justify="right")
+        if multi_file:
+            tbl.add_column("File")
         tbl.add_column("Shape")
         tbl.add_column("Min", justify="right")
         tbl.add_column("Max", justify="right")
@@ -523,36 +558,34 @@ class WrfTui(App):
         tbl.add_column("Std", justify="right")
         tbl.add_column("Units", style="dim")
 
-        for i, (varname, t) in enumerate(jobs):
+        for i, (fpath, varname) in enumerate(jobs):
+            fname = os.path.basename(fpath)
             self.call_from_thread(self._set_progress_label,
-                                  f"Computing {varname} t={t}  ({i+1}/{total})")
+                                  f"Computing {varname} from {fname}  ({i+1}/{total})")
             info = next((v for v in self.all_vars if v["name"] == varname), None)
             units = info["units"] if info else ""
             try:
-                data = getvar(self.wf, varname, timeidx=t)
+                wf = _load_wrf(fpath)
+                data = getvar(wf, varname, timeidx=0)
                 valid = data[np.isfinite(data)]
                 row = [varname]
-                if len(timesteps) > 1:
-                    row.append(str(t))
+                if multi_file:
+                    row.append(fname[-20:])
                 if len(valid) > 0:
                     row.extend([
                         "x".join(str(d) for d in data.shape),
-                        f"{valid.min():.4g}",
-                        f"{valid.max():.4g}",
-                        f"{valid.mean():.4g}",
-                        f"{valid.std():.4g}",
-                        units,
+                        f"{valid.min():.4g}", f"{valid.max():.4g}",
+                        f"{valid.mean():.4g}", f"{valid.std():.4g}", units,
                     ])
                 else:
                     row.extend(["x".join(str(d) for d in data.shape), "", "", "", "", "[dim]no data[/dim]"])
                 tbl.add_row(*row)
             except Exception as e:
                 row = [varname]
-                if len(timesteps) > 1:
-                    row.append(str(t))
+                if multi_file:
+                    row.append(fname[-20:])
                 row.extend(["", "", "", "", "", f"[red]{e}[/red]"])
                 tbl.add_row(*row)
-
             self.call_from_thread(self._advance_progress, i + 1, total)
 
         self.call_from_thread(self._set_progress_label, f"Done - {total} computations")
@@ -561,13 +594,14 @@ class WrfTui(App):
     # ── Progress helpers ──
 
     def _reset_progress(self, total: int) -> None:
-        pb = self.query_one("#progress-bar", ProgressBar)
-        pb.update(total=total, progress=0)
+        self.query_one("#progress-bar", ProgressBar).update(total=total, progress=0)
         self.query_one("#output-log", Static).update("")
 
     def _advance_progress(self, current: int, total: int) -> None:
-        pb = self.query_one("#progress-bar", ProgressBar)
-        pb.update(total=total, progress=current)
+        self.query_one("#progress-bar", ProgressBar).update(total=total, progress=current)
+
+    def _set_progress_label(self, text: str) -> None:
+        self.query_one("#progress-label", Label).update(text)
 
     def _set_log(self, content) -> None:
         self.query_one("#output-log", Static).update(content)
