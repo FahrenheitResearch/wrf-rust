@@ -36,6 +36,22 @@ __all__ = [
 ]
 __version__ = "0.1.0"
 
+# ── Optional plotting imports (require matplotlib) ──
+try:
+    from wrf.plot import plot_field, plot_wind, plot_skewt, panel
+
+    __all__ += ["plot_field", "plot_wind", "plot_skewt", "panel"]
+except ImportError:
+    pass
+
+# ── Optional explorer imports (require ipywidgets) ──
+try:
+    from wrf.explorer import Explorer, cross_section, profile, hovmoller
+
+    __all__ += ["Explorer", "cross_section", "profile", "hovmoller"]
+except ImportError:
+    pass
+
 # Sentinel for "all time steps"
 ALL_TIMES = None
 
