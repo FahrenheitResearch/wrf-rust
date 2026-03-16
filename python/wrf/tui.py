@@ -116,7 +116,8 @@ class WrfTui(App):
 
         # Left: file browser (multi-select = timesteps)
         with Vertical(id="files-panel"):
-            yield Label("[bold]Files[/bold]  [dim]Enter = toggle select (order = timesteps)[/dim]", classes="panel-title")
+            yield Label("[bold]Files[/bold]  [dim]Enter = toggle[/dim]", classes="panel-title")
+            yield Input(value=self.start_path, placeholder="Folder path (Enter to load)", id="folder-input")
             yield Input(placeholder="Filter files...", id="file-filter")
             yield OptionList(id="file-list")
             yield Static(id="file-info")
@@ -147,24 +148,31 @@ class WrfTui(App):
     def on_mount(self) -> None:
         self.all_vars = _get_var_list()
         self._populate_var_list(self.all_vars)
-        self.all_files = _find_wrf_files(self.start_path)
-        self._populate_file_list(self.all_files)
+        self._load_folder(self.start_path)
         self._refresh_selected_files()
         self._refresh_selected_vars()
 
-        # Auto-select all files if given a directory
-        if os.path.isdir(self.start_path) and self.all_files:
-            self.selected_files = list(self.all_files)
-            self._populate_file_list(self.all_files)
-            self._refresh_selected_files()
-            self._load_first_file()
+    def _load_folder(self, path: str) -> None:
+        """Scan a folder for WRF files. Nothing selected by default."""
+        self.start_path = path
+        self.all_files = _find_wrf_files(path)
+        self._populate_file_list(self.all_files)
+        n = len(self.all_files)
+        if n > 0:
+            self.notify(f"Found {n} file{'s' if n != 1 else ''} in {os.path.basename(path) or path}")
+        else:
+            self.notify(f"No WRF files in {path}", severity="warning")
 
-        # Auto-select single file
-        if os.path.isfile(self.start_path) and self.all_files:
-            self.selected_files = list(self.all_files)
-            self._populate_file_list(self.all_files)
+    @on(Input.Submitted, "#folder-input")
+    def _on_folder_submit(self, event: Input.Submitted) -> None:
+        """User typed a new folder path and hit Enter."""
+        path = event.value.strip()
+        if path and os.path.exists(path):
+            self.selected_files.clear()
+            self._load_folder(path)
             self._refresh_selected_files()
-            self._load_first_file()
+        else:
+            self.notify(f"Path not found: {path}", severity="error")
 
     # ── File list (multi-select) ──
 
@@ -205,19 +213,16 @@ class WrfTui(App):
             self.selected_files.remove(path)
         else:
             self.selected_files.append(path)
-        # Re-sort to match file order
+        # Keep sorted in file-list order
         self.selected_files.sort(key=lambda f: self.all_files.index(f) if f in self.all_files else 0)
-        self._populate_file_list(
-            [f for f in self.all_files
-             if not self.query_one("#file-filter", Input).value.strip()
-             or self.query_one("#file-filter", Input).value.lower() in os.path.basename(f).lower()]
-            or self.all_files
-        )
+        # Refresh the file list to update checkmarks
+        q = self.query_one("#file-filter", Input).value.lower().strip()
+        filtered = [f for f in self.all_files if not q or q in os.path.basename(f).lower()]
+        self._populate_file_list(filtered)
         self._refresh_selected_files()
-
-        # Load first selected file to populate grid info
-        if self.selected_files:
-            self._load_first_file()
+        n = len(self.selected_files)
+        if n > 0:
+            self.sub_title = f"{n} file{'s' if n != 1 else ''} selected"
 
     @work(thread=True)
     def _show_file_info(self, path: str) -> None:

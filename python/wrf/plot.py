@@ -373,7 +373,7 @@ def plot_field(
     contour_line_color: str = "k",
     contour_line_kwargs: Optional[dict] = None,
     borders: bool = True,
-    gridlines: bool = True,
+    gridlines: bool = False,
     extend: Optional[str] = None,
     **getvar_kwargs,
 ):
@@ -600,7 +600,7 @@ def plot_wind(
     units: Optional[str] = None,
     title: Optional[str] = None,
     borders: bool = True,
-    gridlines: bool = True,
+    gridlines: bool = False,
     colorbar: bool = True,
     **getvar_kwargs,
 ):
