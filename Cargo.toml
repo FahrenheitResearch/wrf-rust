@@ -1,0 +1,23 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+
+[package]
+name = "wrf-py"
+version = "0.1.0"
+edition.workspace = true
+description = "Python bindings for wrf-rust — fast WRF post-processing"
+
+[lib]
+name = "_wrf"
+crate-type = ["cdylib"]
+
+[dependencies]
+wrf-core = { path = "crates/wrf-core" }
+pyo3 = { version = "0.23", features = ["extension-module"] }
+numpy = "0.23"
+ndarray = "0.16"

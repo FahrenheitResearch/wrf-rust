@@ -1,0 +1,12 @@
+[package]
+name = "wrf-core"
+version = "0.1.0"
+edition.workspace = true
+description = "Pure Rust WRF post-processing library"
+
+[dependencies]
+wx-math = { path = "C:/Users/drew/rustmet/crates/wx-math" }
+metrust = { path = "C:/Users/drew/metrust" }
+netcdf = "0.12"
+ndarray = "0.16"
+rayon = "1"
