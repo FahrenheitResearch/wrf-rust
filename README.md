@@ -79,8 +79,15 @@ mucape = getvar(f, "mucape", timeidx=0)   # most-unstable CAPE
 mlcin  = getvar(f, "mlcin",  timeidx=0)   # mixed-layer CIN
 lcl    = getvar(f, "lcl",    timeidx=0)   # LCL height (m AGL)
 
-# 0-3 km CAPE (truncated integration)
-cape3  = getvar(f, "sbcape", timeidx=0, top_m=3000)
+# Generic CAPE with parcel selection
+cape  = getvar(f, "cape", parcel_type="ml")         # same as mlcape
+cape3 = getvar(f, "cape", parcel_type="sb", top_m=3000)  # 0-3 km CAPE
+
+# Custom parcel: specify starting conditions directly
+cape_custom = getvar(f, "cape",
+                     parcel_pressure=900,       # hPa
+                     parcel_temperature=25,     # deg C
+                     parcel_dewpoint=18)        # deg C
 
 # Storm-relative helicity with proper Bunkers
 srh1 = getvar(f, "srh1", timeidx=0)   # 0-1 km SRH
@@ -90,10 +97,28 @@ srh3 = getvar(f, "srh3", timeidx=0)   # 0-3 km SRH
 srh_custom = getvar(f, "srh", timeidx=0,
                     depth_m=3000, storm_motion=(12.0, 8.0))
 
+# Effective inflow layer SRH (no more manual layer-finding!)
+eff_srh = getvar(f, "effective_srh")
+
 # Severe composites
-stp = getvar(f, "stp", timeidx=0)      # Significant Tornado Parameter
-scp = getvar(f, "scp", timeidx=0)      # Supercell Composite Parameter
-ehi = getvar(f, "ehi", timeidx=0)      # Energy-Helicity Index
+stp     = getvar(f, "stp")                           # fixed-layer STP (default)
+stp_eff = getvar(f, "stp", layer_type="effective")   # effective-layer STP
+scp     = getvar(f, "scp")
+ehi_1km = getvar(f, "ehi")                           # 0-1 km EHI (default)
+ehi_3km = getvar(f, "ehi", depth_m=3000)             # 0-3 km EHI
+
+# Configurable shear and mean wind
+shr_0_3 = getvar(f, "bulk_shear", bottom_m=0, top_m=3000)
+shr_1_6 = getvar(f, "bulk_shear", bottom_m=1000, top_m=6000)
+mw      = getvar(f, "mean_wind",  bottom_m=0, top_m=6000)
+
+# Configurable lapse rates
+lr_03 = getvar(f, "lapse_rate", bottom_m=0, top_m=3000)
+lr_36 = getvar(f, "lapse_rate", bottom_m=3000, top_m=6000)
+lr_vt = getvar(f, "lapse_rate", bottom_m=0, top_m=3000, use_virtual=True)
+
+# Updraft helicity with custom layer
+uh_03 = getvar(f, "uhel", bottom_m=0, top_m=3000)   # 0-3 km UH
 
 # All timesteps at once
 slp_all = getvar(f, "slp", timeidx=ALL_TIMES)  # shape (nt, ny, nx)
@@ -188,10 +213,19 @@ These use proper parcel definitions matching SPC/SHARPpy. Powered by [wx-math](h
 | `lcl` | `lcl_height` | LCL height AGL | m | 2D |
 | `lfc` | `lfc_height` | LFC height AGL | m | 2D |
 | `el` | `equilibrium_level` | Equilibrium level height AGL | m | 2D |
+| `cape` | | Generic CAPE (`parcel_type` or custom parcel) | J/kg | 2D |
+| `cin` | | Generic CIN (`parcel_type` or custom parcel) | J/kg | 2D |
+| `effective_cape` | `eff_cape` | MUCAPE within effective inflow layer | J/kg | 2D |
+| `effective_inflow` | `eff_inflow` | Effective inflow layer base/top heights | m | 2D* |
 | `cape2d` | | CAPE/CIN/LCL/LFC (backward-compat) | J/kg | 2D* |
 | `cape3d` | | 3-D CAPE field | J/kg | 3D |
 
 Use `top_m=3000` with any CAPE variable for 0-3 km CAPE (3CAPE).
+
+The generic `cape`/`cin`/`lcl`/`lfc`/`el` variables accept:
+- `parcel_type="sb"`, `"ml"`, or `"mu"` (default: `"sb"`)
+- Custom parcel via `parcel_pressure` (hPa), `parcel_temperature` (degC), `parcel_dewpoint` (degC)
+- `top_m` for truncated CAPE (e.g. `top_m=3000` for 3CAPE)
 
 ### Wind
 
@@ -216,19 +250,24 @@ Uses Bunkers Internal Dynamics method (Bunkers et al. 2000), not wrf-python's no
 | `srh1` | `srh_0_1km` | 0-1 km SRH (Bunkers RM) | m2/s2 | 2D |
 | `srh3` | `srh_0_3km` | 0-3 km SRH (Bunkers RM) | m2/s2 | 2D |
 | `srh` | `storm_relative_helicity` | SRH (configurable `depth_m`) | m2/s2 | 2D |
+| `effective_srh` | `srh_eff` | SRH over effective inflow layer | m2/s2 | 2D |
 | `shear_0_1km` | `shr01` | 0-1 km bulk wind shear | m/s | 2D |
 | `shear_0_6km` | `shr06` | 0-6 km bulk wind shear | m/s | 2D |
+| `bulk_shear` | `shear` | Bulk shear (configurable `bottom_m`/`top_m`) | m/s | 2D |
 | `bunkers_rm` | `bunkers_right` | Bunkers right-mover motion | m/s | 2D* |
 | `bunkers_lm` | `bunkers_left` | Bunkers left-mover motion | m/s | 2D* |
 | `mean_wind_0_6km` | `mean_wind_6km` | 0-6 km mean wind | m/s | 2D* |
+| `mean_wind` | | Mean wind (configurable `bottom_m`/`top_m`) | m/s | 2D* |
 
 ### Severe weather composites
 
 | Variable | Aliases | Description | Default units | Shape |
 |---|---|---|---|---|
-| `stp` | `significant_tornado_parameter` | STP (Thompson et al. 2003) | dimensionless | 2D |
+| `stp` | `significant_tornado_parameter` | STP -- fixed (default) or effective via `layer_type` | dimensionless | 2D |
+| `stp_fixed` | | STP fixed-layer only | dimensionless | 2D |
+| `stp_effective` | `stp_eff` | STP effective-layer only | dimensionless | 2D |
 | `scp` | `supercell_composite_parameter` | SCP (Thompson et al. 2004) | dimensionless | 2D |
-| `ehi` | `energy_helicity_index` | Energy-Helicity Index | dimensionless | 2D |
+| `ehi` | `energy_helicity_index` | EHI (configurable SRH `depth_m`, default 0-1 km) | dimensionless | 2D |
 | `critical_angle` | `crit_angle` | Critical angle (Esterheld & Giuliano 2008) | degrees | 2D |
 | `ship` | `significant_hail_parameter` | Significant Hail Parameter | dimensionless | 2D |
 | `bri` | `bulk_richardson_number` | Bulk Richardson Number | dimensionless | 2D |
@@ -241,7 +280,7 @@ Uses Bunkers Internal Dynamics method (Bunkers et al. 2000), not wrf-python's no
 | `maxdbz` | `composite_reflectivity` | Maximum (composite) reflectivity | dBZ | 2D |
 | `ctt` | `cloud_top_temperature` | Cloud-top temperature | degC | 2D |
 | `cloudfrac` | `cloud_fraction` | Cloud fraction (low/mid/high) | % | 2D* |
-| `uhel` | `updraft_helicity` | Updraft helicity (2-5 km) | m2/s2 | 2D |
+| `uhel` | `updraft_helicity` | Updraft helicity (configurable `bottom_m`/`top_m`, default 2-5 km) | m2/s2 | 2D |
 
 ### Vorticity
 
@@ -256,6 +295,7 @@ Uses Bunkers Internal Dynamics method (Bunkers et al. 2000), not wrf-python's no
 |---|---|---|---|---|
 | `lapse_rate_700_500` | `lr75` | 700-500 hPa lapse rate | degC/km | 2D |
 | `lapse_rate_0_3km` | `lr03` | 0-3 km AGL lapse rate | degC/km | 2D |
+| `lapse_rate` | `lr` | Lapse rate (configurable `bottom_m`/`top_m`, `use_virtual`) | degC/km | 2D |
 | `freezing_level` | `fzlev` | Freezing level height AGL | m | 2D |
 | `wet_bulb_0` | `wb0` | Wet-bulb zero height AGL | m | 2D |
 
@@ -268,6 +308,58 @@ Uses Bunkers Internal Dynamics method (Bunkers et al. 2000), not wrf-python's no
 | `hdw` | `hot_dry_windy` | Hot-Dry-Windy Index | dimensionless | 2D |
 
 Variables marked with * return multi-field arrays (e.g., `uvmet` returns U and V stacked, `cape2d` returns CAPE/CIN/LCL/LFC stacked).
+
+## Configurable parameters
+
+Most hardcoded convenience variables (like `srh1`, `shear_0_6km`, `lapse_rate_0_3km`) have generic counterparts that accept configurable bounds. The philosophy: **hardcoded names for common cases, configurable names for everything else.**
+
+| Parameter | Type | Used by | Description |
+|---|---|---|---|
+| `parcel_type` | `str` | `cape`, `cin`, `lcl`, `lfc`, `el`, `sbcape`... | Parcel selection: `"sb"`, `"ml"`, `"mu"` |
+| `parcel_pressure` | `float` | `cape`, `cin`, `lcl`, `lfc`, `el` | Custom parcel starting pressure (hPa) |
+| `parcel_temperature` | `float` | `cape`, `cin`, `lcl`, `lfc`, `el` | Custom parcel starting temperature (degC) |
+| `parcel_dewpoint` | `float` | `cape`, `cin`, `lcl`, `lfc`, `el` | Custom parcel starting dewpoint (degC) |
+| `top_m` | `float` | `cape`, `cin`, `bulk_shear`, `mean_wind`, `lapse_rate`, `uhel` | Top of integration layer (m AGL) |
+| `bottom_m` | `float` | `bulk_shear`, `mean_wind`, `lapse_rate`, `uhel` | Bottom of layer (m AGL) |
+| `depth_m` | `float` | `srh`, `ehi` | SRH integration depth (m AGL) |
+| `storm_motion` | `(float, float)` | `srh`, `srh1`, `srh3`, `effective_srh` | Custom storm motion (u, v) in m/s |
+| `layer_type` | `str` | `stp` | `"fixed"` (default) or `"effective"` |
+| `use_virtual` | `bool` | `lapse_rate` | Use virtual temperature instead of absolute |
+
+### Custom parcel example
+
+```python
+# Lift a parcel from 850 hPa with T=20C, Td=15C
+cape_850 = getvar(f, "cape",
+                  parcel_pressure=850,
+                  parcel_temperature=20,
+                  parcel_dewpoint=15)
+
+# Same parcel, but only integrate to 3 km (3CAPE)
+cape_850_3km = getvar(f, "cape",
+                      parcel_pressure=850,
+                      parcel_temperature=20,
+                      parcel_dewpoint=15,
+                      top_m=3000)
+```
+
+### Effective inflow layer
+
+The effective inflow layer is the contiguous layer where parcels have CAPE >= 100 J/kg and CIN >= -250 J/kg. This is the layer that actually feeds a storm.
+
+```python
+# Effective inflow layer bounds (base height, top height in m AGL)
+eff_layer = getvar(f, "effective_inflow")  # shape (2, ny, nx)
+
+# MUCAPE within the effective layer
+eff_cape = getvar(f, "effective_cape")
+
+# SRH over the effective layer (replaces the need for manual layer-finding)
+eff_srh = getvar(f, "effective_srh")
+
+# Effective-layer STP (uses effective CAPE + effective SRH)
+stp_eff = getvar(f, "stp", layer_type="effective")
+```
 
 ## Unit conversion
 
