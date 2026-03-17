@@ -41,6 +41,7 @@ impl fmt::Display for WrfError {
 
 impl std::error::Error for WrfError {}
 
+#[cfg(feature = "netcdf-backend")]
 impl From<netcdf::Error> for WrfError {
     fn from(e: netcdf::Error) -> Self {
         Self::NetCdf(e.to_string())

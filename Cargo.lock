@@ -1822,6 +1822,7 @@ dependencies = [
 name = "wrf-core"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "metrust",
  "ndarray",
  "netcdf",
