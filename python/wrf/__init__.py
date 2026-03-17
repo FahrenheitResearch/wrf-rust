@@ -75,6 +75,19 @@ try:
 except ImportError:
     pass
 
+# ── Optional Solar7 imports (require matplotlib) ──
+# Lazy: importing wrf.solar7 registers the colormaps with matplotlib.
+# We expose the public API names but defer actual import until accessed.
+def __getattr__(name):
+    if name in ("SOLAR7_STYLES", "solar7_products"):
+        from wrf import solar7
+        val = getattr(solar7, name)
+        # Cache on the module so __getattr__ is not called again
+        globals()[name] = val
+        __all__.append(name)
+        return val
+    raise AttributeError(f"module 'wrf' has no attribute {name!r}")
+
 # Sentinel for "all time steps"
 ALL_TIMES = None
 

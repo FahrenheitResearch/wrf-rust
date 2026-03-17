@@ -359,6 +359,7 @@ def plot_field(
     varname: str,
     timeidx: int = 0,
     *,
+    style: Optional[str] = None,
     cmap: Optional[str] = None,
     levels: Optional[np.ndarray] = None,
     units: Optional[str] = None,
@@ -391,6 +392,10 @@ def plot_field(
         Variable name (e.g. "sbcape", "slp", "maxdbz").
     timeidx : int
         Time index.
+    style : str, optional
+        Styling preset.  ``"solar7"`` uses the Solarpower07 colormaps
+        and contour levels from ``wrf.solar7``.  Overridden by explicit
+        *cmap* / *levels* / *extend* arguments.
     cmap : str, optional
         Matplotlib colormap name.  Overrides the automatic pick.
     levels : array-like, optional
@@ -452,15 +457,22 @@ def plot_field(
     lon = getvar(wf, "lon", timeidx=timeidx)
 
     # -- Style resolution --
-    style = _get_style(varname)
-    use_cmap = cmap or style.get("cmap", "viridis")
-    use_extend = extend or style.get("extend", "both")
-    center_zero = style.get("center_zero", False)
+    if style == "solar7":
+        from wrf.solar7 import SOLAR7_STYLES
+        _key = varname.lower()
+        _s7 = SOLAR7_STYLES.get(_key, {})
+        # Solar7 style is the base; explicit args override it
+        style_dict = {**_get_style(varname), **_s7}
+    else:
+        style_dict = _get_style(varname)
+    use_cmap = cmap or style_dict.get("cmap", "viridis")
+    use_extend = extend or style_dict.get("extend", "both")
+    center_zero = style_dict.get("center_zero", False)
 
     if levels is not None:
         use_levels = np.asarray(levels)
-    elif "levels" in style and style["levels"] is not None:
-        use_levels = style["levels"]
+    elif "levels" in style_dict and style_dict["levels"] is not None:
+        use_levels = style_dict["levels"]
     else:
         use_levels = _auto_levels(data, center_zero=center_zero)
 
