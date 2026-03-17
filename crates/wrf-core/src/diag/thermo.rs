@@ -7,6 +7,11 @@ use crate::compute::ComputeOpts;
 use crate::error::WrfResult;
 use crate::file::WrfFile;
 
+/// 2-m temperature (K). `[ny, nx]`
+pub fn compute_t2(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    f.t2_for_opts(t, opts)
+}
+
 /// Temperature (K). `[nz, ny, nx]`
 pub fn compute_temp(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     f.temperature(t)

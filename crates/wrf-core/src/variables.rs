@@ -95,6 +95,14 @@ pub static VARS: &[VarDef] = &[
         compute: dpres::compute_terrain,
     },
     VarDef {
+        name: "t2",
+        aliases: &["t2m", "temperature_2m"],
+        description: "2-m temperature",
+        default_units: "K",
+        dim: VarDim::TwoD,
+        compute: dthermo::compute_t2,
+    },
+    VarDef {
         name: "temp",
         aliases: &["tk"],
         description: "Temperature",
