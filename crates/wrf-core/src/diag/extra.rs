@@ -297,6 +297,26 @@ pub fn compute_lapse_rate(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResul
     let qv = if use_virtual { Some(f.qvapor(t)?) } else { None };
     let pres_hpa = if use_pressure { Some(f.pressure_hpa(t)?) } else { None };
 
+    // For surface (bottom_m=0 or not set), use 2m data with lake_interp support
+    let bottom_is_surface = !use_pressure && opts.bottom_m.unwrap_or(0.0) < 10.0;
+    let t2_c = if bottom_is_surface {
+        let t2_k = match opts.lake_interp {
+            Some(a) if a > 0.0 => f.t2_lake_corrected(t, a)?,
+            _ => f.t2(t)?,
+        };
+        Some(t2_k.iter().map(|v| v - 273.15).collect::<Vec<f64>>())
+    } else {
+        None
+    };
+    let q2 = if bottom_is_surface && use_virtual {
+        Some(match opts.lake_interp {
+            Some(a) if a > 0.0 => f.q2_lake_corrected(t, a)?,
+            _ => f.q2(t)?,
+        })
+    } else {
+        None
+    };
+
     let nx = f.nx;
     let ny = f.ny;
     let nz = f.nz;
@@ -354,6 +374,20 @@ pub fn compute_lapse_rate(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResul
             let depth_km = (top_m - bottom_m) / 1000.0;
 
             let interp_at_h = |target_h: f64| -> f64 {
+                // Use 2m data for surface (target_h < 10m)
+                if target_h < 10.0 {
+                    if let Some(ref t2) = t2_c {
+                        let t_sfc = t2[ij];
+                        if use_virtual {
+                            if let Some(ref q) = q2 {
+                                let t_k = t_sfc + 273.15;
+                                let tv_k = t_k * (1.0 + 0.61 * q[ij].max(0.0));
+                                return tv_k - 273.15;
+                            }
+                        }
+                        return t_sfc;
+                    }
+                }
                 if h_agl[ij] >= target_h {
                     return temp_at(ij);
                 }
