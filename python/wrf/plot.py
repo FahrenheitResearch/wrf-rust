@@ -156,8 +156,8 @@ _VAR_STYLES: Dict[str, Dict[str, Any]] = {
     "pvo":    dict(cmap="RdBu_r", center_zero=True, extend="both"),
 
     # ---- Radar ----
-    "dbz":    dict(cmap="_nws_reflectivity", levels=np.arange(5, 80, 5), extend="max", mask_below=5.0),
-    "maxdbz": dict(cmap="_nws_reflectivity", levels=np.arange(5, 80, 5), extend="max", mask_below=5.0),
+    "dbz":    dict(cmap="_nws_reflectivity", levels=np.arange(5, 71, 2.5), extend="max", mask_below=5.0),
+    "maxdbz": dict(cmap="_nws_reflectivity", levels=np.arange(5, 71, 2.5), extend="max", mask_below=5.0),
 
     # ---- Cloud ----
     "ctt":       dict(cmap="Greys_r", levels=np.arange(-80, 22, 2), extend="both"),

@@ -30,6 +30,17 @@ const RN0_R: f64 = 8.0e6;
 const RN0_S: f64 = 2.0e7;
 const RN0_G: f64 = 4.0e6;
 
+// --- Variable intercept parameters (Thompson microphysics) ---
+const R1: f64 = 1.0e-15;
+const RON: f64 = 8.0e6;
+const RON2: f64 = 1.0e10;
+const GON: f64 = 5.0e7;
+const RON_MIN: f64 = 8.0e6;
+const RON_QR0: f64 = 0.00010;
+const RON_DELQR0: f64 = 0.25 * RON_QR0;
+const RON_CONST1R: f64 = (RON2 - RON_MIN) * 0.5;
+const RON_CONST2R: f64 = (RON2 + RON_MIN) * 0.5;
+
 /// Simulated reflectivity (dBZ). `[nz, ny, nx]`
 ///
 /// Matches wrf-python's `CALCDBZ` from `wrf_user_dbz.f90` with constant
@@ -63,10 +74,8 @@ pub fn compute_dbz(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<
     let factorb_s = factor_s / ALPHA;
     let factorb_g = factor_g / ALPHA;
 
-    // Constant intercept N0 values
-    let ronv = RN0_R;
-    let sonv = RN0_S;
-    let gonv = RN0_G;
+    // Use variable intercepts (ivarint=1) for Thompson microphysics
+    let ivarint = true;
 
     let n = f.nxyz();
 
@@ -96,6 +105,29 @@ pub fn compute_dbz(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<
             // when above freezing, otherwise use factor (with ALPHA)
             let fs = if t_k > CELKEL { factorb_s } else { factor_s };
             let fg = if t_k > CELKEL { factorb_g } else { factor_g };
+
+            // Variable intercept parameters (Thompson microphysics)
+            let (ronv, sonv, gonv) = if ivarint {
+                let temp_c = (t_k - CELKEL).min(-0.001);
+                let sonv_v = (2.0e6 * (-0.12 * temp_c).exp()).min(2.0e8);
+
+                let gonv_v = if qgr > R1 {
+                    let g = 2.38 * (PI * RHO_G / (rhoair * qgr)).powf(0.92);
+                    g.max(1.0e4).min(GON)
+                } else {
+                    GON
+                };
+
+                let ronv_v = if qra > R1 {
+                    RON_CONST1R * ((RON_QR0 - qra) / RON_DELQR0).tanh() + RON_CONST2R
+                } else {
+                    RON2
+                };
+
+                (ronv_v, sonv_v, gonv_v)
+            } else {
+                (RN0_R, RN0_S, RN0_G)
+            };
 
             // Z_e = factor * (rhoair*q)^1.75 / N0^0.75
             let z_r = factor_r * (rhoair * qra).powf(1.75) / ronv.powf(0.75);

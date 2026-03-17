@@ -385,8 +385,8 @@ SOLAR7_STYLES: Dict[str, Dict[str, Any]] = {
     "lapse_rate_0_3km":   dict(cmap="solar7_lapse_rate", levels=np.arange(4, 10.5, 0.5), extend="both"),
 
     # ---- Radar / reflectivity ----
-    "dbz":    dict(cmap="solar7_reflectivity", levels=np.arange(5, 80, 5), extend="max", mask_below=5.0),
-    "maxdbz": dict(cmap="solar7_reflectivity", levels=np.arange(5, 80, 5), extend="max", mask_below=5.0),
+    "dbz":    dict(cmap="solar7_reflectivity", levels=np.arange(5, 71, 2.5), extend="max", mask_below=5.0),
+    "maxdbz": dict(cmap="solar7_reflectivity", levels=np.arange(5, 71, 2.5), extend="max", mask_below=5.0),
 
     # ---- Geopotential anomaly ----
     "geopt": dict(cmap="solar7_geopot_anomaly", extend="both", center_zero=True),
