@@ -61,7 +61,7 @@ __all__ = [
     "latlon_coords",
     "ll_to_xy",
 ]
-__version__ = "0.2.10"
+__version__ = "0.2.12"
 
 # ── Optional plotting imports (require matplotlib) ──
 try:
@@ -344,7 +344,6 @@ def interplevel(field_3d, vert_coord_3d, target_level):
     """
     field_3d = np.asarray(field_3d, dtype=np.float64)
     vert_coord_3d = np.asarray(vert_coord_3d, dtype=np.float64)
-    target_level = float(target_level)
 
     if field_3d.ndim != 3 or vert_coord_3d.ndim != 3:
         raise ValueError(
@@ -358,6 +357,23 @@ def interplevel(field_3d, vert_coord_3d, target_level):
 
     nz, ny, nx = field_3d.shape
 
+    # Support both scalar and 2D target levels
+    target_arr = np.asarray(target_level, dtype=np.float64)
+    if target_arr.ndim == 0:
+        # Scalar: broadcast to 2D
+        target_2d = np.full((ny, nx), float(target_arr))
+    elif target_arr.ndim == 2:
+        if target_arr.shape != (ny, nx):
+            raise ValueError(
+                f"2D target_level shape {target_arr.shape} doesn't match "
+                f"field shape ({ny}, {nx})"
+            )
+        target_2d = target_arr
+    else:
+        raise ValueError(
+            "target_level must be a scalar or 2D array (ny, nx)"
+        )
+
     # Determine direction: if the coordinate generally decreases along the
     # first axis it is pressure-like (use log interpolation); otherwise it
     # is height-like (use linear interpolation).
@@ -369,7 +385,7 @@ def interplevel(field_3d, vert_coord_3d, target_level):
     if is_pressure:
         # Log-pressure interpolation
         log_vert = np.log(np.clip(vert_coord_3d, 1e-10, None))
-        log_target = np.log(target_level)
+        log_target = np.log(target_2d)
 
         for k in range(nz - 1):
             # Find grid cells where target is bracketed by levels k and k+1
@@ -395,16 +411,16 @@ def interplevel(field_3d, vert_coord_3d, target_level):
         still_nan = np.isnan(result)
         if np.any(still_nan):
             # If target pressure > surface (below ground), use surface value
-            below_sfc = still_nan & (vert_coord_3d[0, :, :] < target_level)
+            below_sfc = still_nan & (vert_coord_3d[0, :, :] < target_2d)
             result = np.where(below_sfc, field_3d[0, :, :], result)
             # If target pressure < model top, use top value
-            above_top = still_nan & (vert_coord_3d[-1, :, :] > target_level)
+            above_top = still_nan & (vert_coord_3d[-1, :, :] > target_2d)
             result = np.where(above_top, field_3d[-1, :, :], result)
     else:
         # Linear height interpolation
         for k in range(nz - 1):
-            above = vert_coord_3d[k, :, :] <= target_level
-            below = vert_coord_3d[k + 1, :, :] >= target_level
+            above = vert_coord_3d[k, :, :] <= target_2d
+            below = vert_coord_3d[k + 1, :, :] >= target_2d
             mask = above & below & np.isnan(result)
 
             if not np.any(mask):
@@ -412,7 +428,7 @@ def interplevel(field_3d, vert_coord_3d, target_level):
 
             denom = vert_coord_3d[k + 1, :, :] - vert_coord_3d[k, :, :]
             safe_denom = np.where(np.abs(denom) < 1e-12, 1.0, denom)
-            frac = (target_level - vert_coord_3d[k, :, :]) / safe_denom
+            frac = (target_2d - vert_coord_3d[k, :, :]) / safe_denom
             interped = field_3d[k, :, :] + frac * (
                 field_3d[k + 1, :, :] - field_3d[k, :, :]
             )
