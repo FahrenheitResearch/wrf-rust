@@ -522,8 +522,17 @@ impl WrfFile {
     }
 
     /// 2-m temperature (K). Shape: `[ny, nx]`.
+    /// Use `t2_for_opts` when lake_interp may be active.
     pub fn t2(&self, t: usize) -> WrfResult<Vec<f64>> {
         self.read_var("T2", t)
+    }
+
+    /// 2-m temperature, with optional lake correction from ComputeOpts.
+    pub fn t2_for_opts(&self, t: usize, opts: &crate::compute::ComputeOpts) -> WrfResult<Vec<f64>> {
+        match opts.lake_interp {
+            Some(area) if area > 0.0 => self.t2_lake_corrected(t, area),
+            _ => self.t2(t),
+        }
     }
 
     /// 2-m temperature with lake interpolation. Shape: `[ny, nx]`.
@@ -539,8 +548,17 @@ impl WrfFile {
     }
 
     /// 2-m mixing ratio (kg/kg). Shape: `[ny, nx]`.
+    /// Use `q2_for_opts` when lake_interp may be active.
     pub fn q2(&self, t: usize) -> WrfResult<Vec<f64>> {
         self.read_var("Q2", t)
+    }
+
+    /// 2-m mixing ratio, with optional lake correction from ComputeOpts.
+    pub fn q2_for_opts(&self, t: usize, opts: &crate::compute::ComputeOpts) -> WrfResult<Vec<f64>> {
+        match opts.lake_interp {
+            Some(area) if area > 0.0 => self.q2_lake_corrected(t, area),
+            _ => self.q2(t),
+        }
     }
 
     /// 2-m mixing ratio with lake interpolation. Shape: `[ny, nx]`.

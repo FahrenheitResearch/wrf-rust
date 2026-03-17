@@ -16,14 +16,21 @@ fn compute_cape_fields(
     t: usize,
     parcel_type: &str,
     top_m: Option<f64>,
+    lake_interp: Option<f64>,
 ) -> WrfResult<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)> {
-    let pres = f.full_pressure(t)?; // Pa -> need hPa for thermo functions
+    let pres = f.full_pressure(t)?;
     let tc = f.temperature_c(t)?;
     let qv = f.qvapor(t)?;
     let h_agl = f.height_agl(t)?;
     let psfc = f.psfc(t)?;
-    let t2 = f.t2(t)?;
-    let q2 = f.q2(t)?;
+    let t2 = match lake_interp {
+        Some(a) if a > 0.0 => f.t2_lake_corrected(t, a)?,
+        _ => f.t2(t)?,
+    };
+    let q2 = match lake_interp {
+        Some(a) if a > 0.0 => f.q2_lake_corrected(t, a)?,
+        _ => f.q2(t)?,
+    };
 
     let nx = f.nx;
     let ny = f.ny;
@@ -99,44 +106,44 @@ fn resolve_parcel_type(opts: &ComputeOpts, default: &str) -> String {
 // ── Public compute functions ──
 
 pub fn compute_sbcape(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let (cape, _, _, _) = compute_cape_fields(f, t, "sb", opts.top_m)?;
+    let (cape, _, _, _) = compute_cape_fields(f, t, "sb", opts.top_m, opts.lake_interp)?;
     Ok(cape)
 }
 
 pub fn compute_sbcin(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let (_, cin, _, _) = compute_cape_fields(f, t, "sb", opts.top_m)?;
+    let (_, cin, _, _) = compute_cape_fields(f, t, "sb", opts.top_m, opts.lake_interp)?;
     Ok(cin)
 }
 
 pub fn compute_mlcape(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let (cape, _, _, _) = compute_cape_fields(f, t, "ml", opts.top_m)?;
+    let (cape, _, _, _) = compute_cape_fields(f, t, "ml", opts.top_m, opts.lake_interp)?;
     Ok(cape)
 }
 
 pub fn compute_mlcin(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let (_, cin, _, _) = compute_cape_fields(f, t, "ml", opts.top_m)?;
+    let (_, cin, _, _) = compute_cape_fields(f, t, "ml", opts.top_m, opts.lake_interp)?;
     Ok(cin)
 }
 
 pub fn compute_mucape(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let (cape, _, _, _) = compute_cape_fields(f, t, "mu", opts.top_m)?;
+    let (cape, _, _, _) = compute_cape_fields(f, t, "mu", opts.top_m, opts.lake_interp)?;
     Ok(cape)
 }
 
 pub fn compute_mucin(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let (_, cin, _, _) = compute_cape_fields(f, t, "mu", opts.top_m)?;
+    let (_, cin, _, _) = compute_cape_fields(f, t, "mu", opts.top_m, opts.lake_interp)?;
     Ok(cin)
 }
 
 pub fn compute_lcl(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let pt = resolve_parcel_type(opts, "sb");
-    let (_, _, lcl, _) = compute_cape_fields(f, t, &pt, opts.top_m)?;
+    let (_, _, lcl, _) = compute_cape_fields(f, t, &pt, opts.top_m, opts.lake_interp)?;
     Ok(lcl)
 }
 
 pub fn compute_lfc(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let pt = resolve_parcel_type(opts, "sb");
-    let (_, _, _, lfc) = compute_cape_fields(f, t, &pt, opts.top_m)?;
+    let (_, _, _, lfc) = compute_cape_fields(f, t, &pt, opts.top_m, opts.lake_interp)?;
     Ok(lfc)
 }
 
@@ -185,7 +192,7 @@ pub fn compute_el(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f6
 /// cape2d: backward-compatible with wrf-python. Returns `[cape, cin, lcl, lfc]` interleaved (4 * nxy).
 pub fn compute_cape2d(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let pt = resolve_parcel_type(opts, "ml");
-    let (cape, cin, lcl, lfc) = compute_cape_fields(f, t, &pt, opts.top_m)?;
+    let (cape, cin, lcl, lfc) = compute_cape_fields(f, t, &pt, opts.top_m, opts.lake_interp)?;
     let mut out = cape;
     out.extend(cin);
     out.extend(lcl);
@@ -329,7 +336,7 @@ fn resolve_cape_fields(
         compute_cape_fields_custom(f, t, p, tc, td, opts.top_m)
     } else {
         let pt = resolve_parcel_type(opts, "sb");
-        compute_cape_fields(f, t, &pt, opts.top_m)
+        compute_cape_fields(f, t, &pt, opts.top_m, opts.lake_interp)
     }
 }
 

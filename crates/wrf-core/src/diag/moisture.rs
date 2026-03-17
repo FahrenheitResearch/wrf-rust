@@ -20,9 +20,9 @@ pub fn compute_pw(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f
 }
 
 /// 2-m relative humidity (%). `[ny, nx]`
-pub fn compute_rh2m(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let t2 = f.t2(t)?; // K
-    let q2 = f.q2(t)?; // kg/kg
+pub fn compute_rh2m(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    let t2 = f.t2_for_opts(t, opts)?;
+    let q2 = f.q2_for_opts(t, opts)?;
     let psfc = f.psfc(t)?; // Pa
 
     Ok(t2
@@ -40,8 +40,8 @@ pub fn compute_rh2m(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec
 }
 
 /// 2-m dewpoint (°C). `[ny, nx]`
-pub fn compute_dp2m(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let q2 = f.q2(t)?;
+pub fn compute_dp2m(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    let q2 = f.q2_for_opts(t, opts)?;
     let psfc = f.psfc(t)?;
 
     Ok(q2
