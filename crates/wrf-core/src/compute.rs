@@ -32,6 +32,10 @@ pub struct ComputeOpts {
     pub layer_type: Option<String>,
     /// Use virtual temperature instead of absolute temperature (for lapse rates).
     pub use_virtual: Option<bool>,
+    /// Interpolate 2m fields over water bodies smaller than this area (km2).
+    /// 0 or None = disabled. Typical value: 1000.
+    /// Removes lake artifacts in T2/Q2 that corrupt CAPE, STP, etc.
+    pub lake_interp: Option<f64>,
 }
 
 /// The result of computing a WRF variable.

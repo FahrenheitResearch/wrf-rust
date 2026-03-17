@@ -70,7 +70,7 @@ impl WrfFile {
     }
 
     /// Compute a diagnostic variable.
-    #[pyo3(signature = (name, timeidx=None, units=None, parcel_type=None, storm_motion=None, top_m=None, bottom_m=None, depth_m=None, parcel_pressure=None, parcel_temperature=None, parcel_dewpoint=None, bottom_p=None, top_p=None, layer_type=None, use_virtual=None))]
+    #[pyo3(signature = (name, timeidx=None, units=None, parcel_type=None, storm_motion=None, top_m=None, bottom_m=None, depth_m=None, parcel_pressure=None, parcel_temperature=None, parcel_dewpoint=None, bottom_p=None, top_p=None, layer_type=None, use_virtual=None, lake_interp=None))]
     fn getvar<'py>(
         &self,
         py: Python<'py>,
@@ -89,6 +89,7 @@ impl WrfFile {
         top_p: Option<f64>,
         layer_type: Option<String>,
         use_virtual: Option<bool>,
+        lake_interp: Option<f64>,
     ) -> PyResult<PyObject> {
         let opts = wrf_core::ComputeOpts {
             units,
@@ -104,6 +105,7 @@ impl WrfFile {
             top_p,
             layer_type,
             use_virtual,
+            lake_interp,
         };
 
         let result = wrf_core::getvar(&self.inner, name, timeidx, &opts)

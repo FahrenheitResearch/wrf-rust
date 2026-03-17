@@ -190,6 +190,7 @@ def getvar(
     top_p=None,
     layer_type=None,
     use_virtual=None,
+    lake_interp=None,
     squeeze=True,
 ):
     """Compute a diagnostic variable from a WRF file.
@@ -259,6 +260,7 @@ def getvar(
         top_p=top_p,
         layer_type=layer_type,
         use_virtual=use_virtual,
+        lake_interp=lake_interp,
     )
 
     if timeidx is ALL_TIMES:

@@ -5,6 +5,8 @@ use std::sync::Mutex;
 #[cfg(feature = "netcdf-backend")]
 use ndarray::Axis;
 
+use rayon::prelude::*;
+
 use crate::error::{WrfError, WrfResult};
 use crate::grid;
 
@@ -524,9 +526,110 @@ impl WrfFile {
         self.read_var("T2", t)
     }
 
+    /// 2-m temperature with lake interpolation. Shape: `[ny, nx]`.
+    /// If `area_threshold_km2 > 0`, water bodies smaller than that area
+    /// are masked and their T2 values are interpolated from surrounding land.
+    pub fn t2_lake_corrected(&self, t: usize, area_threshold_km2: f64) -> WrfResult<Vec<f64>> {
+        let data = self.read_var("T2", t)?;
+        if area_threshold_km2 <= 0.0 {
+            return Ok(data);
+        }
+        let mask = self.lake_mask(t, area_threshold_km2)?;
+        Ok(interpolate_masked_2d(&data, &mask, self.ny, self.nx))
+    }
+
     /// 2-m mixing ratio (kg/kg). Shape: `[ny, nx]`.
     pub fn q2(&self, t: usize) -> WrfResult<Vec<f64>> {
         self.read_var("Q2", t)
+    }
+
+    /// 2-m mixing ratio with lake interpolation. Shape: `[ny, nx]`.
+    pub fn q2_lake_corrected(&self, t: usize, area_threshold_km2: f64) -> WrfResult<Vec<f64>> {
+        let data = self.read_var("Q2", t)?;
+        if area_threshold_km2 <= 0.0 {
+            return Ok(data);
+        }
+        let mask = self.lake_mask(t, area_threshold_km2)?;
+        Ok(interpolate_masked_2d(&data, &mask, self.ny, self.nx))
+    }
+
+    /// Compute a lake mask: true for water body grid cells smaller than `area_km2`.
+    /// Uses WRF LU_INDEX: categories 16 (water), 17 (ocean/bay), 21 (lake).
+    /// Connected components smaller than the area threshold are marked as lakes.
+    fn lake_mask(&self, t: usize, area_km2: f64) -> WrfResult<Vec<bool>> {
+        let key = format!("lake_mask_{t}_{area_km2}");
+        let cached = {
+            let cache = self.cache.lock().unwrap();
+            cache.get(&key).cloned()
+        };
+        if let Some(mask_f64) = cached {
+            return Ok(mask_f64.iter().map(|v| *v > 0.5).collect());
+        }
+
+        let lu = self.read_var("LU_INDEX", t)?;
+        let nxy = self.nxy();
+        let ny = self.ny;
+        let nx = self.nx;
+
+        // Water categories in USGS and MODIS land use
+        let is_water: Vec<bool> = lu.iter().map(|v| {
+            let cat = *v as i32;
+            cat == 16 || cat == 17 || cat == 21
+        }).collect();
+
+        // Connected component labeling (flood fill)
+        let mut labels = vec![0u32; nxy];
+        let mut current_label = 0u32;
+        let mut label_sizes: Vec<usize> = vec![0]; // label 0 = no label
+
+        for start in 0..nxy {
+            if !is_water[start] || labels[start] != 0 {
+                continue;
+            }
+            current_label += 1;
+            let mut size = 0usize;
+            let mut stack = vec![start];
+            while let Some(idx) = stack.pop() {
+                if labels[idx] != 0 {
+                    continue;
+                }
+                labels[idx] = current_label;
+                size += 1;
+
+                let j = idx / nx;
+                let i = idx % nx;
+                // 8-connected neighbors
+                for dj in [-1i32, 0, 1] {
+                    for di in [-1i32, 0, 1] {
+                        if dj == 0 && di == 0 { continue; }
+                        let nj = j as i32 + dj;
+                        let ni = i as i32 + di;
+                        if nj >= 0 && nj < ny as i32 && ni >= 0 && ni < nx as i32 {
+                            let nidx = nj as usize * nx + ni as usize;
+                            if is_water[nidx] && labels[nidx] == 0 {
+                                stack.push(nidx);
+                            }
+                        }
+                    }
+                }
+            }
+            label_sizes.push(size);
+        }
+
+        // Determine which labels are "small" (lakes, not oceans)
+        let grid_area_km2 = (self.dx * self.dy) / 1e6;
+        let count_threshold = (area_km2 / grid_area_km2) as usize;
+
+        let is_lake: Vec<bool> = labels.iter().map(|&lbl| {
+            if lbl == 0 { return false; }
+            label_sizes[lbl as usize] < count_threshold
+        }).collect();
+
+        // Cache as f64
+        let mask_f64: Vec<f64> = is_lake.iter().map(|&b| if b { 1.0 } else { 0.0 }).collect();
+        self.cache.lock().unwrap().insert(key, mask_f64);
+
+        Ok(is_lake)
     }
 
     /// 10-m U wind (m/s). Shape: `[ny, nx]`.
@@ -603,4 +706,58 @@ impl WrfFile {
             Ok(tk.iter().map(|v| v - 273.15).collect())
         })
     }
+}
+
+/// Interpolate masked grid cells from surrounding unmasked values.
+/// Uses inverse-distance weighting with a search radius that expands until
+/// neighbors are found. Rayon-parallelized.
+fn interpolate_masked_2d(data: &[f64], mask: &[bool], ny: usize, nx: usize) -> Vec<f64> {
+    let mut result = data.to_vec();
+    let masked_indices: Vec<usize> = mask.iter().enumerate()
+        .filter(|(_, &m)| m)
+        .map(|(i, _)| i)
+        .collect();
+
+    let interpolated: Vec<(usize, f64)> = masked_indices.par_iter().map(|&idx| {
+        let cj = (idx / nx) as i32;
+        let ci = (idx % nx) as i32;
+
+        // Expand search radius until we find land neighbors
+        for radius in 1..=(ny.max(nx) as i32) {
+            let mut sum_val = 0.0f64;
+            let mut sum_wt = 0.0f64;
+
+            for dj in -radius..=radius {
+                for di in -radius..=radius {
+                    // Only check the border of the current radius ring
+                    if dj.abs() != radius && di.abs() != radius {
+                        continue;
+                    }
+                    let nj = cj + dj;
+                    let ni = ci + di;
+                    if nj < 0 || nj >= ny as i32 || ni < 0 || ni >= nx as i32 {
+                        continue;
+                    }
+                    let nidx = nj as usize * nx + ni as usize;
+                    if !mask[nidx] {
+                        let dist = ((dj * dj + di * di) as f64).sqrt();
+                        let w = 1.0 / dist;
+                        sum_val += data[nidx] * w;
+                        sum_wt += w;
+                    }
+                }
+            }
+
+            if sum_wt > 0.0 {
+                return (idx, sum_val / sum_wt);
+            }
+        }
+        // Fallback: keep original
+        (idx, data[idx])
+    }).collect();
+
+    for (idx, val) in interpolated {
+        result[idx] = val;
+    }
+    result
 }
