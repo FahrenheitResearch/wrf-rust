@@ -254,17 +254,26 @@ fn compute_srh_column(
     let has_pressure = p_prof.len() == nz;
 
     // 1. Compute mean wind in 0-6 km layer
-    // Non-pressure-weighted arithmetic mean (SHARPpy mean_wind_npw convention)
-    let mut sum_u = 0.0;
-    let mut sum_v = 0.0;
-    let mut count = 0usize;
-    for k in 0..nz {
-        if heights[k] > mean_depth {
+    // Matches Solarpower07's implementation:
+    //   full_u = concat([u_10m], u_layer[h>0 & h<6000], [u_6km_interp])
+    //   mean = np.mean(full_u)
+    let u_6km = interp_at_height(mean_depth, heights, u_prof);
+    let v_6km = interp_at_height(mean_depth, heights, v_prof);
+
+    let mut sum_u = u_prof[0] + u_6km; // 10m wind + interpolated 6km
+    let mut sum_v = v_prof[0] + v_6km;
+    let mut count = 2usize; // count the 10m and 6km endpoints
+
+    for k in 1..nz {
+        // Strict inequality: h > 0 AND h < 6000 (excludes exact boundaries)
+        if heights[k] > 0.0 && heights[k] < mean_depth {
+            sum_u += u_prof[k];
+            sum_v += v_prof[k];
+            count += 1;
+        }
+        if heights[k] >= mean_depth {
             break;
         }
-        sum_u += u_prof[k];
-        sum_v += v_prof[k];
-        count += 1;
     }
     if count == 0 {
         return 0.0;
@@ -272,11 +281,9 @@ fn compute_srh_column(
     let mean_u = sum_u / count as f64;
     let mean_v = sum_v / count as f64;
 
-    // 2. Compute 0-6 km shear vector
+    // 2. Compute 0-6 km shear vector (from 10m surface to interpolated 6km)
     let u_sfc = u_prof[0];
     let v_sfc = v_prof[0];
-    let u_6km = interp_at_height(mean_depth, heights, u_prof);
-    let v_6km = interp_at_height(mean_depth, heights, v_prof);
     let shear_u = u_6km - u_sfc;
     let shear_v = v_6km - v_sfc;
 
@@ -327,13 +334,10 @@ fn compute_srh_column(
         let sr_u_top = u_top_val - storm_u;
         let sr_v_top = v_top_val - storm_v;
 
-        let du = u_top_val - u_bot;
-        let dv = v_top_val - v_bot;
-        let avg_sr_u = 0.5 * (sr_u_bot + sr_u_top);
-        let avg_sr_v = 0.5 * (sr_v_bot + sr_v_top);
-
-        // Convention: positive for veering (cyclonic) hodographs in NH
-        srh += avg_sr_v * du - avg_sr_u * dv;
+        // Discrete cross-product form matching SHARPpy/Solarpower07:
+        //   srh -= (sru_k * srv_k1 - sru_k1 * srv_k)
+        // which equals: sru_k1 * srv_k - sru_k * srv_k1
+        srh += sr_u_top * sr_v_bot - sr_u_bot * sr_v_top;
     }
 
     srh

@@ -267,20 +267,27 @@ pub fn mean_wind_npw(
         return (0.0, 0.0);
     }
 
-    let mut sum_u = 0.0;
-    let mut sum_v = 0.0;
-    let mut count = 0usize;
+    // Include all levels within the layer, plus interpolated top endpoint
+    // Matches Solarpower07 / SHARPpy convention
+    let u_top = interp_at_height(u_prof, height_prof, top_m).unwrap_or(u_prof[n - 1]);
+    let v_top = interp_at_height(v_prof, height_prof, top_m).unwrap_or(v_prof[n - 1]);
 
-    for i in 0..n {
-        if height_prof[i] >= bottom_m && height_prof[i] <= top_m {
+    let mut sum_u = u_prof[0] + u_top; // surface + interpolated top
+    let mut sum_v = v_prof[0] + v_top;
+    let mut count = 2usize;
+
+    for i in 1..n {
+        if height_prof[i] > bottom_m && height_prof[i] < top_m {
             sum_u += u_prof[i];
             sum_v += v_prof[i];
             count += 1;
         }
+        if height_prof[i] >= top_m {
+            break;
+        }
     }
 
     if count == 0 {
-        // Fallback: use the trapezoidal mean_wind if no levels fall exactly in range
         return mean_wind(u_prof, v_prof, height_prof, bottom_m, top_m);
     }
 
