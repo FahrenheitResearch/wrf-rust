@@ -156,8 +156,8 @@ _VAR_STYLES: Dict[str, Dict[str, Any]] = {
     "pvo":    dict(cmap="RdBu_r", center_zero=True, extend="both"),
 
     # ---- Radar ----
-    "dbz":    dict(cmap="_nws_reflectivity", levels=np.arange(-10, 80, 5), extend="max"),
-    "maxdbz": dict(cmap="_nws_reflectivity", levels=np.arange(-10, 80, 5), extend="max"),
+    "dbz":    dict(cmap="_nws_reflectivity", levels=np.arange(5, 80, 5), extend="max", mask_below=5.0),
+    "maxdbz": dict(cmap="_nws_reflectivity", levels=np.arange(5, 80, 5), extend="max", mask_below=5.0),
 
     # ---- Cloud ----
     "ctt":       dict(cmap="Greys_r", levels=np.arange(-80, 22, 2), extend="both"),
@@ -515,6 +515,11 @@ def plot_field(
     transform = ccrs.PlateCarree() if is_geo else None
     if transform is not None:
         plot_kwargs["transform"] = transform
+
+    # Mask values below threshold (e.g., reflectivity < 5 dBZ)
+    mask_below = style_dict.get("mask_below")
+    if mask_below is not None:
+        data = np.where(data >= mask_below, data, np.nan)
 
     cf = ax.contourf(lon, lat, data, **plot_kwargs)
 
