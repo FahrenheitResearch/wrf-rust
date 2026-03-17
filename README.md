@@ -181,6 +181,49 @@ Generic `lapse_rate` accepts `bottom_m`/`top_m` or `bottom_p`/`top_p`, plus `use
 | `use_virtual` | Virtual temperature for lapse rates |
 | `lake_interp` | Interpolate 2m fields over lakes < N km2 |
 
+## Unit strings
+
+Every registered variable supports `units=`. Raw WRF variables (RAINNC, T2, PSFC, etc.) also support conversion when their default unit is known. Case-insensitive.
+
+| Category | Strings | Example |
+|---|---|---|
+| Temperature | `K`, `degC`, `C`, `celsius`, `degF`, `F`, `fahrenheit` | `units="degF"` |
+| Pressure | `Pa`, `hPa`, `mb`, `mbar`, `inHg` | `units="hPa"` |
+| Speed | `m/s`, `knots`, `kt`, `kts`, `mph`, `kph`, `km/h` | `units="knots"` |
+| Length/Height | `m`, `ft`, `km`, `mi`, `dam` | `units="dam"` |
+| Depth | `mm`, `in`, `inches` | `units="in"` |
+| Moisture | `kg/kg`, `g/kg` | `units="g/kg"` |
+
+### Raw WRF variables
+
+Any variable name not in the computed registry is read directly from the file. Common ones:
+
+| Variable | Default unit | Description |
+|---|---|---|
+| `RAINNC` | mm | Grid-scale accumulated precipitation |
+| `RAINC` | mm | Convective accumulated precipitation |
+| `T2` | K | 2-m temperature (also available as `t2`) |
+| `PSFC` | Pa | Surface pressure |
+| `TSK` | K | Skin temperature |
+| `SST` | K | Sea surface temperature |
+| `PBLH` | m | PBL height |
+| `HFX` | W/m2 | Sensible heat flux |
+| `LH` | W/m2 | Latent heat flux |
+| `SWDOWN` | W/m2 | Downwelling shortwave |
+| `GLW` | W/m2 | Downwelling longwave |
+| `OLR` | W/m2 | Outgoing longwave |
+| `UST` | m/s | Friction velocity |
+| `SNOWH` | m | Snow depth |
+| `LU_INDEX` | -- | Land use category |
+| `U10` / `V10` | m/s | 10-m wind components |
+
+```python
+# These all work:
+rain = getvar(f, "RAINNC", units="in")     # accumulated precip in inches
+tsk  = getvar(f, "TSK", units="degF")      # skin temp in Fahrenheit
+pblh = getvar(f, "PBLH", units="ft")       # PBL height in feet
+```
+
 ## Building from source
 
 Only needed for development. Users should `pip install wrf-rust`.

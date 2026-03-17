@@ -149,12 +149,37 @@ fn getvar_raw(
         vec![data.len()]
     };
 
-    let units = opts.units.clone().unwrap_or_default();
+    // Raw variables don't have a known default unit, but if the user
+    // requests a conversion from/to a specific pair we can try.
+    // Common WRF raw variables and their units:
+    let default_unit = match name.to_uppercase().as_str() {
+        "RAINNC" | "RAINC" | "RAINSH" | "SNOWNC" | "GRAUPELNC" => "mm",
+        "T2" | "TSK" | "SST" => "K",
+        "PSFC" => "Pa",
+        "PBLH" | "SNOWH" => "m",
+        "HFX" | "LH" => "W/m2",
+        "SWDOWN" | "GLW" | "OLR" => "W/m2",
+        "UST" => "m/s",
+        "U10" | "V10" => "m/s",
+        _ => "",
+    };
+
+    let mut data = data;
+    let actual_units = if let Some(ref req_units) = opts.units {
+        if !default_unit.is_empty() {
+            if let (Ok(from), Ok(to)) = (parse_units(default_unit), parse_units(req_units)) {
+                let _ = convert_array(&mut data, from, to);
+            }
+        }
+        req_units.clone()
+    } else {
+        default_unit.to_string()
+    };
 
     Ok(VarOutput {
         data,
         shape,
-        units,
+        units: actual_units,
         description: format!("Raw WRF variable: {name}"),
     })
 }
