@@ -9,8 +9,14 @@ use crate::compute::ComputeOpts;
 use crate::error::WrfResult;
 use crate::file::WrfFile;
 
-/// Helper: extract column profiles for wind and height, compute SRH at given depth.
-fn compute_srh_field(
+/// Canonical SRH entry point for all grid-based SRH computations.
+///
+/// Applies earth-rotation (SINALPHA/COSALPHA) to both 3-D and 10-m winds,
+/// prepends U10/V10 at 10 m AGL, and then computes SRH via Bunkers RM
+/// (or a caller-supplied storm motion).  All SRH consumers -- including
+/// STP, SCP, EHI, and effective SRH -- should funnel through this function
+/// so that every path sees the same wind preparation.
+pub fn compute_srh_field(
     f: &WrfFile,
     t: usize,
     depth_m: f64,
@@ -132,18 +138,41 @@ fn compute_shear_field(
 
 /// Helper: compute Bunkers storm motion for each column.
 /// Returns (rm_u, rm_v, lm_u, lm_v, mean_u, mean_v) as 6 interleaved nxy fields.
+///
+/// Uses earth-rotated winds with 10m prepend, matching compute_srh_field.
 fn compute_bunkers_columns(
     f: &WrfFile,
     t: usize,
 ) -> WrfResult<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)> {
-    let u = f.u_destag(t)?;
-    let v = f.v_destag(t)?;
+    let u_grid = f.u_destag(t)?;
+    let v_grid = f.v_destag(t)?;
+    let sina = f.sinalpha(t)?;
+    let cosa = f.cosalpha(t)?;
     let h_agl = f.height_agl(t)?;
+    let u10_grid = f.u10(t)?;
+    let v10_grid = f.v10(t)?;
 
     let nx = f.nx;
     let ny = f.ny;
     let nz = f.nz;
     let nxy = nx * ny;
+
+    // Rotate 3D winds to earth coordinates
+    let mut u = vec![0.0f64; u_grid.len()];
+    let mut v = vec![0.0f64; v_grid.len()];
+    for idx in 0..u_grid.len() {
+        let ij = idx % nxy;
+        u[idx] = u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij];
+        v[idx] = u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij];
+    }
+
+    // Rotate 10m winds to earth coordinates
+    let mut u10 = vec![0.0f64; nxy];
+    let mut v10 = vec![0.0f64; nxy];
+    for ij in 0..nxy {
+        u10[ij] = u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij];
+        v10[ij] = u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij];
+    }
 
     let mut rm_u = vec![0.0f64; nxy];
     let mut rm_v = vec![0.0f64; nxy];
@@ -156,9 +185,13 @@ fn compute_bunkers_columns(
     let results: Vec<_> = (0..nxy)
         .into_par_iter()
         .map(|ij| {
-            let mut u_prof = Vec::with_capacity(nz);
-            let mut v_prof = Vec::with_capacity(nz);
-            let mut h_prof = Vec::with_capacity(nz);
+            // Prepend 10m wind as surface level
+            let mut u_prof = Vec::with_capacity(nz + 1);
+            let mut v_prof = Vec::with_capacity(nz + 1);
+            let mut h_prof = Vec::with_capacity(nz + 1);
+            u_prof.push(u10[ij]);
+            v_prof.push(v10[ij]);
+            h_prof.push(10.0);
 
             for k in 0..nz {
                 let idx = k * nxy + ij;
@@ -242,29 +275,68 @@ pub fn compute_mean_wind_0_6km(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> Wr
 /// Finds the effective inflow layer where CAPE >= 100 J/kg and CIN >= -250 J/kg,
 /// then computes storm-relative helicity over that layer using Bunkers storm motion
 /// (or custom motion if `opts.storm_motion` is set).
+///
+/// Uses earth-rotated winds with 10m prepend, matching compute_srh_field.
 pub fn compute_effective_srh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let u = f.u_destag(t)?;
-    let v = f.v_destag(t)?;
+    // Earth-rotated 3D winds
+    let u_grid = f.u_destag(t)?;
+    let v_grid = f.v_destag(t)?;
+    let sina = f.sinalpha(t)?;
+    let cosa = f.cosalpha(t)?;
     let h_agl = f.height_agl(t)?;
     let pres_hpa = f.pressure_hpa(t)?;
     let tc = f.temperature_c(t)?;
     let qv = f.qvapor(t)?;
+    let u10_grid = f.u10(t)?;
+    let v10_grid = f.v10(t)?;
+
     let nx = f.nx;
     let ny = f.ny;
     let nz = f.nz;
     let nxy = nx * ny;
 
+    // Rotate 3D winds to earth coordinates
+    let mut u = vec![0.0f64; u_grid.len()];
+    let mut v = vec![0.0f64; v_grid.len()];
+    for idx in 0..u_grid.len() {
+        let ij = idx % nxy;
+        u[idx] = u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij];
+        v[idx] = u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij];
+    }
+
+    // Rotate 10m winds to earth coordinates
+    let mut u10 = vec![0.0f64; nxy];
+    let mut v10 = vec![0.0f64; nxy];
+    for ij in 0..nxy {
+        u10[ij] = u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij];
+        v10[ij] = u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij];
+    }
+
     let custom_sm = opts.storm_motion;
 
     let mut srh = vec![0.0f64; nxy];
     srh.par_iter_mut().enumerate().for_each(|(ij, srh_val)| {
-        // Extract column profiles
-        let mut p_prof = Vec::with_capacity(nz);
-        let mut t_prof = Vec::with_capacity(nz);
-        let mut td_prof = Vec::with_capacity(nz);
-        let mut h_prof = Vec::with_capacity(nz);
-        let mut u_prof = Vec::with_capacity(nz);
-        let mut v_prof = Vec::with_capacity(nz);
+        // Build augmented column profiles with 10m prepend
+        let mut p_prof = Vec::with_capacity(nz + 1);
+        let mut t_prof = Vec::with_capacity(nz + 1);
+        let mut td_prof = Vec::with_capacity(nz + 1);
+        let mut h_prof = Vec::with_capacity(nz + 1);
+        let mut u_prof = Vec::with_capacity(nz + 1);
+        let mut v_prof = Vec::with_capacity(nz + 1);
+
+        // Prepend 10m level: use surface pressure and lowest-level T/Td as approximation
+        let idx0 = ij; // k=0 level
+        let q0 = qv[idx0].max(1e-10);
+        let e0 = q0 * pres_hpa[idx0] / (0.622 + q0);
+        let ln_e0 = (e0 / 6.112).max(1e-10).ln();
+        let td0 = (243.5 * ln_e0) / (17.67 - ln_e0);
+
+        p_prof.push(pres_hpa[idx0]); // approximate surface pressure
+        t_prof.push(tc[idx0]);
+        td_prof.push(td0);
+        h_prof.push(10.0);
+        u_prof.push(u10[ij]);
+        v_prof.push(v10[ij]);
 
         for k in 0..nz {
             let idx = k * nxy + ij;
@@ -281,11 +353,12 @@ pub fn compute_effective_srh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
         }
 
         // Find effective inflow layer bounds by testing CAPE/CIN at each level
+        let nz_aug = nz + 1;
         let mut eff_base: Option<usize> = None;
         let mut eff_top: usize = 0;
 
-        for k in 0..nz {
-            if p_prof.len() - k < 2 {
+        for k in 0..nz_aug {
+            if nz_aug - k < 2 {
                 break;
             }
 
@@ -323,18 +396,17 @@ pub fn compute_effective_srh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
 
         let eff_base_h = h_prof[base_k];
         let eff_top_h = h_prof[eff_top];
-        let depth = eff_top_h - eff_base_h;
 
-        if depth <= 0.0 {
+        if eff_top_h <= eff_base_h {
             return;
         }
 
         // Trim profiles to start from effective base
         let u_eff: Vec<f64> = u_prof[base_k..].to_vec();
         let v_eff: Vec<f64> = v_prof[base_k..].to_vec();
-        let h_eff: Vec<f64> = h_prof[base_k..].iter().map(|h| h - eff_base_h).collect();
+        let h_eff: Vec<f64> = h_prof[base_k..].to_vec();
 
-        // Get storm motion
+        // Get storm motion (from full augmented profile)
         let (sm_u, sm_v) = if let Some((cu, cv)) = custom_sm {
             (cu, cv)
         } else {
@@ -343,8 +415,10 @@ pub fn compute_effective_srh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
             (ru, rv)
         };
 
+        // storm_relative_helicity interprets depth_m as absolute AGL,
+        // so pass eff_top_h directly
         let (_, _, total) = crate::met::wind::storm_relative_helicity(
-            &u_eff, &v_eff, &h_eff, depth, sm_u, sm_v,
+            &u_eff, &v_eff, &h_eff, eff_top_h, sm_u, sm_v,
         );
         *srh_val = total;
     });
@@ -364,15 +438,37 @@ pub fn compute_bulk_shear(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResul
 /// Configurable mean wind (m/s). Returns `[u_mean, v_mean]` interleaved (2 * nxy). `[ny, nx]` per component.
 ///
 /// Uses `opts.bottom_m` (default 0) and `opts.top_m` (default 6000) for the layer.
+/// Uses earth-rotated winds with 10m prepend, matching compute_srh_field.
 pub fn compute_mean_wind(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let u = f.u_destag(t)?;
-    let v = f.v_destag(t)?;
+    let u_grid = f.u_destag(t)?;
+    let v_grid = f.v_destag(t)?;
+    let sina = f.sinalpha(t)?;
+    let cosa = f.cosalpha(t)?;
     let h_agl = f.height_agl(t)?;
+    let u10_grid = f.u10(t)?;
+    let v10_grid = f.v10(t)?;
 
     let nx = f.nx;
     let ny = f.ny;
     let nz = f.nz;
     let nxy = nx * ny;
+
+    // Rotate 3D winds to earth coordinates
+    let mut u = vec![0.0f64; u_grid.len()];
+    let mut v = vec![0.0f64; v_grid.len()];
+    for idx in 0..u_grid.len() {
+        let ij = idx % nxy;
+        u[idx] = u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij];
+        v[idx] = u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij];
+    }
+
+    // Rotate 10m winds to earth coordinates
+    let mut u10 = vec![0.0f64; nxy];
+    let mut v10 = vec![0.0f64; nxy];
+    for ij in 0..nxy {
+        u10[ij] = u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij];
+        v10[ij] = u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij];
+    }
 
     let bottom = opts.bottom_m.unwrap_or(0.0);
     let top = opts.top_m.unwrap_or(6000.0);
@@ -383,9 +479,13 @@ pub fn compute_mean_wind(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult
     let results: Vec<_> = (0..nxy)
         .into_par_iter()
         .map(|ij| {
-            let mut u_prof = Vec::with_capacity(nz);
-            let mut v_prof = Vec::with_capacity(nz);
-            let mut h_prof = Vec::with_capacity(nz);
+            // Prepend 10m wind as surface level
+            let mut u_prof = Vec::with_capacity(nz + 1);
+            let mut v_prof = Vec::with_capacity(nz + 1);
+            let mut h_prof = Vec::with_capacity(nz + 1);
+            u_prof.push(u10[ij]);
+            v_prof.push(v10[ij]);
+            h_prof.push(10.0);
 
             for k in 0..nz {
                 let idx = k * nxy + ij;

@@ -12,6 +12,8 @@ use crate::file::WrfFile;
 /// Thompson et al. (2003) formulation with proper term limits.
 /// Uses SURFACE-BASED parcel for CAPE and LCL, 0-1 km SRH, 0-6 km shear.
 ///   STP = cape_term * lcl_term * srh_term * shear_term
+///
+/// SRH is computed through the canonical compute_srh_field path (earth-rotated + 10m prepend).
 pub fn compute_stp(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let pres = f.full_pressure(t)?;
     let tc = f.temperature_c(t)?;
@@ -34,8 +36,8 @@ pub fn compute_stp(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<
         nx, ny, nz, "sb",
     );
 
-    // 0-1 km SRH
-    let srh1 = crate::met::composite::compute_srh(&u, &v, &h_agl, nx, ny, nz, 1000.0);
+    // 0-1 km SRH via canonical path (earth-rotated winds + 10m prepend)
+    let srh1 = crate::diag::srh::compute_srh_field(f, t, 1000.0, None)?;
 
     // 0-6 km shear magnitude
     let shear6 = crate::met::composite::compute_shear(&u, &v, &h_agl, nx, ny, nz, 0.0, 6000.0);
@@ -50,7 +52,9 @@ pub fn compute_stp(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<
 /// Includes CIN term: (200 + mlCIN) / 150.
 ///
 /// STP_eff = (mlCAPE/1500) * ((2000-mlLCL)/1000) * (ESRH/150) * (EBWD/20) * ((200+mlCIN)/150)
-pub fn compute_stp_effective(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+///
+/// Effective SRH uses earth-rotated winds with 10m prepend via compute_effective_srh.
+pub fn compute_stp_effective(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let pres = f.full_pressure(t)?;
     let tc = f.temperature_c(t)?;
     let qv = f.qvapor(t)?;
@@ -64,9 +68,6 @@ pub fn compute_stp_effective(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfR
     let nx = f.nx;
     let ny = f.ny;
     let nz = f.nz;
-    let nxy = nx * ny;
-
-    let pres_hpa: Vec<f64> = pres.iter().map(|p| p / 100.0).collect();
 
     // Mixed-layer CAPE, CIN, and LCL
     // Pass raw Pa/K values -- compute_cape_cin converts internally
@@ -78,69 +79,8 @@ pub fn compute_stp_effective(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfR
     // 0-6 km shear magnitude (EBWD approximation)
     let shear6 = crate::met::composite::compute_shear(&u, &v, &h_agl, nx, ny, nz, 0.0, 6000.0);
 
-    // Effective-layer SRH: computed column-by-column
-    let mut eff_srh = vec![0.0f64; nxy];
-
-    eff_srh
-        .par_iter_mut()
-        .enumerate()
-        .for_each(|(ij, srh_val)| {
-            let mut p_prof = Vec::with_capacity(nz);
-            let mut t_prof = Vec::with_capacity(nz);
-            let mut td_prof = Vec::with_capacity(nz);
-            let mut h_prof = Vec::with_capacity(nz);
-            let mut u_prof = Vec::with_capacity(nz);
-            let mut v_prof = Vec::with_capacity(nz);
-
-            for k in 0..nz {
-                let idx = k * nxy + ij;
-                p_prof.push(pres_hpa[idx]);
-                t_prof.push(tc[idx]);
-                let q = qv[idx].max(1e-10);
-                let e = q * pres_hpa[idx] / (0.622 + q);
-                let ln_e = (e / 6.112).max(1e-10).ln();
-                td_prof.push((243.5 * ln_e) / (17.67 - ln_e));
-                h_prof.push(h_agl[idx]);
-                u_prof.push(u[idx]);
-                v_prof.push(v[idx]);
-            }
-
-            // Find effective inflow layer
-            let mut eff_bot: Option<usize> = None;
-            let mut eff_top: Option<usize> = None;
-
-            for k in 0..nz {
-                if p_prof.len() - k < 2 {
-                    break;
-                }
-                let (c, ci, _, _) = crate::met::thermo::cape_cin_core(
-                    &p_prof[k..], &t_prof[k..], &td_prof[k..], &h_prof[k..],
-                    p_prof[k], t_prof[k], td_prof[k],
-                    "sb", 100.0, 300.0, None,
-                );
-                if c >= 100.0 && ci >= -250.0 {
-                    if eff_bot.is_none() {
-                        eff_bot = Some(k);
-                    }
-                    eff_top = Some(k);
-                } else if eff_bot.is_some() {
-                    break;
-                }
-            }
-
-            if let (Some(bot), Some(top)) = (eff_bot, eff_top) {
-                let eff_depth = h_prof[top] - h_prof[bot];
-                if eff_depth > 0.0 {
-                    let ((sm_u, sm_v), _, _) =
-                        crate::met::wind::bunkers_storm_motion(&u_prof, &v_prof, &h_prof);
-                    let (_, _, total) = crate::met::wind::storm_relative_helicity(
-                        &u_prof[bot..], &v_prof[bot..], &h_prof[bot..],
-                        eff_depth, sm_u, sm_v,
-                    );
-                    *srh_val = total;
-                }
-            }
-        });
+    // Effective-layer SRH via canonical path (earth-rotated winds + 10m prepend)
+    let eff_srh = crate::diag::srh::compute_effective_srh(f, t, opts)?;
 
     Ok(stp_eff_from_components(&mlcape, &lcl, &mlcin, &eff_srh, &shear6))
 }
@@ -195,6 +135,8 @@ fn stp_eff_from_components(cape: &[f64], lcl: &[f64], cin: &[f64], srh: &[f64], 
 }
 
 /// Supercell Composite Parameter (dimensionless). `[ny, nx]`
+///
+/// SRH is computed through the canonical compute_srh_field path (earth-rotated + 10m prepend).
 pub fn compute_scp(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let pres = f.full_pressure(t)?;
     let tc = f.temperature_c(t)?;
@@ -216,7 +158,8 @@ pub fn compute_scp(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<
         nx, ny, nz, "mu",
     );
 
-    let srh3 = crate::met::composite::compute_srh(&u, &v, &h_agl, nx, ny, nz, 3000.0);
+    // 0-3 km SRH via canonical path (earth-rotated winds + 10m prepend)
+    let srh3 = crate::diag::srh::compute_srh_field(f, t, 3000.0, None)?;
     let shear6 = crate::met::composite::compute_shear(&u, &v, &h_agl, nx, ny, nz, 0.0, 6000.0);
 
     Ok(crate::met::composite::compute_scp(&mucape, &srh3, &shear6))
@@ -227,6 +170,7 @@ pub fn compute_scp(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<
 /// EHI = (CAPE * SRH) / 160000
 ///
 /// SRH depth is configurable via `opts.depth_m` (default 1000 m for 0-1 km EHI).
+/// SRH is computed through the canonical compute_srh_field path (earth-rotated + 10m prepend).
 pub fn compute_ehi(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let pres = f.full_pressure(t)?;
     let tc = f.temperature_c(t)?;
@@ -235,8 +179,6 @@ pub fn compute_ehi(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
     let psfc = f.psfc(t)?;   // Pa -- compute_cape_cin converts internally
     let t2 = f.t2(t)?;       // K  -- compute_cape_cin converts internally
     let q2 = f.q2(t)?;
-    let u = f.u_destag(t)?;
-    let v = f.v_destag(t)?;
 
     let nx = f.nx;
     let ny = f.ny;
@@ -248,8 +190,9 @@ pub fn compute_ehi(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
         nx, ny, nz, "sb",
     );
 
+    // SRH via canonical path (earth-rotated winds + 10m prepend)
     let srh_depth = opts.depth_m.unwrap_or(1000.0);
-    let srh = crate::met::composite::compute_srh(&u, &v, &h_agl, nx, ny, nz, srh_depth);
+    let srh = crate::diag::srh::compute_srh_field(f, t, srh_depth, None)?;
 
     // EHI = (CAPE * SRH) / 160000
     Ok(sbcape

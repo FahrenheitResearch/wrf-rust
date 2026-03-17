@@ -100,14 +100,16 @@ pub fn storm_relative_helicity(
     assert_eq!(n, height_prof.len());
     assert!(n >= 2, "need at least 2 levels");
 
-    // Build a sub-profile from 0 to depth_m, interpolating endpoints if needed.
+    // Build a sub-profile from surface to depth_m AGL, interpolating endpoints if needed.
+    // depth_m is an absolute height AGL (e.g. 1000 = 1000m AGL), NOT a relative
+    // depth from the first profile level. This avoids the 10m offset bug when
+    // 10m winds are prepended at height=10.
     let mut heights = Vec::new();
     let mut us = Vec::new();
     let mut vs = Vec::new();
 
-    // Start at height_prof[0] (surface)
     let h_start = height_prof[0];
-    let h_end = h_start + depth_m;
+    let h_end = depth_m;
 
     for i in 0..n {
         if height_prof[i] >= h_start && height_prof[i] <= h_end {
@@ -236,6 +238,55 @@ pub fn mean_wind(
     (sum_u / total_dz, sum_v / total_dz)
 }
 
+/// Non-pressure-weighted arithmetic mean wind over a height layer.
+///
+/// This is the SHARPpy `mean_wind_npw` convention: a simple average of all
+/// profile levels that fall within the layer, NOT a height-weighted
+/// (trapezoidal) integral.  Used by Bunkers storm motion for consistency
+/// with SHARPpy/SPC operational practice.
+///
+/// # Arguments
+/// * `u_prof`, `v_prof` -- wind components (m/s), ascending height
+/// * `height_prof` -- heights AGL (m)
+/// * `bottom_m` -- bottom of the layer (m AGL)
+/// * `top_m` -- top of the layer (m AGL)
+///
+/// # Returns
+/// `(mean_u, mean_v)` in m/s.
+pub fn mean_wind_npw(
+    u_prof: &[f64],
+    v_prof: &[f64],
+    height_prof: &[f64],
+    bottom_m: f64,
+    top_m: f64,
+) -> (f64, f64) {
+    let n = u_prof.len();
+    assert_eq!(n, v_prof.len());
+    assert_eq!(n, height_prof.len());
+    if n == 0 {
+        return (0.0, 0.0);
+    }
+
+    let mut sum_u = 0.0;
+    let mut sum_v = 0.0;
+    let mut count = 0usize;
+
+    for i in 0..n {
+        if height_prof[i] >= bottom_m && height_prof[i] <= top_m {
+            sum_u += u_prof[i];
+            sum_v += v_prof[i];
+            count += 1;
+        }
+    }
+
+    if count == 0 {
+        // Fallback: use the trapezoidal mean_wind if no levels fall exactly in range
+        return mean_wind(u_prof, v_prof, height_prof, bottom_m, top_m);
+    }
+
+    (sum_u / count as f64, sum_v / count as f64)
+}
+
 /// Bunkers storm motion estimate using the internal dynamics (ID) method.
 ///
 /// Computes right-moving, left-moving, and mean-wind vectors for a supercell
@@ -259,8 +310,8 @@ pub fn bunkers_storm_motion(
 ) -> ((f64, f64), (f64, f64), (f64, f64)) {
     let deviation = 7.5; // m/s perpendicular offset
 
-    // 0-6 km mean wind
-    let (mw_u, mw_v) = mean_wind(u_prof, v_prof, height_prof, 0.0, 6000.0);
+    // 0-6 km mean wind -- non-pressure-weighted arithmetic mean (SHARPpy convention)
+    let (mw_u, mw_v) = mean_wind_npw(u_prof, v_prof, height_prof, 0.0, 6000.0);
 
     // 0-6 km bulk shear vector
     let (shr_u, shr_v) = bulk_shear(u_prof, v_prof, height_prof, 0.0, 6000.0);
