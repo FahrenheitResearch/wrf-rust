@@ -59,6 +59,7 @@ __all__ = [
     "interplevel",
     "get_cartopy",
     "latlon_coords",
+    "ll_to_xy",
 ]
 __version__ = "0.2.6"
 
@@ -572,3 +573,92 @@ def latlon_coords(wrffile, timeidx=0):
     lat = wf._inner.getvar("lat", timeidx=timeidx)
     lon = wf._inner.getvar("lon", timeidx=timeidx)
     return lat, lon
+
+
+# =========================================================================
+# ll_to_xy -- lat/lon to grid indices (fractional)
+# =========================================================================
+
+def ll_to_xy(wrffile, latitude, longitude, timeidx=0):
+    """Convert lat/lon to fractional grid (x, y) indices.
+
+    Drop-in replacement for ``wrf.ll_to_xy()`` from wrf-python.
+
+    Finds the position on the WRF grid corresponding to the given
+    latitude/longitude by inverse-distance interpolation, returning
+    fractional indices (floats) so callers can do sub-grid interpolation.
+
+    Parameters
+    ----------
+    wrffile : WrfFile, str, or netCDF4.Dataset
+        The WRF output file.
+    latitude : float
+        Target latitude in degrees.
+    longitude : float
+        Target longitude in degrees.
+    timeidx : int, optional
+        Time index (default 0).
+
+    Returns
+    -------
+    (x, y) : tuple of float
+        Fractional grid indices (x = west-east, y = south-north).
+        Integer parts give the grid cell; fractional parts give position
+        within the cell.
+    """
+    lat2d, lon2d = latlon_coords(wrffile, timeidx=timeidx)
+
+    # Find the nearest grid point
+    dist = (lat2d - latitude) ** 2 + (lon2d - longitude) ** 2
+    jn, in_ = np.unravel_index(np.argmin(dist), dist.shape)
+
+    # Refine to fractional indices using bilinear interpolation
+    # Search in the 2x2 cell around the nearest point
+    ny, nx = lat2d.shape
+    best_x = float(in_)
+    best_y = float(jn)
+
+    for j0 in range(max(0, jn - 1), min(ny - 1, jn + 1)):
+        for i0 in range(max(0, in_ - 1), min(nx - 1, in_ + 1)):
+            # Corners of this cell
+            lat00 = lat2d[j0, i0]
+            lat10 = lat2d[j0, i0 + 1]
+            lat01 = lat2d[j0 + 1, i0]
+            lat11 = lat2d[j0 + 1, i0 + 1]
+            lon00 = lon2d[j0, i0]
+            lon10 = lon2d[j0, i0 + 1]
+            lon01 = lon2d[j0 + 1, i0]
+            lon11 = lon2d[j0 + 1, i0 + 1]
+
+            # Solve for (s, t) in [0,1]x[0,1] using iterative approach
+            # Bilinear: lat = (1-s)(1-t)*lat00 + s(1-t)*lat10 + (1-s)t*lat01 + st*lat11
+            # Start from center
+            s, t = 0.5, 0.5
+            for _ in range(10):
+                lat_est = (1-s)*(1-t)*lat00 + s*(1-t)*lat10 + (1-s)*t*lat01 + s*t*lat11
+                lon_est = (1-s)*(1-t)*lon00 + s*(1-t)*lon10 + (1-s)*t*lon01 + s*t*lon11
+
+                dlat = latitude - lat_est
+                dlon = longitude - lon_est
+
+                # Jacobian approximation
+                dlat_ds = -(1-t)*lat00 + (1-t)*lat10 - t*lat01 + t*lat11
+                dlat_dt = -(1-s)*lat00 - s*lat10 + (1-s)*lat01 + s*lat11
+                dlon_ds = -(1-t)*lon00 + (1-t)*lon10 - t*lon01 + t*lon11
+                dlon_dt = -(1-s)*lon00 - s*lon10 + (1-s)*lon01 + s*lon11
+
+                det = dlat_ds * dlon_dt - dlat_dt * dlon_ds
+                if abs(det) < 1e-20:
+                    break
+
+                ds = (dlat * dlon_dt - dlon * dlat_dt) / det
+                dt = (dlon * dlat_ds - dlat * dlon_ds) / det
+                s += ds
+                t += dt
+
+            if 0.0 <= s <= 1.0 and 0.0 <= t <= 1.0:
+                best_x = float(i0) + s
+                best_y = float(j0) + t
+                return best_x, best_y
+
+    return best_x, best_y
