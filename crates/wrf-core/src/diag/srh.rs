@@ -19,6 +19,8 @@ fn compute_srh_field(
     let u = f.u_destag(t)?;
     let v = f.v_destag(t)?;
     let h_agl = f.height_agl(t)?;
+    let u10 = f.u10(t)?;
+    let v10 = f.v10(t)?;
 
     let nx = f.nx;
     let ny = f.ny;
@@ -29,9 +31,13 @@ fn compute_srh_field(
         // Custom storm motion: compute column-by-column
         let mut srh = vec![0.0f64; nxy];
         srh.par_iter_mut().enumerate().for_each(|(ij, srh_val)| {
-            let mut u_prof = Vec::with_capacity(nz);
-            let mut v_prof = Vec::with_capacity(nz);
-            let mut h_prof = Vec::with_capacity(nz);
+            // Prepend 10m wind as surface level
+            let mut u_prof = Vec::with_capacity(nz + 1);
+            let mut v_prof = Vec::with_capacity(nz + 1);
+            let mut h_prof = Vec::with_capacity(nz + 1);
+            u_prof.push(u10[ij]);
+            v_prof.push(v10[ij]);
+            h_prof.push(10.0);
 
             for k in 0..nz {
                 let idx = k * nxy + ij;
@@ -49,8 +55,30 @@ fn compute_srh_field(
         Ok(srh)
     } else {
         // Default: use grid-parallel SRH with Bunkers
+        // Prepend 10m winds as surface level for each column
+        let nz_aug = nz + 1;
+        let mut u_aug = Vec::with_capacity(nz_aug * nxy);
+        let mut v_aug = Vec::with_capacity(nz_aug * nxy);
+        let mut h_aug = Vec::with_capacity(nz_aug * nxy);
+
+        // Level 0: 10m winds at 10m AGL
+        for ij in 0..nxy {
+            u_aug.push(u10[ij]);
+            v_aug.push(v10[ij]);
+            h_aug.push(10.0);
+        }
+        // Levels 1..nz: model levels
+        for k in 0..nz {
+            let off = k * nxy;
+            for ij in 0..nxy {
+                u_aug.push(u[off + ij]);
+                v_aug.push(v[off + ij]);
+                h_aug.push(h_agl[off + ij]);
+            }
+        }
+
         Ok(crate::met::composite::compute_srh(
-            &u, &v, &h_agl, nx, ny, nz, depth_m,
+            &u_aug, &v_aug, &h_aug, nx, ny, nz_aug, depth_m,
         ))
     }
 }
