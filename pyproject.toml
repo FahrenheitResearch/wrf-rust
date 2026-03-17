@@ -25,3 +25,5 @@ readme = "README.md"
 python-source = "python"
 module-name = "wrf._wrf"
 features = ["pyo3/extension-module"]
+# For local dev with system netcdf: maturin develop --release
+# For PyPI wheels (no system deps): maturin build --release --cargo-extra-args="--no-default-features --features pure-rust-reader"
