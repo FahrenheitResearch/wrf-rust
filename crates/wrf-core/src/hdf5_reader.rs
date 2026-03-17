@@ -1,7 +1,8 @@
 //! Pure-Rust HDF5/netCDF4 reader for WRF output files.
 //!
-//! Handles HDF5 superblock v2, object header v2, B-tree v2 (for dense link/attribute storage),
-//! fractal heap, chunked + deflate + shuffle compressed datasets, and global attributes.
+//! Handles HDF5 superblock v0/v1/v2, object header v1/v2, B-tree v1 (for group symbol tables
+//! and chunked data) and v2 (for dense link/attribute storage), fractal heap, chunked + deflate
+//! + shuffle compressed datasets, and global attributes.
 //! Designed specifically for the subset of HDF5 used by netCDF4/WRF output.
 //!
 //! This module is gated behind the `pure-rust-reader` feature flag.
@@ -27,6 +28,8 @@ const FRHP_SIGNATURE: [u8; 4] = *b"FRHP";
 const FHDB_SIGNATURE: [u8; 4] = *b"FHDB";
 const FHIB_SIGNATURE: [u8; 4] = *b"FHIB";
 const TREE_SIGNATURE: [u8; 4] = *b"TREE";
+const SNOD_SIGNATURE: [u8; 4] = *b"SNOD";
+const HEAP_SIGNATURE: [u8; 4] = *b"HEAP";
 const UNDEF_ADDR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 
 // HDF5 message types
@@ -39,6 +42,7 @@ const MSG_ATTRIBUTE: u8 = 0x0C;
 const MSG_CONTINUATION: u8 = 0x10;
 const MSG_ATTR_INFO: u8 = 0x15;
 const MSG_LINK: u8 = 0x06;
+const MSG_SYMBOL_TABLE: u8 = 0x11;
 
 // ---------------------------------------------------------------------------
 // Error helper -- convert any string-like error into WrfError::NetCdf
@@ -162,41 +166,274 @@ impl PureRustFile {
         let file = std::fs::File::open(path.as_ref()).map_err(io_err)?;
         let reader = Mutex::new(BufReader::new(file));
 
-        // --- Superblock v2 ---
+        // Verify HDF5 signature
         let sig = read_bytes(&reader, 0, 8)?;
         if sig != HDF5_SIGNATURE {
             return Err(hdf5_err("Not an HDF5 file"));
         }
         let version = read_u8_at(&reader, 8)?;
-        if version < 2 {
-            return Err(hdf5_err(format!("Unsupported superblock version {version}, need v2+")));
+
+        if version >= 2 {
+            // --- Superblock v2/v3 ---
+            let offset_size = read_u8_at(&reader, 9)?;
+            let length_size = read_u8_at(&reader, 10)?;
+            if offset_size != 8 || length_size != 8 {
+                return Err(hdf5_err(format!(
+                    "Unsupported offset_size={offset_size} length_size={length_size}"
+                )));
+            }
+            // file_consistency_flags at 11
+            let _base_addr = read_u64(&reader, 12)?;
+            let _sb_ext_addr = read_u64(&reader, 20)?;
+            let _eof_addr = read_u64(&reader, 28)?;
+            let root_ohdr_addr = read_u64(&reader, 36)?;
+
+            // Read root group links (datasets)
+            let datasets = Self::read_group_links_static(&reader, root_ohdr_addr)?;
+
+            // Read global attributes from root group
+            let global_attrs = Self::read_attributes_static(&reader, root_ohdr_addr)?;
+
+            Ok(PureRustFile {
+                reader,
+                root_ohdr_addr,
+                datasets,
+                ds_cache: Mutex::new(HashMap::new()),
+                global_attrs,
+            })
+        } else if version <= 1 {
+            // --- Superblock v0 / v1 ---
+            // Byte 8: superblock version (already read)
+            // Byte 9: file free-space storage version
+            // Byte 10: root group symbol table entry version
+            // Byte 11: reserved
+            // Byte 12: shared header message format version
+            let offset_size = read_u8_at(&reader, 13)?;
+            let length_size = read_u8_at(&reader, 14)?;
+            if offset_size != 8 || length_size != 8 {
+                return Err(hdf5_err(format!(
+                    "Unsupported offset_size={offset_size} length_size={length_size}"
+                )));
+            }
+            // Byte 15: reserved
+            // Bytes 16-17: group leaf node K
+            // Bytes 18-19: group internal node K
+            // Bytes 20-23: consistency flags
+            let mut pos: u64 = 24;
+
+            // v1 has two extra fields: indexed storage internal node K (2 bytes)
+            // and reserved (2 bytes)
+            if version == 1 {
+                pos += 4; // skip indexed_storage_internal_node_K(2) + reserved(2)
+            }
+
+            let base_addr = read_u64(&reader, pos)?;
+            let _freespace_addr = read_u64(&reader, pos + 8)?;
+            let _eof_addr = read_u64(&reader, pos + 16)?;
+            let _driver_info_addr = read_u64(&reader, pos + 24)?;
+            pos += 32;
+
+            // Root Group Symbol Table Entry (at pos):
+            //   Bytes 0-7:   Link name offset (into local heap, usually 0)
+            //   Bytes 8-15:  Object header address
+            //   Bytes 16-19: Cache type
+            //   Bytes 20-23: Reserved
+            //   Bytes 24-39: Scratch-pad space
+            let _link_name_offset = read_u64(&reader, pos)?;
+            let root_ohdr_addr = read_u64(&reader, pos + 8)?;
+            let cache_type = read_u32(&reader, pos + 16)?;
+            // Skip 4 bytes reserved (pos + 20..24)
+
+            // For cache_type 1, scratch-pad contains B-tree address and local heap address
+            let (btree_addr, local_heap_addr) = if cache_type == 1 {
+                let bt = read_u64(&reader, pos + 24)?;
+                let lh = read_u64(&reader, pos + 32)?;
+                (bt, lh)
+            } else {
+                // No cached symbol table info; read the object header to find
+                // the symbol table message
+                Self::find_symbol_table_from_ohdr(&reader, root_ohdr_addr, base_addr)?
+            };
+
+            // Read root group children via B-tree v1 + SNOD + local heap
+            let datasets = Self::read_group_v0_static(
+                &reader, btree_addr, local_heap_addr, base_addr,
+            )?;
+
+            // Read global attributes from root object header (v1 OHDR)
+            let global_attrs = Self::read_attributes_v1_ohdr_static(
+                &reader, root_ohdr_addr, base_addr,
+            )?;
+
+            Ok(PureRustFile {
+                reader,
+                root_ohdr_addr,
+                datasets,
+                ds_cache: Mutex::new(HashMap::new()),
+                global_attrs,
+            })
+        } else {
+            Err(hdf5_err(format!("Unsupported superblock version {version}")))
         }
-        let offset_size = read_u8_at(&reader, 9)?;
-        let length_size = read_u8_at(&reader, 10)?;
-        if offset_size != 8 || length_size != 8 {
+    }
+
+    // -----------------------------------------------------------------------
+    // Internal: v0/v1 superblock helpers
+    // -----------------------------------------------------------------------
+
+    /// Find the B-tree and local heap addresses by parsing the root group's
+    /// object header for a Symbol Table message (type 0x11).
+    fn find_symbol_table_from_ohdr(
+        reader: &Mutex<BufReader<std::fs::File>>,
+        ohdr_addr: u64,
+        _base_addr: u64,
+    ) -> WrfResult<(u64, u64)> {
+        let mut result: Option<(u64, u64)> = None;
+        Self::walk_ohdr_messages_static(reader, ohdr_addr, &mut |msg_type, data| {
+            if msg_type == MSG_SYMBOL_TABLE && data.len() >= 16 {
+                let btree = le_u64(&data[0..8]);
+                let lheap = le_u64(&data[8..16]);
+                result = Some((btree, lheap));
+            }
+            Ok(())
+        })?;
+        result.ok_or_else(|| hdf5_err(
+            "No symbol table message found in root group object header"
+        ))
+    }
+
+    /// Read the children of a v0/v1 root group using B-tree v1 (type 0)
+    /// + Symbol Table Nodes (SNOD) + local heap.
+    fn read_group_v0_static(
+        reader: &Mutex<BufReader<std::fs::File>>,
+        btree_addr: u64,
+        local_heap_addr: u64,
+        _base_addr: u64,
+    ) -> WrfResult<HashMap<String, u64>> {
+        // Read the local heap to get the name data segment
+        let heap_data = read_local_heap(reader, local_heap_addr)?;
+
+        // Traverse B-tree v1 (node type 0 = group) to collect SNOD addresses
+        let mut snod_addrs: Vec<u64> = Vec::new();
+        collect_btree_v1_group_nodes(reader, btree_addr, &mut snod_addrs)?;
+
+        // Parse each SNOD to get (link_name_offset, object_header_address) entries
+        let mut datasets = HashMap::new();
+        for snod_addr in &snod_addrs {
+            let entries = read_symbol_table_node(reader, *snod_addr)?;
+            for (name_offset, obj_header_addr) in entries {
+                let name = read_string_from_heap(&heap_data, name_offset as usize);
+                if !name.is_empty() {
+                    datasets.insert(name, obj_header_addr);
+                }
+            }
+        }
+
+        Ok(datasets)
+    }
+
+    /// Read global attributes from a v1 object header.
+    /// v1 object headers use a different layout than v2, but attribute
+    /// messages (type 0x0C) share the same format.
+    fn read_attributes_v1_ohdr_static(
+        reader: &Mutex<BufReader<std::fs::File>>,
+        ohdr_addr: u64,
+        _base_addr: u64,
+    ) -> WrfResult<HashMap<String, HdfAttributeValue>> {
+        let mut attrs = HashMap::new();
+
+        Self::walk_ohdr_messages_static(reader, ohdr_addr, &mut |msg_type, data| {
+            if msg_type == MSG_ATTRIBUTE {
+                if let Ok((name, val)) = parse_attribute_message(data) {
+                    attrs.insert(name, val);
+                }
+            }
+            Ok(())
+        })?;
+
+        Ok(attrs)
+    }
+
+    /// Walk object header messages for both v1 and v2 object headers.
+    /// This is a static version that doesn't require &self.
+    fn walk_ohdr_messages_static(
+        reader: &Mutex<BufReader<std::fs::File>>,
+        addr: u64,
+        cb: &mut dyn FnMut(u8, &[u8]) -> WrfResult<()>,
+    ) -> WrfResult<()> {
+        let first_byte = read_u8_at(reader, addr)?;
+
+        if first_byte == OHDR_SIGNATURE[0] {
+            // Might be v2 OHDR -- verify full signature
+            let sig = read_bytes(reader, addr, 4)?;
+            if sig == OHDR_SIGNATURE {
+                let version = read_u8_at(reader, addr + 4)?;
+                if version == 2 {
+                    return walk_ohdr_v2_messages_static(reader, addr, cb);
+                }
+                // If version is not 2 but has OHDR sig, something is wrong
+                return Err(hdf5_err(format!(
+                    "OHDR signature found but unexpected version {version}"
+                )));
+            }
+        }
+
+        // v1 object header: first byte IS the version number (1)
+        let version = first_byte;
+        if version != 1 {
             return Err(hdf5_err(format!(
-                "Unsupported offset_size={offset_size} length_size={length_size}"
+                "Unsupported object header version {version} at 0x{addr:x}"
             )));
         }
-        // file_consistency_flags at 11
-        let _base_addr = read_u64(&reader, 12)?;
-        let _sb_ext_addr = read_u64(&reader, 20)?;
-        let _eof_addr = read_u64(&reader, 28)?;
-        let root_ohdr_addr = read_u64(&reader, 36)?;
 
-        // Read root group links (datasets)
-        let datasets = Self::read_group_links_static(&reader, root_ohdr_addr)?;
+        // v1 Object Header layout:
+        //   Byte 0:    version (1)
+        //   Byte 1:    reserved (0)
+        //   Bytes 2-3: total number of header messages (u16 LE)
+        //   Bytes 4-7: object reference count (u32 LE)
+        //   Bytes 8-11: object header data size (u32 LE) -- total size of all message data
+        //   [Byte 12-15: reserved/padding to 8-byte boundary]
+        //   Messages start at offset 16 from the header start (8-byte aligned)
+        let _num_messages = read_u16(reader, addr + 2)?;
+        let _ref_count = read_u32(reader, addr + 4)?;
+        let header_data_size = read_u32(reader, addr + 8)? as u64;
 
-        // Read global attributes from root group
-        let global_attrs = Self::read_attributes_static(&reader, root_ohdr_addr)?;
+        // Messages start after the 12-byte fixed header, padded to 8 bytes
+        let msg_start = addr + 16;
+        let msg_end = msg_start + header_data_size;
 
-        Ok(PureRustFile {
-            reader,
-            root_ohdr_addr,
-            datasets,
-            ds_cache: Mutex::new(HashMap::new()),
-            global_attrs,
-        })
+        // v1 messages: type(u16) + size(u16) + flags(u8) + reserved(3) = 8 bytes header each
+        let mut pos = msg_start;
+        while pos + 8 <= msg_end {
+            let msg_type = read_u16(reader, pos)? as u8;
+            let msg_size = read_u16(reader, pos + 2)? as u64;
+            let _msg_flags = read_u8_at(reader, pos + 4)?;
+            // 3 bytes reserved
+            pos += 8;
+
+            if pos + msg_size > msg_end {
+                break;
+            }
+
+            if msg_type == MSG_CONTINUATION as u8 && msg_size >= 16 {
+                // Continuation message: offset(8) + length(8)
+                let cont_data = read_bytes(reader, pos, msg_size as usize)?;
+                let cont_addr = le_u64(&cont_data[0..8]);
+                let cont_len = le_u64(&cont_data[8..16]);
+                if cont_addr != UNDEF_ADDR && cont_len > 0 {
+                    // v1 continuation blocks don't have a signature; they
+                    // contain raw messages
+                    walk_v1_continuation_block(reader, cont_addr, cont_len, cb)?;
+                }
+            } else if msg_size > 0 {
+                let data = read_bytes(reader, pos, msg_size as usize)?;
+                cb(msg_type, &data)?;
+            }
+
+            pos += msg_size;
+        }
+
+        Ok(())
     }
 
     // --- Public attribute methods ---
@@ -338,7 +575,7 @@ impl PureRustFile {
     }
 
     // -----------------------------------------------------------------------
-    // Internal: walk object header v2 messages
+    // Internal: walk object header messages (v1 and v2)
     // -----------------------------------------------------------------------
 
     fn walk_ohdr_messages(
@@ -346,98 +583,8 @@ impl PureRustFile {
         addr: u64,
         cb: &mut dyn FnMut(u8, &[u8]) -> WrfResult<()>,
     ) -> WrfResult<()> {
-        let sig = read_bytes(&self.reader, addr, 4)?;
-        if sig != OHDR_SIGNATURE {
-            return Err(hdf5_err(format!("Expected OHDR at 0x{addr:x}, got {sig:?}")));
-        }
-        let version = read_u8_at(&self.reader, addr + 4)?;
-        if version != 2 {
-            return Err(hdf5_err(format!("Unsupported OHDR version {version}")));
-        }
-        let flags = read_u8_at(&self.reader, addr + 5)?;
-
-        let mut pos = addr + 6;
-
-        // bit 5 (0x20): times stored (4*4=16 bytes)
-        if flags & 0x20 != 0 {
-            pos += 16;
-        }
-        // bit 4 (0x10): non-default attr phase change values (2+2=4 bytes)
-        if flags & 0x10 != 0 {
-            pos += 4;
-        }
-
-        // Chunk#0 size (variable length based on flags bits 0-1)
-        let size_of_chunk_size = 1 << (flags & 0x03);
-        let chunk_size = match size_of_chunk_size {
-            1 => read_u8_at(&self.reader, pos)? as u64,
-            2 => read_u16(&self.reader, pos)? as u64,
-            4 => read_u32(&self.reader, pos)? as u64,
-            8 => read_u64(&self.reader, pos)?,
-            _ => return Err(hdf5_err("Invalid chunk size length")),
-        };
-        pos += size_of_chunk_size as u64;
-
-        // Now parse messages in this chunk
-        let chunk_end = pos + chunk_size;
-        // bit 2: attribute creation order tracked => messages have creation order field
-        let msg_has_co = (flags & 0x04) != 0;
-        self.parse_ohdr_messages(pos, chunk_end, msg_has_co, cb)?;
-
-        Ok(())
-    }
-
-    fn parse_ohdr_messages(
-        &self,
-        start: u64,
-        end: u64,
-        msg_has_creation_order: bool,
-        cb: &mut dyn FnMut(u8, &[u8]) -> WrfResult<()>,
-    ) -> WrfResult<()> {
-        let msg_hdr_size: u64 = if msg_has_creation_order { 6 } else { 4 };
-        let mut pos = start;
-        while pos + msg_hdr_size <= end {
-            let msg_type = read_u8_at(&self.reader, pos)?;
-            let msg_size = read_u16(&self.reader, pos + 1)? as u64;
-            let _msg_flags = read_u8_at(&self.reader, pos + 3)?;
-            pos += msg_hdr_size;
-
-            if msg_type == 0 && msg_size == 0 {
-                // Padding / end of messages
-                break;
-            }
-
-            if pos + msg_size > end {
-                break;
-            }
-
-            if msg_type == MSG_CONTINUATION {
-                // Continuation: addr(8) + length(8)
-                let data = read_bytes(&self.reader, pos, msg_size as usize)?;
-                if data.len() >= 16 {
-                    let cont_addr = le_u64(&data[0..8]);
-                    let cont_len = le_u64(&data[8..16]);
-                    if cont_addr != UNDEF_ADDR && cont_len > 0 {
-                        // Continuation block starts with OCHK signature (4 bytes)
-                        let cont_sig = read_bytes(&self.reader, cont_addr, 4)?;
-                        if &cont_sig == b"OCHK" {
-                            self.parse_ohdr_messages(
-                                cont_addr + 4,
-                                cont_addr + cont_len - 4,
-                                msg_has_creation_order,
-                                cb,
-                            )?;
-                        }
-                    }
-                }
-            } else {
-                let data = read_bytes(&self.reader, pos, msg_size as usize)?;
-                cb(msg_type, &data)?;
-            }
-
-            pos += msg_size;
-        }
-        Ok(())
+        // Delegate to the static version that supports both v1 and v2 headers
+        Self::walk_ohdr_messages_static(&self.reader, addr, cb)
     }
 
     // -----------------------------------------------------------------------
@@ -769,6 +916,296 @@ impl PureRustFile {
 
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// v2 object header message walker (free function)
+// ---------------------------------------------------------------------------
+
+fn walk_ohdr_v2_messages_static(
+    reader: &Mutex<BufReader<std::fs::File>>,
+    addr: u64,
+    cb: &mut dyn FnMut(u8, &[u8]) -> WrfResult<()>,
+) -> WrfResult<()> {
+    let sig = read_bytes(reader, addr, 4)?;
+    if sig != OHDR_SIGNATURE {
+        return Err(hdf5_err(format!("Expected OHDR at 0x{addr:x}, got {sig:?}")));
+    }
+    let version = read_u8_at(reader, addr + 4)?;
+    if version != 2 {
+        return Err(hdf5_err(format!("Unsupported OHDR version {version}")));
+    }
+    let flags = read_u8_at(reader, addr + 5)?;
+
+    let mut pos = addr + 6;
+
+    // bit 5 (0x20): times stored (4*4=16 bytes)
+    if flags & 0x20 != 0 {
+        pos += 16;
+    }
+    // bit 4 (0x10): non-default attr phase change values (2+2=4 bytes)
+    if flags & 0x10 != 0 {
+        pos += 4;
+    }
+
+    // Chunk#0 size (variable length based on flags bits 0-1)
+    let size_of_chunk_size = 1 << (flags & 0x03);
+    let chunk_size = match size_of_chunk_size {
+        1 => read_u8_at(reader, pos)? as u64,
+        2 => read_u16(reader, pos)? as u64,
+        4 => read_u32(reader, pos)? as u64,
+        8 => read_u64(reader, pos)?,
+        _ => return Err(hdf5_err("Invalid chunk size length")),
+    };
+    pos += size_of_chunk_size as u64;
+
+    // Now parse messages in this chunk
+    let chunk_end = pos + chunk_size;
+    // bit 2: attribute creation order tracked => messages have creation order field
+    let msg_has_co = (flags & 0x04) != 0;
+    parse_ohdr_v2_messages(reader, pos, chunk_end, msg_has_co, cb)?;
+
+    Ok(())
+}
+
+fn parse_ohdr_v2_messages(
+    reader: &Mutex<BufReader<std::fs::File>>,
+    start: u64,
+    end: u64,
+    msg_has_creation_order: bool,
+    cb: &mut dyn FnMut(u8, &[u8]) -> WrfResult<()>,
+) -> WrfResult<()> {
+    let msg_hdr_size: u64 = if msg_has_creation_order { 6 } else { 4 };
+    let mut pos = start;
+    while pos + msg_hdr_size <= end {
+        let msg_type = read_u8_at(reader, pos)?;
+        let msg_size = read_u16(reader, pos + 1)? as u64;
+        let _msg_flags = read_u8_at(reader, pos + 3)?;
+        pos += msg_hdr_size;
+
+        if msg_type == 0 && msg_size == 0 {
+            // Padding / end of messages
+            break;
+        }
+
+        if pos + msg_size > end {
+            break;
+        }
+
+        if msg_type == MSG_CONTINUATION {
+            // Continuation: addr(8) + length(8)
+            let data = read_bytes(reader, pos, msg_size as usize)?;
+            if data.len() >= 16 {
+                let cont_addr = le_u64(&data[0..8]);
+                let cont_len = le_u64(&data[8..16]);
+                if cont_addr != UNDEF_ADDR && cont_len > 0 {
+                    // Continuation block starts with OCHK signature (4 bytes)
+                    let cont_sig = read_bytes(reader, cont_addr, 4)?;
+                    if &cont_sig == b"OCHK" {
+                        parse_ohdr_v2_messages(
+                            reader,
+                            cont_addr + 4,
+                            cont_addr + cont_len - 4,
+                            msg_has_creation_order,
+                            cb,
+                        )?;
+                    }
+                }
+            }
+        } else {
+            let data = read_bytes(reader, pos, msg_size as usize)?;
+            cb(msg_type, &data)?;
+        }
+
+        pos += msg_size;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// v1 continuation block walker
+// ---------------------------------------------------------------------------
+
+fn walk_v1_continuation_block(
+    reader: &Mutex<BufReader<std::fs::File>>,
+    addr: u64,
+    length: u64,
+    cb: &mut dyn FnMut(u8, &[u8]) -> WrfResult<()>,
+) -> WrfResult<()> {
+    let end = addr + length;
+    let mut pos = addr;
+
+    // v1 continuation messages have the same 8-byte header as the main block
+    while pos + 8 <= end {
+        let msg_type = read_u16(reader, pos)? as u8;
+        let msg_size = read_u16(reader, pos + 2)? as u64;
+        let _msg_flags = read_u8_at(reader, pos + 4)?;
+        // 3 bytes reserved
+        pos += 8;
+
+        if pos + msg_size > end {
+            break;
+        }
+
+        if msg_type == MSG_CONTINUATION as u8 && msg_size >= 16 {
+            let cont_data = read_bytes(reader, pos, msg_size as usize)?;
+            let cont_addr = le_u64(&cont_data[0..8]);
+            let cont_len = le_u64(&cont_data[8..16]);
+            if cont_addr != UNDEF_ADDR && cont_len > 0 {
+                walk_v1_continuation_block(reader, cont_addr, cont_len, cb)?;
+            }
+        } else if msg_size > 0 {
+            let data = read_bytes(reader, pos, msg_size as usize)?;
+            cb(msg_type, &data)?;
+        }
+
+        pos += msg_size;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// v0/v1 local heap
+// ---------------------------------------------------------------------------
+
+/// Read a local heap and return its data segment (the byte buffer containing
+/// null-terminated strings for link names).
+fn read_local_heap(
+    reader: &Mutex<BufReader<std::fs::File>>,
+    addr: u64,
+) -> WrfResult<Vec<u8>> {
+    let sig = read_bytes(reader, addr, 4)?;
+    if sig != HEAP_SIGNATURE {
+        return Err(hdf5_err(format!("Expected HEAP at 0x{addr:x}, got {sig:?}")));
+    }
+    let _version = read_u8_at(reader, addr + 4)?;
+    // 3 bytes reserved (5,6,7)
+    let data_segment_size = read_u64(reader, addr + 8)?;
+    let _free_list_head_offset = read_u64(reader, addr + 16)?;
+    let data_segment_addr = read_u64(reader, addr + 24)?;
+
+    if data_segment_addr == UNDEF_ADDR || data_segment_size == 0 {
+        return Ok(Vec::new());
+    }
+
+    read_bytes(reader, data_segment_addr, data_segment_size as usize)
+}
+
+/// Extract a null-terminated string from the local heap data segment.
+fn read_string_from_heap(heap_data: &[u8], offset: usize) -> String {
+    if offset >= heap_data.len() {
+        return String::new();
+    }
+    let remaining = &heap_data[offset..];
+    let end = remaining.iter().position(|&b| b == 0).unwrap_or(remaining.len());
+    String::from_utf8_lossy(&remaining[..end]).to_string()
+}
+
+// ---------------------------------------------------------------------------
+// v0/v1 B-tree v1 (type 0) for group nodes
+// ---------------------------------------------------------------------------
+
+/// Traverse a B-tree v1 of node_type=0 (group nodes) and collect all
+/// Symbol Table Node (SNOD) addresses from the leaf nodes.
+fn collect_btree_v1_group_nodes(
+    reader: &Mutex<BufReader<std::fs::File>>,
+    addr: u64,
+    snod_addrs: &mut Vec<u64>,
+) -> WrfResult<()> {
+    let sig = read_bytes(reader, addr, 4)?;
+    if sig != TREE_SIGNATURE {
+        return Err(hdf5_err(format!(
+            "Expected TREE at 0x{addr:x}, got {sig:?}"
+        )));
+    }
+
+    let node_type = read_u8_at(reader, addr + 4)?;
+    if node_type != 0 {
+        return Err(hdf5_err(format!(
+            "Expected B-tree v1 node_type=0 (group), got {node_type}"
+        )));
+    }
+    let node_level = read_u8_at(reader, addr + 5)?;
+    let entries_used = read_u16(reader, addr + 6)? as usize;
+    let _left_sibling = read_u64(reader, addr + 8)?;
+    let _right_sibling = read_u64(reader, addr + 16)?;
+
+    // For group B-trees (type 0), each key is an offset into the local heap
+    // (size_of_lengths bytes, which is 8 for our case).
+    // Layout per entry: key(8 bytes) + child_pointer(8 bytes)
+    // Plus one extra key at the end (entries_used + 1 keys total)
+    let key_size: u64 = 8; // size_of_lengths = 8
+    let data_start = addr + 24;
+
+    if node_level == 0 {
+        // Leaf node: child pointers are SNOD addresses
+        for i in 0..entries_used {
+            // Keys and child pointers interleaved:
+            // key[0], key[1], ..., key[entries_used]
+            // child[0], child[1], ..., child[entries_used-1]
+            // But in HDF5 B-tree v1, the layout is actually:
+            // key[0], child[0], key[1], child[1], ..., key[n-1], child[n-1], key[n]
+            let entry_off = data_start + (i as u64) * (key_size + 8);
+            // Skip the key, read child pointer
+            let child_addr = read_u64(reader, entry_off + key_size)?;
+            if child_addr != UNDEF_ADDR {
+                snod_addrs.push(child_addr);
+            }
+        }
+    } else {
+        // Internal node: child pointers are addresses of child B-tree nodes
+        for i in 0..entries_used {
+            let entry_off = data_start + (i as u64) * (key_size + 8);
+            let child_addr = read_u64(reader, entry_off + key_size)?;
+            if child_addr != UNDEF_ADDR {
+                collect_btree_v1_group_nodes(reader, child_addr, snod_addrs)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// v0/v1 Symbol Table Node (SNOD)
+// ---------------------------------------------------------------------------
+
+/// Read a Symbol Table Node and return a list of (link_name_offset, object_header_address).
+fn read_symbol_table_node(
+    reader: &Mutex<BufReader<std::fs::File>>,
+    addr: u64,
+) -> WrfResult<Vec<(u64, u64)>> {
+    let sig = read_bytes(reader, addr, 4)?;
+    if sig != SNOD_SIGNATURE {
+        return Err(hdf5_err(format!(
+            "Expected SNOD at 0x{addr:x}, got {sig:?}"
+        )));
+    }
+
+    let _version = read_u8_at(reader, addr + 4)?;
+    // 1 byte reserved at offset 5
+    let num_symbols = read_u16(reader, addr + 6)? as usize;
+
+    let mut entries = Vec::with_capacity(num_symbols);
+    let entry_start = addr + 8;
+    // Each Symbol Table Entry is 40 bytes:
+    //   Bytes 0-7:   Link name offset (into local heap)
+    //   Bytes 8-15:  Object header address
+    //   Bytes 16-19: Cache type
+    //   Bytes 20-23: Reserved
+    //   Bytes 24-39: Scratch-pad space (16 bytes)
+    let entry_size: u64 = 40;
+
+    for i in 0..num_symbols {
+        let epos = entry_start + (i as u64) * entry_size;
+        let name_offset = read_u64(reader, epos)?;
+        let obj_header_addr = read_u64(reader, epos + 8)?;
+        if obj_header_addr != UNDEF_ADDR {
+            entries.push((name_offset, obj_header_addr));
+        }
+    }
+
+    Ok(entries)
 }
 
 // ---------------------------------------------------------------------------
@@ -1823,5 +2260,21 @@ mod tests {
     fn test_le_helpers() {
         assert_eq!(le_u16(&[0x01, 0x02]), 0x0201);
         assert_eq!(le_u32(&[0x01, 0x02, 0x03, 0x04]), 0x04030201);
+    }
+
+    #[test]
+    fn test_read_string_from_heap() {
+        // Simulate a local heap data segment with null-terminated strings
+        let heap_data = b"\0temperature\0pressure\0wind_u\0";
+        // Offset 0 points to empty string (the leading NUL)
+        assert_eq!(read_string_from_heap(heap_data, 0), "");
+        // Offset 1 points to "temperature"
+        assert_eq!(read_string_from_heap(heap_data, 1), "temperature");
+        // Offset 13 points to "pressure"
+        assert_eq!(read_string_from_heap(heap_data, 13), "pressure");
+        // Offset 22 points to "wind_u"
+        assert_eq!(read_string_from_heap(heap_data, 22), "wind_u");
+        // Past end returns empty
+        assert_eq!(read_string_from_heap(heap_data, 100), "");
     }
 }
