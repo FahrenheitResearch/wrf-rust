@@ -1192,6 +1192,122 @@ pub fn bulk_richardson_number(cape: f64, shear_06_ms: f64) -> f64 {
     cape / denom
 }
 
+// ===========================================================================
+// Vertical Interpolation (interplevel equivalents)
+// ===========================================================================
+
+/// Interpolate a 3D field to a target pressure level using log-pressure interpolation.
+///
+/// This is the Rust equivalent of `wrf.interplevel()` for pressure coordinates.
+///
+/// `field_3d`: the variable to interpolate, flattened `[nz][ny][nx]`
+/// `pressure_3d`: full pressure field in hPa, flattened `[nz][ny][nx]`
+/// `target_level`: target pressure in hPa
+///
+/// Returns: interpolated 2D field of size `ny * nx`
+pub fn interp_to_pressure_level(
+    field_3d: &[f64],
+    pressure_3d: &[f64],
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    target_level: f64,
+) -> Vec<f64> {
+    let n2d = ny * nx;
+    let log_target = target_level.ln();
+
+    (0..n2d)
+        .into_par_iter()
+        .map(|idx| {
+            let j = idx / nx;
+            let i = idx % nx;
+
+            let p_col = extract_column(pressure_3d, nz, ny, nx, j, i);
+            let f_col = extract_column(field_3d, nz, ny, nx, j, i);
+
+            // Ensure profiles are ordered surface-first (decreasing pressure)
+            let (p_prof, f_prof) = if p_col.len() > 1 && p_col[0] < p_col[p_col.len() - 1] {
+                let mut p = p_col;
+                let mut f = f_col;
+                p.reverse();
+                f.reverse();
+                (p, f)
+            } else {
+                (p_col, f_col)
+            };
+
+            // Clamp: if target is outside the column range, return boundary value
+            if target_level >= p_prof[0] {
+                return f_prof[0];
+            }
+            if target_level <= p_prof[p_prof.len() - 1] {
+                return f_prof[f_prof.len() - 1];
+            }
+
+            // Find the bracketing levels and interpolate in ln(p) space
+            for k in 0..p_prof.len() - 1 {
+                if p_prof[k] >= target_level && target_level >= p_prof[k + 1] {
+                    let log_p_lo = p_prof[k].ln();
+                    let log_p_hi = p_prof[k + 1].ln();
+                    let denom = log_p_hi - log_p_lo;
+                    if denom.abs() < 1.0e-12 {
+                        return 0.5 * (f_prof[k] + f_prof[k + 1]);
+                    }
+                    let frac = (log_target - log_p_lo) / denom;
+                    return f_prof[k] + frac * (f_prof[k + 1] - f_prof[k]);
+                }
+            }
+
+            f64::NAN
+        })
+        .collect()
+}
+
+/// Interpolate a 3D field to a target height AGL level using linear interpolation.
+///
+/// This is the Rust equivalent of `wrf.interplevel()` for height coordinates.
+///
+/// `field_3d`: the variable to interpolate, flattened `[nz][ny][nx]`
+/// `height_agl_3d`: height AGL in meters, flattened `[nz][ny][nx]`
+/// `target_level`: target height AGL in meters
+///
+/// Returns: interpolated 2D field of size `ny * nx`
+pub fn interp_to_height_level(
+    field_3d: &[f64],
+    height_agl_3d: &[f64],
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    target_level: f64,
+) -> Vec<f64> {
+    let n2d = ny * nx;
+
+    (0..n2d)
+        .into_par_iter()
+        .map(|idx| {
+            let j = idx / nx;
+            let i = idx % nx;
+
+            let h_col = extract_column(height_agl_3d, nz, ny, nx, j, i);
+            let f_col = extract_column(field_3d, nz, ny, nx, j, i);
+
+            // Ensure profiles are ordered surface-upward (increasing height)
+            let (h_prof, f_prof) = if h_col.len() > 1 && h_col[0] > h_col[h_col.len() - 1] {
+                let mut h = h_col;
+                let mut f = f_col;
+                h.reverse();
+                f.reverse();
+                (h, f)
+            } else {
+                (h_col, f_col)
+            };
+
+            // Use the existing linear height interpolation helper
+            interp_at_height(target_level, &h_prof, &f_prof)
+        })
+        .collect()
+}
+
 /// Convective Inhibition Depth: depth of the CIN layer in hPa.
 ///
 /// Measures the pressure depth from the surface to the LFC where the parcel

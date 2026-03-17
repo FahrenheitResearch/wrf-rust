@@ -56,6 +56,9 @@ __all__ = [
     "list_variables",
     "ALL_TIMES",
     "available_variables",
+    "interplevel",
+    "get_cartopy",
+    "latlon_coords",
 ]
 __version__ = "0.2.1"
 
@@ -300,3 +303,231 @@ def available_variables():
     print(f"{'-' * nw} {'-' * dw} -----")
     for name, desc, units in vars_:
         print(f"{name:<{nw}} {desc:<{dw}} {units}")
+
+
+# =========================================================================
+# interplevel -- vertical interpolation of 3D fields
+# =========================================================================
+
+def interplevel(field_3d, vert_coord_3d, target_level):
+    """Interpolate a 3D field to a horizontal level.
+
+    Drop-in replacement for ``wrf.interplevel()`` from wrf-python.
+
+    Automatically detects whether the vertical coordinate is pressure
+    (decreasing with height -> log-pressure interpolation) or height
+    (increasing with height -> linear interpolation).
+
+    Parameters
+    ----------
+    field_3d : ndarray, shape (nz, ny, nx)
+        The 3D field to interpolate.
+    vert_coord_3d : ndarray, shape (nz, ny, nx)
+        The vertical coordinate field.  Typically full pressure in hPa
+        (decreasing upward) or height AGL in metres (increasing upward).
+    target_level : float
+        The target level value in the same units as *vert_coord_3d*.
+
+    Returns
+    -------
+    ndarray, shape (ny, nx)
+        The interpolated 2D field.
+
+    Examples
+    --------
+    >>> from wrf import WrfFile, getvar, interplevel
+    >>> f = WrfFile("wrfout_d01_2024-05-01_00:00:00")
+    >>> p = getvar(f, "pressure", timeidx=0, units="hPa")
+    >>> tk = getvar(f, "temp", timeidx=0, units="K")
+    >>> t_500 = interplevel(tk, p, 500.0)
+    """
+    field_3d = np.asarray(field_3d, dtype=np.float64)
+    vert_coord_3d = np.asarray(vert_coord_3d, dtype=np.float64)
+    target_level = float(target_level)
+
+    if field_3d.ndim != 3 or vert_coord_3d.ndim != 3:
+        raise ValueError(
+            "field_3d and vert_coord_3d must be 3-D arrays (nz, ny, nx)"
+        )
+    if field_3d.shape != vert_coord_3d.shape:
+        raise ValueError(
+            f"Shape mismatch: field_3d {field_3d.shape} vs "
+            f"vert_coord_3d {vert_coord_3d.shape}"
+        )
+
+    nz, ny, nx = field_3d.shape
+
+    # Determine direction: if the coordinate generally decreases along the
+    # first axis it is pressure-like (use log interpolation); otherwise it
+    # is height-like (use linear interpolation).
+    mid_j, mid_i = ny // 2, nx // 2
+    is_pressure = vert_coord_3d[0, mid_j, mid_i] > vert_coord_3d[-1, mid_j, mid_i]
+
+    result = np.full((ny, nx), np.nan, dtype=np.float64)
+
+    if is_pressure:
+        # Log-pressure interpolation
+        log_vert = np.log(np.clip(vert_coord_3d, 1e-10, None))
+        log_target = np.log(target_level)
+
+        for k in range(nz - 1):
+            # Find grid cells where target is bracketed by levels k and k+1
+            # (pressure decreases upward, so vert[k] >= target >= vert[k+1])
+            above = vert_coord_3d[k, :, :] >= target_level
+            below = vert_coord_3d[k + 1, :, :] <= target_level
+            mask = above & below & np.isnan(result)
+
+            if not np.any(mask):
+                continue
+
+            denom = log_vert[k + 1, :, :] - log_vert[k, :, :]
+            # Avoid division by zero
+            safe_denom = np.where(np.abs(denom) < 1e-12, 1.0, denom)
+            frac = (log_target - log_vert[k, :, :]) / safe_denom
+            interped = field_3d[k, :, :] + frac * (
+                field_3d[k + 1, :, :] - field_3d[k, :, :]
+            )
+            result = np.where(mask, interped, result)
+
+        # Extrapolate for points still NaN: above the highest or below
+        # the lowest pressure level.
+        still_nan = np.isnan(result)
+        if np.any(still_nan):
+            # If target pressure > surface (below ground), use surface value
+            below_sfc = still_nan & (vert_coord_3d[0, :, :] < target_level)
+            result = np.where(below_sfc, field_3d[0, :, :], result)
+            # If target pressure < model top, use top value
+            above_top = still_nan & (vert_coord_3d[-1, :, :] > target_level)
+            result = np.where(above_top, field_3d[-1, :, :], result)
+    else:
+        # Linear height interpolation
+        for k in range(nz - 1):
+            above = vert_coord_3d[k, :, :] <= target_level
+            below = vert_coord_3d[k + 1, :, :] >= target_level
+            mask = above & below & np.isnan(result)
+
+            if not np.any(mask):
+                continue
+
+            denom = vert_coord_3d[k + 1, :, :] - vert_coord_3d[k, :, :]
+            safe_denom = np.where(np.abs(denom) < 1e-12, 1.0, denom)
+            frac = (target_level - vert_coord_3d[k, :, :]) / safe_denom
+            interped = field_3d[k, :, :] + frac * (
+                field_3d[k + 1, :, :] - field_3d[k, :, :]
+            )
+            result = np.where(mask, interped, result)
+
+        # Extrapolate boundary values
+        still_nan = np.isnan(result)
+        if np.any(still_nan):
+            below_sfc = still_nan & (vert_coord_3d[0, :, :] > target_level)
+            result = np.where(below_sfc, field_3d[0, :, :], result)
+            above_top = still_nan & (vert_coord_3d[-1, :, :] < target_level)
+            result = np.where(above_top, field_3d[-1, :, :], result)
+
+    return result
+
+
+# =========================================================================
+# get_cartopy -- CRS projection from WRF file
+# =========================================================================
+
+def get_cartopy(wrffile):
+    """Get a cartopy CRS projection from a WRF file.
+
+    Drop-in replacement for ``wrf.get_cartopy()`` from wrf-python.
+
+    Reads the ``MAP_PROJ``, ``TRUELAT1``, ``TRUELAT2``, ``STAND_LON``,
+    ``CEN_LAT``, and ``CEN_LON`` global attributes from the WRF file
+    and returns the corresponding ``cartopy.crs`` projection.
+
+    Parameters
+    ----------
+    wrffile : WrfFile, str, or netCDF4.Dataset
+        The WRF output file.
+
+    Returns
+    -------
+    cartopy.crs.Projection
+        A cartopy CRS object suitable for ``ax = plt.axes(projection=crs)``.
+
+    Raises
+    ------
+    ImportError
+        If cartopy is not installed.
+    ValueError
+        If the map projection is not supported.
+    """
+    import cartopy.crs as ccrs
+    from netCDF4 import Dataset
+
+    # Get the file path so we can read global attributes via netCDF4
+    wf = _ensure_wrffile(wrffile)
+    nc = Dataset(wf.path, "r")
+    try:
+        map_proj = int(nc.getncattr("MAP_PROJ"))
+        truelat1 = float(nc.getncattr("TRUELAT1"))
+        truelat2 = float(nc.getncattr("TRUELAT2"))
+        stand_lon = float(nc.getncattr("STAND_LON"))
+        cen_lat = float(nc.getncattr("CEN_LAT"))
+        cen_lon = float(nc.getncattr("CEN_LON"))
+    finally:
+        nc.close()
+
+    if map_proj == 1:
+        # Lambert Conformal Conic
+        return ccrs.LambertConformal(
+            central_longitude=stand_lon,
+            central_latitude=cen_lat,
+            standard_parallels=(truelat1, truelat2),
+        )
+    elif map_proj == 2:
+        # Polar Stereographic
+        return ccrs.Stereographic(
+            central_latitude=cen_lat,
+            central_longitude=stand_lon,
+            true_scale_latitude=truelat1,
+        )
+    elif map_proj == 3:
+        # Mercator
+        return ccrs.Mercator(
+            central_longitude=cen_lon,
+            latitude_true_scale=truelat1,
+        )
+    elif map_proj == 6:
+        # Lat-Lon (cylindrical equidistant)
+        return ccrs.PlateCarree(central_longitude=cen_lon)
+    else:
+        raise ValueError(
+            f"Unsupported WRF map projection MAP_PROJ={map_proj}. "
+            f"Supported: 1 (Lambert), 2 (Polar Stereographic), "
+            f"3 (Mercator), 6 (Lat-Lon)."
+        )
+
+
+# =========================================================================
+# latlon_coords -- latitude / longitude 2D arrays
+# =========================================================================
+
+def latlon_coords(wrffile, timeidx=0):
+    """Return the 2D latitude and longitude arrays from a WRF file.
+
+    Drop-in replacement for ``wrf.latlon_coords()`` from wrf-python.
+
+    Parameters
+    ----------
+    wrffile : WrfFile, str, or netCDF4.Dataset
+        The WRF output file.
+    timeidx : int, optional
+        Time index (default 0). XLAT/XLONG are time-invariant in most
+        WRF configurations, but some moving-nest runs vary them.
+
+    Returns
+    -------
+    (lat, lon) : tuple of ndarray, each shape (ny, nx)
+        XLAT and XLONG arrays in degrees.
+    """
+    wf = _ensure_wrffile(wrffile)
+    lat = wf._inner.getvar("lat", timeidx=timeidx)
+    lon = wf._inner.getvar("lon", timeidx=timeidx)
+    return lat, lon
