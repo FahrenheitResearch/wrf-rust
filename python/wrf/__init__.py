@@ -60,7 +60,7 @@ __all__ = [
     "get_cartopy",
     "latlon_coords",
 ]
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 
 # ── Optional plotting imports (require matplotlib) ──
 try:
