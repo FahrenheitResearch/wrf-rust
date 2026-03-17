@@ -14,14 +14,14 @@ use crate::file::WrfFile;
 ///   STP = cape_term * lcl_term * srh_term * shear_term
 ///
 /// SRH is computed through the canonical compute_srh_field path (earth-rotated + 10m prepend).
-pub fn compute_stp(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+pub fn compute_stp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let pres = f.full_pressure(t)?;
     let tc = f.temperature_c(t)?;
     let qv = f.qvapor(t)?;
     let h_agl = f.height_agl(t)?;
     let psfc = f.psfc(t)?;   // Pa -- compute_cape_cin converts internally
-    let t2 = f.t2(t)?;       // K  -- compute_cape_cin converts internally
-    let q2 = f.q2(t)?;
+    let t2 = f.t2_for_opts(t, opts)?;       // K  -- compute_cape_cin converts internally
+    let q2 = f.q2_for_opts(t, opts)?;
     let u = f.u_destag(t)?;
     let v = f.v_destag(t)?;
 
@@ -60,8 +60,8 @@ pub fn compute_stp_effective(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
     let qv = f.qvapor(t)?;
     let h_agl = f.height_agl(t)?;
     let psfc = f.psfc(t)?;   // Pa -- compute_cape_cin converts internally
-    let t2 = f.t2(t)?;       // K  -- compute_cape_cin converts internally
-    let q2 = f.q2(t)?;
+    let t2 = f.t2_for_opts(t, opts)?;       // K  -- compute_cape_cin converts internally
+    let q2 = f.q2_for_opts(t, opts)?;
     let u = f.u_destag(t)?;
     let v = f.v_destag(t)?;
 
@@ -137,14 +137,14 @@ fn stp_eff_from_components(cape: &[f64], lcl: &[f64], cin: &[f64], srh: &[f64], 
 /// Supercell Composite Parameter (dimensionless). `[ny, nx]`
 ///
 /// SRH is computed through the canonical compute_srh_field path (earth-rotated + 10m prepend).
-pub fn compute_scp(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+pub fn compute_scp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let pres = f.full_pressure(t)?;
     let tc = f.temperature_c(t)?;
     let qv = f.qvapor(t)?;
     let h_agl = f.height_agl(t)?;
     let psfc = f.psfc(t)?;   // Pa -- compute_cape_cin converts internally
-    let t2 = f.t2(t)?;       // K  -- compute_cape_cin converts internally
-    let q2 = f.q2(t)?;
+    let t2 = f.t2_for_opts(t, opts)?;       // K  -- compute_cape_cin converts internally
+    let q2 = f.q2_for_opts(t, opts)?;
     let u = f.u_destag(t)?;
     let v = f.v_destag(t)?;
 
@@ -177,8 +177,8 @@ pub fn compute_ehi(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
     let qv = f.qvapor(t)?;
     let h_agl = f.height_agl(t)?;
     let psfc = f.psfc(t)?;   // Pa -- compute_cape_cin converts internally
-    let t2 = f.t2(t)?;       // K  -- compute_cape_cin converts internally
-    let q2 = f.q2(t)?;
+    let t2 = f.t2_for_opts(t, opts)?;       // K  -- compute_cape_cin converts internally
+    let q2 = f.q2_for_opts(t, opts)?;
 
     let nx = f.nx;
     let ny = f.ny;
@@ -203,7 +203,7 @@ pub fn compute_ehi(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
 }
 
 /// Critical angle (degrees). `[ny, nx]`
-pub fn compute_critical_angle(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+pub fn compute_critical_angle(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let u = f.u_destag(t)?;
     let v = f.v_destag(t)?;
     let h_agl = f.height_agl(t)?;
@@ -240,15 +240,15 @@ pub fn compute_critical_angle(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> Wrf
 }
 
 /// Significant Hail Parameter (dimensionless). `[ny, nx]`
-pub fn compute_ship(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+pub fn compute_ship(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let pres = f.full_pressure(t)?;
     let pres_hpa: Vec<f64> = pres.iter().map(|p| p / 100.0).collect();
     let tc = f.temperature_c(t)?;
     let qv = f.qvapor(t)?;
     let h_agl = f.height_agl(t)?;
     let psfc = f.psfc(t)?;   // Pa -- compute_cape_cin converts internally
-    let t2 = f.t2(t)?;       // K  -- compute_cape_cin converts internally
-    let q2 = f.q2(t)?;
+    let t2 = f.t2_for_opts(t, opts)?;       // K  -- compute_cape_cin converts internally
+    let q2 = f.q2_for_opts(t, opts)?;
 
     let nx = f.nx;
     let ny = f.ny;
@@ -290,14 +290,14 @@ pub fn compute_ship(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec
 }
 
 /// Bulk Richardson Number (dimensionless). `[ny, nx]`
-pub fn compute_bri(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+pub fn compute_bri(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let pres = f.full_pressure(t)?;
     let tc = f.temperature_c(t)?;
     let qv = f.qvapor(t)?;
     let h_agl = f.height_agl(t)?;
     let psfc = f.psfc(t)?;   // Pa -- compute_cape_cin converts internally
-    let t2 = f.t2(t)?;       // K  -- compute_cape_cin converts internally
-    let q2 = f.q2(t)?;
+    let t2 = f.t2_for_opts(t, opts)?;       // K  -- compute_cape_cin converts internally
+    let q2 = f.q2_for_opts(t, opts)?;
     let u = f.u_destag(t)?;
     let v = f.v_destag(t)?;
 
