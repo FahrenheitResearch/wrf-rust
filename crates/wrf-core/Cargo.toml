@@ -5,7 +5,7 @@ edition.workspace = true
 description = "Pure Rust WRF post-processing library"
 
 [features]
-default = ["netcdf-backend"]
+default = ["pure-rust-reader"]
 netcdf-backend = ["dep:netcdf"]
 pure-rust-reader = ["dep:flate2"]
 

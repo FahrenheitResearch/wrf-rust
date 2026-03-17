@@ -6,7 +6,7 @@
 //!
 //! This module is gated behind the `pure-rust-reader` feature flag.
 
-use std::cell::RefCell;
+use std::sync::Mutex;
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, BufReader};
 use std::path::Path;
@@ -57,33 +57,33 @@ fn io_err(e: std::io::Error) -> WrfError {
 // Low-level read helpers
 // ---------------------------------------------------------------------------
 
-fn read_u8_at(r: &RefCell<BufReader<std::fs::File>>, off: u64) -> WrfResult<u8> {
-    let mut f = r.borrow_mut();
+fn read_u8_at(r: &Mutex<BufReader<std::fs::File>>, off: u64) -> WrfResult<u8> {
+    let mut f = r.lock().unwrap();
     f.seek(SeekFrom::Start(off)).map_err(io_err)?;
     let mut b = [0u8; 1];
     f.read_exact(&mut b).map_err(io_err)?;
     Ok(b[0])
 }
 
-fn read_bytes(r: &RefCell<BufReader<std::fs::File>>, off: u64, n: usize) -> WrfResult<Vec<u8>> {
-    let mut f = r.borrow_mut();
+fn read_bytes(r: &Mutex<BufReader<std::fs::File>>, off: u64, n: usize) -> WrfResult<Vec<u8>> {
+    let mut f = r.lock().unwrap();
     f.seek(SeekFrom::Start(off)).map_err(io_err)?;
     let mut buf = vec![0u8; n];
     f.read_exact(&mut buf).map_err(io_err)?;
     Ok(buf)
 }
 
-fn read_u16(r: &RefCell<BufReader<std::fs::File>>, off: u64) -> WrfResult<u16> {
+fn read_u16(r: &Mutex<BufReader<std::fs::File>>, off: u64) -> WrfResult<u16> {
     let b = read_bytes(r, off, 2)?;
     Ok(u16::from_le_bytes([b[0], b[1]]))
 }
 
-fn read_u32(r: &RefCell<BufReader<std::fs::File>>, off: u64) -> WrfResult<u32> {
+fn read_u32(r: &Mutex<BufReader<std::fs::File>>, off: u64) -> WrfResult<u32> {
     let b = read_bytes(r, off, 4)?;
     Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
-fn read_u64(r: &RefCell<BufReader<std::fs::File>>, off: u64) -> WrfResult<u64> {
+fn read_u64(r: &Mutex<BufReader<std::fs::File>>, off: u64) -> WrfResult<u64> {
     let b = read_bytes(r, off, 8)?;
     Ok(u64::from_le_bytes(b.try_into().unwrap()))
 }
@@ -145,13 +145,13 @@ pub(crate) struct HdfAttributeValue {
 /// Pure-Rust HDF5 file reader.  Reads netCDF4/HDF5 files produced by WRF
 /// without requiring any C libraries.
 pub struct PureRustFile {
-    reader: RefCell<BufReader<std::fs::File>>,
+    reader: Mutex<BufReader<std::fs::File>>,
     #[allow(dead_code)]
     root_ohdr_addr: u64,
     /// dataset name -> object header address
     datasets: HashMap<String, u64>,
     /// cached dataset info
-    ds_cache: RefCell<HashMap<String, DatasetInfo>>,
+    ds_cache: Mutex<HashMap<String, DatasetInfo>>,
     /// global attributes (read once)
     global_attrs: HashMap<String, HdfAttributeValue>,
 }
@@ -160,7 +160,7 @@ impl PureRustFile {
     /// Open an HDF5/netCDF4 file and parse the root group.
     pub fn open<P: AsRef<Path>>(path: P) -> WrfResult<Self> {
         let file = std::fs::File::open(path.as_ref()).map_err(io_err)?;
-        let reader = RefCell::new(BufReader::new(file));
+        let reader = Mutex::new(BufReader::new(file));
 
         // --- Superblock v2 ---
         let sig = read_bytes(&reader, 0, 8)?;
@@ -194,7 +194,7 @@ impl PureRustFile {
             reader,
             root_ohdr_addr,
             datasets,
-            ds_cache: RefCell::new(HashMap::new()),
+            ds_cache: Mutex::new(HashMap::new()),
             global_attrs,
         })
     }
@@ -294,13 +294,13 @@ impl PureRustFile {
 
     fn get_dataset_info(&self, name: &str) -> WrfResult<DatasetInfo> {
         // Check cache
-        if let Some(info) = self.ds_cache.borrow().get(name) {
+        if let Some(info) = self.ds_cache.lock().unwrap().get(name).cloned() {
             return Ok(info.clone());
         }
         let ohdr_addr = *self.datasets.get(name)
             .ok_or_else(|| WrfError::VarNotFound(name.to_string()))?;
         let info = self.parse_dataset_ohdr(ohdr_addr)?;
-        self.ds_cache.borrow_mut().insert(name.to_string(), info.clone());
+        self.ds_cache.lock().unwrap().insert(name.to_string(), info.clone());
         Ok(info)
     }
 
@@ -445,7 +445,7 @@ impl PureRustFile {
     // -----------------------------------------------------------------------
 
     fn read_group_links_static(
-        reader: &RefCell<BufReader<std::fs::File>>,
+        reader: &Mutex<BufReader<std::fs::File>>,
         ohdr_addr: u64,
     ) -> WrfResult<HashMap<String, u64>> {
         let mut links: HashMap<String, u64> = HashMap::new();
@@ -477,7 +477,7 @@ impl PureRustFile {
 
         // Recursive message parsing with continuation support
         fn parse_msgs(
-            reader: &RefCell<BufReader<std::fs::File>>,
+            reader: &Mutex<BufReader<std::fs::File>>,
             start: u64,
             end: u64,
             msg_hdr: u64,
@@ -550,7 +550,7 @@ impl PureRustFile {
     // -----------------------------------------------------------------------
 
     fn read_attributes_static(
-        reader: &RefCell<BufReader<std::fs::File>>,
+        reader: &Mutex<BufReader<std::fs::File>>,
         ohdr_addr: u64,
     ) -> WrfResult<HashMap<String, HdfAttributeValue>> {
         let mut attrs: HashMap<String, HdfAttributeValue> = HashMap::new();
@@ -579,7 +579,7 @@ impl PureRustFile {
         let mh = if msg_has_co { 6u64 } else { 4u64 };
 
         fn parse_attr_msgs(
-            reader: &RefCell<BufReader<std::fs::File>>,
+            reader: &Mutex<BufReader<std::fs::File>>,
             start: u64, end: u64, mh: u64,
             attrs: &mut HashMap<String, HdfAttributeValue>,
             attr_info_heap: &mut Option<u64>,
@@ -1188,7 +1188,7 @@ fn parse_attribute_message(data: &[u8]) -> WrfResult<(String, HdfAttributeValue)
 // ---------------------------------------------------------------------------
 
 fn read_dense_links(
-    reader: &RefCell<BufReader<std::fs::File>>,
+    reader: &Mutex<BufReader<std::fs::File>>,
     heap_addr: u64,
     bt2_addr: u64,
 ) -> WrfResult<HashMap<String, u64>> {
@@ -1209,7 +1209,7 @@ fn read_dense_links(
 }
 
 fn read_dense_attributes(
-    reader: &RefCell<BufReader<std::fs::File>>,
+    reader: &Mutex<BufReader<std::fs::File>>,
     heap_addr: u64,
     bt2_addr: u64,
 ) -> WrfResult<HashMap<String, HdfAttributeValue>> {
@@ -1259,7 +1259,7 @@ struct FractalHeapInfo {
 }
 
 fn parse_fractal_heap_header(
-    reader: &RefCell<BufReader<std::fs::File>>,
+    reader: &Mutex<BufReader<std::fs::File>>,
     addr: u64,
 ) -> WrfResult<FractalHeapInfo> {
     let sig = read_bytes(reader, addr, 4)?;
@@ -1364,7 +1364,7 @@ fn parse_fractal_heap_header(
 }
 
 fn resolve_heap_id(
-    reader: &RefCell<BufReader<std::fs::File>>,
+    reader: &Mutex<BufReader<std::fs::File>>,
     heap: &FractalHeapInfo,
     id: &[u8],
 ) -> WrfResult<Vec<u8>> {
@@ -1401,7 +1401,7 @@ fn extract_heap_id_offset_length(data: &[u8], off_bits: usize, len_bits: usize) 
 }
 
 fn resolve_managed_object(
-    reader: &RefCell<BufReader<std::fs::File>>,
+    reader: &Mutex<BufReader<std::fs::File>>,
     heap: &FractalHeapInfo,
     offset: u64,
     length: usize,
@@ -1418,7 +1418,7 @@ fn resolve_managed_object(
 }
 
 fn read_from_direct_block(
-    reader: &RefCell<BufReader<std::fs::File>>,
+    reader: &Mutex<BufReader<std::fs::File>>,
     block_addr: u64,
     _heap: &FractalHeapInfo,
     local_offset: u64,
@@ -1438,7 +1438,7 @@ fn read_from_direct_block(
 }
 
 fn read_from_indirect_block(
-    reader: &RefCell<BufReader<std::fs::File>>,
+    reader: &Mutex<BufReader<std::fs::File>>,
     block_addr: u64,
     heap: &FractalHeapInfo,
     offset: u64,
@@ -1550,7 +1550,7 @@ fn indirect_block_capacity(heap: &FractalHeapInfo, nrows: usize) -> u64 {
 // ---------------------------------------------------------------------------
 
 fn enumerate_btree_v2(
-    reader: &RefCell<BufReader<std::fs::File>>,
+    reader: &Mutex<BufReader<std::fs::File>>,
     addr: u64,
 ) -> WrfResult<Vec<Vec<u8>>> {
     let sig = read_bytes(reader, addr, 4)?;
@@ -1581,7 +1581,7 @@ fn enumerate_btree_v2(
 }
 
 fn enumerate_btree_v2_node(
-    reader: &RefCell<BufReader<std::fs::File>>,
+    reader: &Mutex<BufReader<std::fs::File>>,
     addr: u64,
     depth: u16,
     record_type: u8,

@@ -29,7 +29,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist -i python3.10 python3.11 python3.12 python3.13 --cargo-extra-args="--no-default-features --features pure-rust-reader"
+          args: --release --out dist -i python3.10 python3.11 python3.12 python3.13
           manylinux: auto
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -56,7 +56,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist -i python3.10 python3.11 python3.12 python3.13 --cargo-extra-args="--no-default-features --features pure-rust-reader"
+          args: --release --out dist -i python3.10 python3.11 python3.12 python3.13
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -77,7 +77,7 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          args: --release --out dist -i python3.10 python3.11 python3.12 python3.13 --cargo-extra-args="--no-default-features --features pure-rust-reader"
+          args: --release --out dist -i python3.10 python3.11 python3.12 python3.13
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
