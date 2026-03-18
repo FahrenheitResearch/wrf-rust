@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "wrf-rust"
-version = "0.2.20"
+version = "0.2.21"
 description = "Rust-powered WRF post-processing — fixes CAPE, SRH, adds 65+ variables, 5-30x faster than wrf-python"
 requires-python = ">=3.10"
 license = {text = "MIT"}

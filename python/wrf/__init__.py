@@ -61,7 +61,7 @@ __all__ = [
     "latlon_coords",
     "ll_to_xy",
 ]
-__version__ = "0.2.20"
+__version__ = "0.2.21"
 
 # ── Optional plotting imports (require matplotlib) ──
 try:
@@ -195,6 +195,8 @@ def getvar(
     layer_type=None,
     use_virtual=None,
     lake_interp=None,
+    use_varint=None,
+    use_liqskin=None,
     squeeze=True,
 ):
     """Compute a diagnostic variable from a WRF file.
@@ -239,6 +241,12 @@ def getvar(
         ``"fixed"`` (default) or ``"effective"`` for STP, SRH.
     use_virtual : bool, optional
         If True, use virtual temperature for lapse rate computation.
+    use_varint : bool, optional
+        If True, use variable intercept parameters (Thompson microphysics)
+        for reflectivity. Default False matches wrf-python.
+    use_liqskin : bool, optional
+        If True, use bright-band liquid-skin correction for reflectivity.
+        Default False matches wrf-python.
     squeeze : bool
         If True (default), remove length-1 leading dimensions.
 
@@ -265,6 +273,8 @@ def getvar(
         layer_type=layer_type,
         use_virtual=use_virtual,
         lake_interp=lake_interp,
+        use_varint=use_varint,
+        use_liqskin=use_liqskin,
     )
 
     if timeidx is ALL_TIMES:

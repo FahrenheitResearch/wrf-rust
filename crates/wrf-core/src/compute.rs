@@ -36,6 +36,12 @@ pub struct ComputeOpts {
     /// 0 or None = disabled. Typical value: 1000.
     /// Removes lake artifacts in T2/Q2 that corrupt CAPE, STP, etc.
     pub lake_interp: Option<f64>,
+    /// Use variable intercept parameters (Thompson microphysics) for DBZ.
+    /// Default (None/false) = constant intercepts matching wrf-python defaults.
+    pub use_varint: Option<bool>,
+    /// Use liquid-skin bright-band correction for DBZ.
+    /// Default (None/false) = no correction, matching wrf-python defaults.
+    pub use_liqskin: Option<bool>,
 }
 
 /// The result of computing a WRF variable.

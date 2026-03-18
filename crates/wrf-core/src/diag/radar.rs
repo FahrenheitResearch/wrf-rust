@@ -43,12 +43,14 @@ const RON_CONST2R: f64 = (RON2 + RON_MIN) * 0.5;
 
 /// Simulated reflectivity (dBZ). `[nz, ny, nx]`
 ///
-/// Matches wrf-python's `CALCDBZ` from `wrf_user_dbz.f90` with constant
-/// intercept parameters (ivarint=0) and bright-band correction (iliqskin=1).
+/// Matches wrf-python's `CALCDBZ` from `wrf_user_dbz.f90`.
+/// Defaults: constant intercepts (ivarint=0), no bright-band (iliqskin=0).
+/// Set `opts.use_varint=true` for Thompson variable intercepts.
+/// Set `opts.use_liqskin=true` for bright-band correction.
 ///
 /// When QSNOW is not present in the file (sn0=0 behavior), rain mixing
 /// ratio is reassigned to snow below freezing.
-pub fn compute_dbz(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+pub fn compute_dbz(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let tk = f.temperature(t)?;
     let pres = f.full_pressure(t)?;
     let qv = f.qvapor(t)?;
@@ -70,12 +72,14 @@ pub fn compute_dbz(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<
     let factor_g =
         GAMMA_SEVEN * 1.0e18 * (1.0 / (PI * RHO_G)).powf(1.75) * (RHO_G / RHOWAT).powi(2) * ALPHA;
 
-    // Bright-band: above freezing, snow and graupel drop ALPHA
+    // Match wrf-python defaults: ivarint=0 (constant intercepts),
+    // iliqskin=0 (no bright-band correction).
+    let ivarint = opts.use_varint.unwrap_or(false);
+    let iliqskin = opts.use_liqskin.unwrap_or(false);
+
+    // Bright-band factors (only used when iliqskin=true)
     let factorb_s = factor_s / ALPHA;
     let factorb_g = factor_g / ALPHA;
-
-    // Use variable intercepts (ivarint=1) for Thompson microphysics
-    let ivarint = true;
 
     let n = f.nxyz();
 
@@ -101,10 +105,13 @@ pub fn compute_dbz(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<
                 qra = 0.0;
             }
 
-            // Bright-band correction (iliqskin=1): use factorb (no ALPHA)
-            // when above freezing, otherwise use factor (with ALPHA)
-            let fs = if t_k > CELKEL { factorb_s } else { factor_s };
-            let fg = if t_k > CELKEL { factorb_g } else { factor_g };
+            // Bright-band correction (iliqskin): above freezing, frozen
+            // particles scatter as liquid (drop ALPHA factor).
+            let (fs, fg) = if iliqskin && t_k > CELKEL {
+                (factorb_s, factorb_g)
+            } else {
+                (factor_s, factor_g)
+            };
 
             // Variable intercept parameters (Thompson microphysics)
             let (ronv, sonv, gonv) = if ivarint {
