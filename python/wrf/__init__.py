@@ -16,7 +16,7 @@ Usage:
     # All timesteps at once
     slp = getvar(f, "slp", timeidx=ALL_TIMES, units="hPa")
 
-    # Works with netCDF4.Dataset too (auto-wraps it)
+    # Works with netCDF4.Dataset too (auto-wraps by reopening the filepath)
     from netCDF4 import Dataset
     nc = Dataset("wrfout_d01_2024-01-01_00:00:00")
     temp = getvar(nc, "temp", timeidx=0)
@@ -24,6 +24,7 @@ Usage:
 
 import os
 import sys
+import warnings
 
 import numpy as np
 
@@ -94,6 +95,25 @@ def __getattr__(name):
 
 # Sentinel for "all time steps"
 ALL_TIMES = None
+_WARNED_DATASET_REOPEN = False
+
+
+def _warn_dataset_reopen():
+    """Warn once when a dataset-like object will be reopened by path."""
+    global _WARNED_DATASET_REOPEN
+    if _WARNED_DATASET_REOPEN or sys.platform != "win32":
+        return
+
+    warnings.warn(
+        "wrf-rust reopens netCDF4/xarray dataset inputs by filepath instead "
+        "of reading through the existing dataset handle. On Windows this can "
+        "hang if the source dataset is still open while wrf-rust reads the "
+        "same file, especially in subprocesses. Close the dataset first, or "
+        "pass a file path / WrfFile instead.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+    _WARNED_DATASET_REOPEN = True
 
 
 class WrfFile:
@@ -102,6 +122,10 @@ class WrfFile:
     Can be constructed from a file path or from an existing
     ``netCDF4.Dataset`` (the Dataset's filepath is re-opened by the
     Rust backend for zero-copy performance).
+
+    On Windows, avoid passing a live ``netCDF4.Dataset`` into wrf-rust
+    while that Dataset remains open on the same file. wrf-rust will
+    reopen the path natively, which can block in subprocesses.
 
     Attributes:
         nx, ny, nz, nt: Grid dimensions.
@@ -115,12 +139,14 @@ class WrfFile:
             self._inner = _WrfFile(path_or_dataset)
         elif hasattr(path_or_dataset, "filepath"):
             # netCDF4.Dataset -- extract the file path and open natively
+            _warn_dataset_reopen()
             fp = path_or_dataset.filepath()
             self._inner = _WrfFile(fp)
         elif hasattr(path_or_dataset, "encoding") and "source" in getattr(
             path_or_dataset, "encoding", {}
         ):
             # xarray.Dataset
+            _warn_dataset_reopen()
             self._inner = _WrfFile(path_or_dataset.encoding["source"])
         else:
             # Last resort: try treating it as a path

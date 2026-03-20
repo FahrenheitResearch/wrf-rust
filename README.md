@@ -67,6 +67,11 @@ from netCDF4 import Dataset
 slp = getvar(Dataset("wrfout_d01..."), "slp")
 ```
 
+Note: dataset inputs are reopened by filepath under the hood. On Windows,
+do not keep a `netCDF4.Dataset` open while calling wrf-rust on that same
+file, especially in subprocesses. Close the dataset first or pass a file
+path / `WrfFile` instead.
+
 ## Plotting
 
 ```python
