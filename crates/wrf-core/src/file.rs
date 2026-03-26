@@ -317,25 +317,9 @@ impl WrfFile {
 
     /// Read a raw variable for a single time step.
     /// Returns data with the Time dimension removed.
+    /// Only reads the bytes for the requested timestep (not the whole variable).
     pub fn read_var(&self, name: &str, t: usize) -> WrfResult<Vec<f64>> {
-        let shape = self.hdf5.dataset_shape(name)?;
-        let all = self.hdf5.read_f64(name)?;
-
-        if shape.len() >= 2 {
-            // First dimension is Time -- slice out time index `t`.
-            let time_stride: usize = shape[1..].iter().product();
-            let start = t * time_stride;
-            let end = start + time_stride;
-            if end > all.len() {
-                return Err(WrfError::DimMismatch(format!(
-                    "time index {t} out of range for variable '{name}' (shape {shape:?})"
-                )));
-            }
-            Ok(all[start..end].to_vec())
-        } else {
-            // Scalar or 1-D -- return as-is.
-            Ok(all)
-        }
+        self.hdf5.read_f64_slice(name, t)
     }
 
     /// Check if a variable exists in the file.

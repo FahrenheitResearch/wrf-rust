@@ -531,6 +531,44 @@ impl PureRustFile {
         Ok(out)
     }
 
+    /// Read a single time-slice of a dataset as `Vec<f64>`.
+    ///
+    /// Only reads the bytes needed for the given time index, dramatically
+    /// reducing peak memory for multi-timestep files.  Falls back to a full
+    /// read for scalar / 1-D data (no time dimension).
+    pub fn read_f64_slice(&self, name: &str, time_index: usize) -> WrfResult<Vec<f64>> {
+        let info = self.get_dataset_info(name)?;
+
+        // Scalar or 1-D: no time dimension to slice
+        if info.shape.len() < 2 {
+            return self.read_f64(name);
+        }
+        if time_index >= info.shape[0] {
+            return Err(hdf5_err(format!(
+                "time_index {} out of range for shape {:?}",
+                time_index, info.shape
+            )));
+        }
+
+        let raw = self.read_raw_data_slice(&info, time_index)?;
+        let out = match info.dtype {
+            DType::F32 => raw
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes(c.try_into().unwrap()) as f64)
+                .collect(),
+            DType::F64 => raw
+                .chunks_exact(8)
+                .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+                .collect(),
+            DType::I32 => raw
+                .chunks_exact(4)
+                .map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f64)
+                .collect(),
+            DType::U8 => raw.iter().map(|&b| b as f64).collect(),
+        };
+        Ok(out)
+    }
+
     /// Read a dataset as raw bytes (useful for U8/char data like Times).
     pub fn read_u8(&self, name: &str) -> WrfResult<Vec<u8>> {
         let info = self.get_dataset_info(name)?;
@@ -822,6 +860,101 @@ impl PureRustFile {
                 )
             }
         }
+    }
+
+    /// Read only the bytes for a single time-slice (first dimension).
+    fn read_raw_data_slice(
+        &self,
+        info: &DatasetInfo,
+        time_index: usize,
+    ) -> WrfResult<Vec<u8>> {
+        let elem_size = info.dtype.size();
+        let time_stride: usize = info.shape[1..].iter().product();
+        let slice_bytes = time_stride * elem_size;
+
+        match &info.layout {
+            Layout::Contiguous { addr, size } => {
+                if *addr == UNDEF_ADDR || *size == 0 {
+                    return Ok(Vec::new());
+                }
+                let offset = *addr + (time_index * slice_bytes) as u64;
+                read_bytes(&self.reader, offset, slice_bytes)
+            }
+            Layout::Chunked { addr, chunk_dims, ndims } => {
+                if *addr == UNDEF_ADDR {
+                    return Ok(Vec::new());
+                }
+                self.read_chunked_data_slice(
+                    *addr, &info.shape, chunk_dims, *ndims,
+                    &info.dtype, &info.filters, time_index,
+                )
+            }
+        }
+    }
+
+    /// Read chunked data for a single time-slice only.
+    fn read_chunked_data_slice(
+        &self,
+        btree_addr: u64,
+        shape: &[usize],
+        chunk_dims: &[u32],
+        ndims: u8,
+        dtype: &DType,
+        filters: &[Filter],
+        time_index: usize,
+    ) -> WrfResult<Vec<u8>> {
+        let elem_size = dtype.size();
+        let slice_shape: Vec<usize> = shape[1..].to_vec();
+        let slice_elems: usize = slice_shape.iter().product();
+        let slice_bytes = slice_elems * elem_size;
+        let mut output = vec![0u8; slice_bytes];
+
+        let chunk_shape: Vec<usize> = chunk_dims.iter().map(|&d| d as usize).collect();
+        let chunk_elems: usize = chunk_shape.iter().product();
+        let chunk_bytes = chunk_elems * elem_size;
+        let chunk_time_size = chunk_shape[0];
+
+        let mut chunks: Vec<(Vec<u64>, u64, u32, u32)> = Vec::new();
+        self.collect_btree_v1_chunks(btree_addr, ndims, &mut chunks)?;
+
+        for (offsets, chunk_addr, compressed_size, filter_mask) in &chunks {
+            if *chunk_addr == UNDEF_ADDR {
+                continue;
+            }
+
+            // Filter: only read chunks whose time range includes time_index
+            let ndim = shape.len();
+            let chunk_time_start = offsets[0] as usize;
+            if time_index < chunk_time_start
+                || time_index >= chunk_time_start + chunk_time_size
+            {
+                continue;
+            }
+
+            let compressed =
+                read_bytes(&self.reader, *chunk_addr, *compressed_size as usize)?;
+
+            let decompressed = if *filter_mask == 0 && !filters.is_empty() {
+                decompress_chunk(&compressed, filters, chunk_bytes)?
+            } else {
+                compressed
+            };
+
+            let chunk_offsets: Vec<usize> =
+                offsets.iter().take(ndim).map(|&o| o as usize).collect();
+
+            copy_chunk_to_output_slice(
+                &decompressed,
+                &mut output,
+                shape,
+                &chunk_shape,
+                &chunk_offsets,
+                elem_size,
+                time_index,
+            );
+        }
+
+        Ok(output)
     }
 
     fn read_chunked_data(
@@ -2232,6 +2365,85 @@ fn copy_chunk_to_output(
 
         if in_bounds {
             let src_start = i * elem_size;
+            let dst_start = out_linear * elem_size;
+            if src_start + elem_size <= chunk_data.len()
+                && dst_start + elem_size <= output.len()
+            {
+                output[dst_start..dst_start + elem_size]
+                    .copy_from_slice(&chunk_data[src_start..src_start + elem_size]);
+            }
+        }
+    }
+}
+
+/// Copy a single time-slice from a decompressed chunk into the output buffer.
+///
+/// `shape` is the full dataset shape `[T, nz, ny, nx]`.
+/// `output` has the spatial shape `shape[1..]` (time dimension removed).
+fn copy_chunk_to_output_slice(
+    chunk_data: &[u8],
+    output: &mut [u8],
+    shape: &[usize],
+    chunk_shape: &[usize],
+    chunk_offsets: &[usize],
+    elem_size: usize,
+    time_index: usize,
+) {
+    let ndim = shape.len();
+    if ndim < 2 { return; }
+
+    let spatial_ndim = ndim - 1; // dimensions after time
+    let local_time = time_index - chunk_offsets[0];
+
+    // Strides for the output (spatial dimensions only, shape[1..])
+    let out_shape = &shape[1..];
+    let mut out_strides = vec![1usize; spatial_ndim];
+    for d in (0..spatial_ndim - 1).rev() {
+        out_strides[d] = out_strides[d + 1] * out_shape[d + 1];
+    }
+
+    // Strides for the chunk (all dimensions including time)
+    let mut chunk_strides = vec![1usize; ndim];
+    for d in (0..ndim - 1).rev() {
+        chunk_strides[d] = chunk_strides[d + 1] * chunk_shape[d + 1];
+    }
+
+    // Iterate over spatial elements in the chunk (dimensions 1..ndim)
+    let spatial_chunk_shape = &chunk_shape[1..];
+    let spatial_total: usize = spatial_chunk_shape.iter().product();
+    let mut indices = vec![0usize; spatial_ndim];
+
+    // Strides for spatial dimensions of the chunk
+    let mut spatial_chunk_strides = vec![1usize; spatial_ndim];
+    for d in (0..spatial_ndim - 1).rev() {
+        spatial_chunk_strides[d] =
+            spatial_chunk_strides[d + 1] * spatial_chunk_shape[d + 1];
+    }
+
+    for i in 0..spatial_total {
+        // Multi-dimensional index within spatial chunk dims
+        let mut rem = i;
+        for d in 0..spatial_ndim {
+            indices[d] = rem / spatial_chunk_strides[d];
+            rem %= spatial_chunk_strides[d];
+        }
+
+        // Bounds check: global spatial index must be within shape
+        let mut in_bounds = true;
+        let mut out_linear = 0usize;
+        for d in 0..spatial_ndim {
+            let global = chunk_offsets[d + 1] + indices[d];
+            if global >= out_shape[d] {
+                in_bounds = false;
+                break;
+            }
+            out_linear += global * out_strides[d];
+        }
+
+        if in_bounds {
+            // Source index in chunk: local_time * time_stride + spatial offset
+            let src_idx = local_time * chunk_strides[0] + i;
+            let src_start = src_idx * elem_size;
             let dst_start = out_linear * elem_size;
             if src_start + elem_size <= chunk_data.len()
                 && dst_start + elem_size <= output.len()
