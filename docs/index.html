@@ -39,18 +39,25 @@
               This guide is written for weather-community users, especially people on
               Windows with gaming-PC specs who want a practical convection-allowing
               setup, good forcing options, realistic domain sizes, and a real escape
-              route when the model, WPS, or WSL starts acting hostile.
+              route when the model, WPS, or WSL starts acting hostile. You can follow
+              it manually from top to bottom or use the optional Codex skill as a
+              copilot.
             </p>
 
             <div class="button-row">
-              <button class="button primary" data-jump="#skill">Install the Codex skill</button>
-              <button class="button secondary" data-jump="#start">Take the stable first path</button>
+              <button class="button primary" data-jump="#start">Start manually</button>
+              <button class="button primary" data-jump="#skill">Use Codex as copilot</button>
+              <button class="button secondary" data-jump="#paths">Choose your path</button>
               <button class="button secondary" data-jump="#data">Pick init data</button>
               <button class="button secondary" data-jump="#troubleshooting">Troubleshoot now</button>
             </div>
           </div>
 
           <div class="hero-callouts">
+            <div class="callout">
+              <h3>No AI required</h3>
+              <p>The manual path is first-class. Codex is optional and should speed up the same workflow, not replace it.</p>
+            </div>
             <div class="callout">
               <h3>Recommended first win</h3>
               <p>Single-domain 3 km, CPU-first, around 200 to 250 grid points each direction, short sanity run, then scale up.</p>
@@ -71,8 +78,9 @@
         <aside class="rail">
           <h2>Guide Map</h2>
           <nav>
-            <a href="#skill">Codex skill</a>
-            <a href="#start">Stable first path</a>
+            <a href="#paths">Choose your path</a>
+            <a href="#start">Stable manual path</a>
+            <a href="#skill">Optional Codex skill</a>
             <a href="#calculator">Hardware and WSL sizing</a>
             <a href="#wsl">Windows and WSL 2</a>
             <a href="#build">Build WRF and WPS</a>
@@ -86,45 +94,63 @@
             <a href="#sources">Sources</a>
           </nav>
           <div class="rail-note">
-            This guide is intentionally opinionated. It pushes the boring path first because the boring path is how most people actually get a forecast out.
+            This guide is intentionally opinionated. It is designed to work without AI,
+            and the Codex path is there to accelerate the same boring, stable workflow
+            instead of inventing a separate one.
           </div>
         </aside>
 
         <main class="content">
-          <section class="section" id="skill">
+          <section class="section" id="paths">
             <div class="section-header">
               <div>
-                <p class="eyebrow">Step 0</p>
-                <h2>Install the Codex skill first</h2>
+                <p class="eyebrow">Entry Point</p>
+                <h2>Choose your path</h2>
               </div>
             </div>
             <p class="lede">
-              The repo includes a dedicated skill so Codex can walk users through WSL,
-              WRF/WPS setup, domain sizing, data-source choice, and failure triage
-              without re-deriving the whole workflow every time.
+              This guide is fully usable without AI. The manual route and the
+              Codex-assisted route both land on the same WSL, build, init-data,
+              run-order, and troubleshooting sections below.
             </p>
 
             <div class="grid-2">
               <div class="card">
-                <h3>Skill path</h3>
+                <h3>Do it manually</h3>
+                <p>
+                  Use the page itself as the workflow. Follow the stable first path,
+                  size WSL correctly, build CPU WRF first, choose your forcing, run a
+                  short sanity case, then branch into troubleshooting only if needed.
+                </p>
+                <ol class="checklist">
+                  <li>Best for users who want plain instructions and commands.</li>
+                  <li>Best for Discord handholding where you want everyone reading the same page.</li>
+                  <li>No Codex install, prompts, or AI dependency required.</li>
+                </ol>
+                <div class="button-row">
+                  <button class="button primary" data-jump="#start">Take the manual path</button>
+                </div>
+              </div>
+              <div class="card">
+                <h3>Use Codex as copilot</h3>
                 <p class="small">
                   <span class="mono">skills/wrf-community-onboarding</span>
                 </p>
                 <p>
-                  It is self-contained and ships with reference files for Windows + WSL,
-                  hardware tiers, build order, init-data choices, GPU warnings, and a
-                  branching troubleshooting guide.
+                  Use this if you want Codex to walk a user through the same workflow,
+                  help size hardware, explain forcing choices, and branch through common
+                  WRF and WSL failure cases.
                 </p>
-              </div>
-              <div class="card">
-                <h3>Manual install</h3>
                 <pre class="shell"><code>mkdir -p ~/.codex/skills
 cp -R skills/wrf-community-onboarding ~/.codex/skills/</code></pre>
                 <p>
-                  After that, tell Codex you want to use the
-                  <span class="mono">wrf-community-onboarding</span> skill when you ask for
-                  WRF setup or troubleshooting help.
+                  After that, tell Codex to use the
+                  <span class="mono">wrf-community-onboarding</span> skill for WRF setup or
+                  troubleshooting help.
                 </p>
+                <div class="button-row">
+                  <button class="button primary" data-jump="#skill">Open the Codex path</button>
+                </div>
               </div>
             </div>
           </section>
@@ -132,8 +158,8 @@ cp -R skills/wrf-community-onboarding ~/.codex/skills/</code></pre>
           <section class="section" id="start">
             <div class="section-header">
               <div>
-                <p class="eyebrow">Stable Path</p>
-                <h2>If this is your first run, do this exact path</h2>
+                <p class="eyebrow">Manual Path</p>
+                <h2>If this is your first run, do this exact manual path</h2>
               </div>
             </div>
             <ol class="checklist">
@@ -168,6 +194,45 @@ cp -R skills/wrf-community-onboarding ~/.codex/skills/</code></pre>
                 <p>
                   Domain ambition grows faster than confidence. A short working run teaches
                   more than a giant dead run with three broken stages.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="skill">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Optional</p>
+                <h2>Use the Codex skill as a copilot, not a prerequisite</h2>
+              </div>
+            </div>
+            <p class="lede">
+              The repo includes a dedicated skill so Codex can guide users through WSL,
+              WRF/WPS setup, domain sizing, data-source choice, and failure triage
+              without re-deriving the whole workflow every time. It should reinforce the
+              manual path above, not replace it.
+            </p>
+
+            <div class="grid-2">
+              <div class="card">
+                <h3>What the skill covers</h3>
+                <p class="small">
+                  <span class="mono">skills/wrf-community-onboarding</span>
+                </p>
+                <p>
+                  It is self-contained and ships with reference files for Windows + WSL,
+                  hardware tiers, build order, init-data choices, GPU warnings, and a
+                  branching troubleshooting guide.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Install the optional skill</h3>
+                <pre class="shell"><code>mkdir -p ~/.codex/skills
+cp -R skills/wrf-community-onboarding ~/.codex/skills/</code></pre>
+                <p>
+                  Tell Codex to use the
+                  <span class="mono">wrf-community-onboarding</span> skill when you want
+                  help with setup, sizing, data choice, or issue triage.
                 </p>
               </div>
             </div>
