@@ -83,6 +83,7 @@
             <a href="#calculator">Hardware and WSL sizing</a>
             <a href="#wsl">Windows and WSL 2</a>
             <a href="#build">Build WRF and WPS</a>
+            <a href="#starter-files">Starter files</a>
             <a href="#data">Initialization data</a>
             <a href="#sizing">3 km domain sizing</a>
             <a href="#run">Run order</a>
@@ -479,6 +480,56 @@ export WRF_DIR=/path/to/WRF
                   that and jump straight to GRIB input.
                 </p>
               </div>
+            </div>
+          </section>
+
+          <section class="section" id="starter-files">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Starter Pack</p>
+                <h2>Use the proven file patterns, not random Discord pastebins</h2>
+              </div>
+            </div>
+
+            <p class="lede">
+              The repo now includes a starter file pack built from two things: a locally
+              verified single-domain `3 km` CPU baseline, and a community member's
+              durable ECMWF/open-data workflow patterns. The point is to reuse the good
+              structure without pretending one exact case file is universal.
+            </p>
+
+            <div class="grid-3">
+              <div class="card">
+                <h3><a href="./starter-files/namelist.wps.ecmwf-starter">namelist.wps.ecmwf-starter</a></h3>
+                <p>
+                  Single-domain `3 km` WPS starter with the community split-prefix
+                  `metgrid` pattern for pressure, surface, and soil streams.
+                </p>
+              </div>
+              <div class="card">
+                <h3><a href="./starter-files/namelist.input.ecmwf-starter">namelist.input.ecmwf-starter</a></h3>
+                <p>
+                  Single-domain `3 km` convection-allowing example with community-style
+                  severe-weather physics and conservative CPU-first sizing.
+                </p>
+              </div>
+              <div class="card">
+                <h3><a href="./starter-files/Vtable.ECMWF_opendata">Vtable.ECMWF_opendata</a></h3>
+                <p>
+                  Custom `ungrib.exe` table for ECMWF open-data GRIB fields. This is one
+                  of the highest-value community files because the wrong `Vtable` can
+                  quietly wreck the whole prep chain.
+                </p>
+              </div>
+            </div>
+
+            <div class="notice">
+              <p>
+                Read <a href="./starter-files/README.md">the starter-files README</a>
+                before using them. Edit the dates, domain center, geog path, and
+                `num_metgrid_*` counts first. These files are a strong starting point,
+                not a promise that your case can skip thinking.
+              </p>
             </div>
           </section>
 

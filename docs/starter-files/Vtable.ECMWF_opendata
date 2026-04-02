@@ -1,0 +1,35 @@
+GRIB1| Level| From |  To  | metgrid  | metgrid  | metgrid                                  |GRIB2|GRIB2|GRIB2|GRIB2|
+Param| Type |Level1|Level2| Name     | Units    | Description                              |Discp|Catgy|Param|Level|
+-----+------+------+------+----------+----------+------------------------------------------+-----------------------+
+ 156 | 100  |   *  |      | HGT      | m        | Height                                   |  0  |  3  |  5  | 100 |
+ 130 | 100  |   *  |      | TT       | K        | Temperature                              |  0  |  0  |  0  | 100 |
+ 131 | 100  |   *  |      | UU       | m s-1    | U                                        |  0  |  2  |  2  | 100 |
+ 132 | 100  |   *  |      | VV       | m s-1    | V                                        |  0  |  2  |  3  | 100 |
+ 157 | 100  |   *  |      | RH       | %        | Relative Humidity                        |  0  |  1  |  1  | 100 |
+ 129 | 100  |   *  |      | HGT      | m        | Height                                   |  0  |  3  |  5  | 100 |
+ 165 | 103  |  10  |      | UU       | m s-1    | U at 10 m                                |  0  |  2  |  2  | 103 |
+ 166 | 103  |  10  |      | VV       | m s-1    | V at 10 m                                |  0  |  2  |  3  | 103 |
+ 167 | 103  |   2  |      | TT       | K        | Temperature at 2 m                       |  0  |  0  |  0  | 103 |
+ 168 | 103  |   2  |      | DEWPT    | K        | Dewpoint at 2 m                          |  0  |  0  |  6  | 103 |
+ 172 | 1    |   0  |      | LANDSEA  | 0/1 Flag | Land/Sea flag                            |  2  |  0  |  0  |  1  |
+ 134 | 1    |   0  |      | PSFC     | Pa       | Surface Pressure                         |  0  |  3  |  0  |  1  |
+ 151 | 101  |   0  |      | PMSL     | Pa       | Sea-level Pressure                       |  0  |  3  |  0  | 101 |
+ 235 | 1    |   0  |      | SKINTEMP | K        | Skin temperature                         |  0  |  0  | 17  |  1  |
+ 129 | 1    |   0  |      | HGT_SFC  | m        | Surface Geopotential                     |  0  |  3  |  5  |  1  |
+ 139 | 112  |   0  |   7  | ST000007 | K        | T of 0-7 cm ground layer                 |  2  |  0  |  2  | 106 |
+ 170 | 112  |   7  |  28  | ST007028 | K        | T of 7-28 cm ground layer                | 192 | 128 | 170 | 106 |
+ 183 | 112  |  28  | 100  | ST028100 | K        | T of 28-100 cm ground layer              | 192 | 128 | 183 | 106 |
+ 236 | 112  | 100  | 255  | ST100289 | K        | T of 100-289 cm ground layer             | 192 | 128 | 236 | 106 |
+  39 | 112  |   0  |   7  | SM000007 | fraction | Soil moisture of 0-7 cm ground layer     | 192 | 128 | 39  | 106 |
+  40 | 112  |   7  |  28  | SM007028 | fraction | Soil moisture of 7-28 cm ground layer    | 192 | 128 | 40  | 106 |
+  41 | 112  |  28  | 100  | SM028100 | fraction | Soil moisture of 28-100 cm ground layer  | 192 | 128 | 41  | 106 |
+  42 | 112  | 100  | 255  | SM100289 | fraction | Soil moisture of 100-289 cm ground layer | 192 | 128 | 42  | 106 |
+  0  |  1   |   0  |   7  | ST000007 | K        | T of 0-7 cm ground layer                 |  2  |  3  | 18  | 151 |
+  1  |  2   |   7  |  28  | ST007028 | K        | T of 7-28 cm ground layer                |  2  |  3  | 18  | 151 |
+  2  |  3   |  28  | 100  | ST028100 | K        | T of 28-100 cm ground layer              |  2  |  3  | 18  | 151 |
+  3  |  4   | 100  | 289  | ST100289 | K        | T of 100-289 cm ground layer             |  2  |  3  | 18  | 151 |
+  0  |  1   |   0  |   7  | SM000007 | fraction | Soil moisture of 0-7 cm ground layer     |  2  |  0  | 25  | 151 |
+  1  |  2   |   7  |  28  | SM007028 | fraction | Soil moisture of 7-28 cm ground layer    |  2  |  0  | 25  | 151 |
+  2  |  3   |  28  | 100  | SM028100 | fraction | Soil moisture of 28-100 cm ground layer  |  2  |  0  | 25  | 151 |
+  3  |  4   | 100  | 289  | SM100289 | fraction | Soil moisture of 100-289 cm ground layer |  2  |  0  | 25  | 151 |
+-----+------+------+------+----------+----------+------------------------------------------+-----+-----+-----+-----+

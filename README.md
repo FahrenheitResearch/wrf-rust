@@ -15,6 +15,7 @@ Pre-built wheels for Python 3.10-3.13 on Linux, macOS, and Windows. No Rust tool
 The repo now includes a full WRF community setup guide for Windows, WSL 2, real-data initialization, domain sizing, and troubleshooting:
 
 - Manual-first Pages guide: [docs/index.html](docs/index.html)
+- Starter files: [docs/starter-files/README.md](docs/starter-files/README.md)
 - Optional Codex skill: [skills/wrf-community-onboarding/SKILL.md](skills/wrf-community-onboarding/SKILL.md)
 
 ## Usage

@@ -79,6 +79,24 @@ Do not leave out the WPS geographical data.
 - The highest-resolution mandatory package is the normal default and is about `29 GB` uncompressed.
 - Point `geog_data_path` in `namelist.wps` at that directory before running `geogrid.exe`.
 
+## Starter files in this repo
+
+The repo ships a practical starter pack under `docs/starter-files/`.
+
+Useful files:
+
+- `namelist.wps.ecmwf-starter`
+- `namelist.input.ecmwf-starter`
+- `Vtable.ECMWF_opendata`
+
+Use them as a strong starting point, but still edit:
+
+- dates
+- domain center and projection
+- `geog_data_path`
+- `num_metgrid_levels`
+- `num_metgrid_soil_levels`
+
 ## Stable run sequence
 
 1. Set up geog data and `namelist.wps`

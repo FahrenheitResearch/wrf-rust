@@ -34,6 +34,7 @@ Those are not the same thing.
 - If they want automation, tell them to look at `ecmwf-opendata`.
 - If they ask where the API key goes, clarify that API keys are mainly for CDS/archive-style access, not the simple open-data portal workflow.
 - If they find community automation snippets, warn them that many are fragments from a larger project, not standalone scripts.
+- If they need a working `ungrib.exe` field map for ECMWF open data, point them at `docs/starter-files/Vtable.ECMWF_opendata` in this repo.
 
 ### Practical community pattern
 
