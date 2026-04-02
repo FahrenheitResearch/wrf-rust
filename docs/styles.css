@@ -459,6 +459,18 @@ input[type="number"] {
   font: inherit;
 }
 
+input[type="text"],
+input[type="datetime-local"],
+select {
+  width: 100%;
+  padding: 0.72rem 0.78rem;
+  border-radius: 12px;
+  border: 1px solid rgba(22, 19, 17, 0.14);
+  background: #fffdf9;
+  color: var(--ink);
+  font: inherit;
+}
+
 .calc-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -489,6 +501,140 @@ input[type="number"] {
 
 .wsl-config {
   margin-top: 1rem;
+}
+
+.preset-head,
+.copy-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  justify-content: space-between;
+  align-items: start;
+  margin-top: 1rem;
+}
+
+.preset-grid {
+  margin-top: 1rem;
+}
+
+.preset-card {
+  appearance: none;
+  width: 100%;
+  display: grid;
+  gap: 0.45rem;
+  padding: 1rem 1.05rem;
+  text-align: left;
+  border-radius: 18px;
+  border: 1px solid rgba(22, 19, 17, 0.08);
+  background: var(--panel-strong);
+  color: var(--ink);
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.preset-card:hover,
+.preset-card:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: 0 18px 35px rgba(22, 19, 17, 0.08);
+}
+
+.preset-card strong {
+  font-size: 1.05rem;
+}
+
+.preset-card span:last-child {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.preset-card.is-active {
+  border-color: rgba(20, 107, 100, 0.28);
+  background:
+    linear-gradient(160deg, rgba(20, 107, 100, 0.08), rgba(196, 137, 31, 0.05)),
+    var(--panel-strong);
+  box-shadow: 0 18px 35px rgba(20, 107, 100, 0.12);
+}
+
+.form-grid,
+.status-grid {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.field {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.field-span {
+  grid-column: 1 / -1;
+}
+
+.status-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.status-card {
+  border-left: 4px solid transparent;
+}
+
+.status-pass {
+  border-left-color: rgba(20, 107, 100, 0.48);
+}
+
+.status-warn {
+  border-left-color: rgba(196, 137, 31, 0.58);
+}
+
+.status-fail {
+  border-left-color: rgba(141, 47, 32, 0.58);
+}
+
+.status-tag.status-pass {
+  background: rgba(20, 107, 100, 0.08);
+  border-color: rgba(20, 107, 100, 0.16);
+  color: var(--teal);
+}
+
+.status-tag.status-warn {
+  background: rgba(196, 137, 31, 0.12);
+  border-color: rgba(196, 137, 31, 0.18);
+  color: #8f5b0d;
+}
+
+.status-tag.status-fail {
+  background: rgba(141, 47, 32, 0.1);
+  border-color: rgba(141, 47, 32, 0.14);
+  color: var(--danger);
+}
+
+.button-row.compact {
+  margin-top: 0;
+}
+
+.button-row.compact .button {
+  min-height: 40px;
+  padding: 0.56rem 0.9rem;
+}
+
+.validation-block + .validation-block {
+  margin-top: 1rem;
+}
+
+.validation-block h4 {
+  margin: 0 0 0.45rem;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--muted);
+}
+
+.is-hidden {
+  display: none !important;
 }
 
 .checklist {
@@ -668,7 +814,8 @@ details.branch[open] summary::before {
   .data-grid,
   .faq-grid,
   .stats-grid,
-  .calc-grid {
+  .calc-grid,
+  .status-grid {
     grid-template-columns: 1fr;
   }
 
@@ -700,6 +847,10 @@ details.branch[open] summary::before {
   }
 
   .calc-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .form-grid {
     grid-template-columns: 1fr;
   }
 

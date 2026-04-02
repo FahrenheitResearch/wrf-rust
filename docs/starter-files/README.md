@@ -2,6 +2,8 @@
 
 These files are the repo's practical starter pack for a single-domain, CPU-first, convection-allowing WRF workflow.
 
+The default ECMWF preset in the GitHub Pages wizard is designed to render these starter files exactly.
+
 They are based on:
 
 - a locally verified `3 km`, `200 x 200`, single-domain CPU baseline

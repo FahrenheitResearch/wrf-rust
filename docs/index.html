@@ -46,8 +46,8 @@
             <div class="button-row">
               <button class="button primary" data-jump="#start">Start manually</button>
               <button class="button primary" data-jump="#skill">Use Codex as copilot</button>
-              <button class="button secondary" data-jump="#paths">Choose your path</button>
-              <button class="button secondary" data-jump="#data">Pick init data</button>
+              <button class="button secondary" data-jump="#preflight">Run preflight</button>
+              <button class="button secondary" data-jump="#wizard">Open starter wizard</button>
               <button class="button secondary" data-jump="#troubleshooting">Troubleshoot now</button>
             </div>
           </div>
@@ -81,8 +81,10 @@
             <a href="#start">Stable manual path</a>
             <a href="#skill">Optional Codex skill</a>
             <a href="#calculator">Hardware and WSL sizing</a>
+            <a href="#preflight">Preflight checker</a>
             <a href="#wsl">Windows and WSL 2</a>
             <a href="#build">Build WRF and WPS</a>
+            <a href="#wizard">Starter wizard</a>
             <a href="#starter-files">Starter files</a>
             <a href="#data">Initialization data</a>
             <a href="#sizing">3 km domain sizing</a>
@@ -302,6 +304,191 @@ processors=12
 swap=16GB</code></pre>
                 </div>
               </div>
+
+              <div class="preset-head">
+                <div>
+                  <h3>Starter presets</h3>
+                  <p class="small">
+                    Click one to repopulate the calculator, the preflight checker,
+                    and the wizard below with a proven starting point.
+                  </p>
+                </div>
+                <p class="small" id="preset-summary">
+                  32 GB 3 km starter: the repo default for a short convection-allowing first run.
+                </p>
+              </div>
+
+              <div class="grid-3 preset-grid">
+                <button class="preset-card is-active" type="button" data-preset="learning-16">
+                  <span class="tag">16 GB</span>
+                  <strong>Learning preset</strong>
+                  <span>Small 3 km domain, short run, GFS fallback, fewer ways to hurt yourself.</span>
+                </button>
+                <button class="preset-card" type="button" data-preset="starter-32">
+                  <span class="tag">32 GB</span>
+                  <strong>3 km starter</strong>
+                  <span>The balanced default. ECMWF first, 200 x 200, short sanity run, manual-first.</span>
+                </button>
+                <button class="preset-card" type="button" data-preset="larger-64">
+                  <span class="tag">64 GB</span>
+                  <strong>Larger-domain preset</strong>
+                  <span>Broader 3 km single domain for users who already have real headroom.</span>
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="preflight">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Readiness</p>
+                <h2>Run the self-reported preflight before you burn time on a dead setup</h2>
+              </div>
+            </div>
+
+            <p class="lede">
+              This is intentionally honest. A GitHub Pages site cannot inspect your machine,
+              so this checker is questionnaire-driven. Treat it like a launch checklist:
+              answer it honestly, then fix the blockers it surfaces before you compile or stage data.
+            </p>
+
+            <div class="notice">
+              <p>
+                Expected first-time result: <strong>Build next</strong> or
+                <strong>Needs work</strong>. That is normal. The point is to find the
+                cheap fixes before WRF makes them expensive.
+              </p>
+            </div>
+
+            <div class="grid-2">
+              <div class="calc-panel">
+                <h3>Checklist inputs</h3>
+                <div class="form-grid">
+                  <label class="field">
+                    <span class="field-label">Platform</span>
+                    <select id="pf-platform">
+                      <option value="windows">Windows + WSL</option>
+                      <option value="linux">Linux</option>
+                    </select>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Free disk in GB</span>
+                    <input id="pf-disk" type="number" min="20" max="4000" step="10" value="200">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Workspace location</span>
+                    <select id="pf-workspace">
+                      <option value="linux-home">Linux filesystem under /home</option>
+                      <option value="windows-drive">Windows-mounted path under /mnt/c</option>
+                    </select>
+                  </label>
+
+                  <label class="field windows-only">
+                    <span class="field-label">WSL installed</span>
+                    <select id="pf-has-wsl">
+                      <option value="yes">Yes</option>
+                      <option value="no">No</option>
+                    </select>
+                  </label>
+
+                  <label class="field windows-only">
+                    <span class="field-label">WSL version</span>
+                    <select id="pf-wsl-version">
+                      <option value="2">WSL 2</option>
+                      <option value="1">WSL 1</option>
+                    </select>
+                  </label>
+
+                  <label class="field windows-only">
+                    <span class="field-label">Virtualization ready</span>
+                    <select id="pf-has-virt">
+                      <option value="yes">Yes</option>
+                      <option value="no">No</option>
+                    </select>
+                  </label>
+
+                  <label class="field windows-only">
+                    <span class="field-label">Custom .wslconfig applied</span>
+                    <select id="pf-wsl-config">
+                      <option value="yes">Yes</option>
+                      <option value="no">No</option>
+                    </select>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">WRF built</span>
+                    <select id="pf-has-wrf">
+                      <option value="no">No</option>
+                      <option value="yes">Yes</option>
+                    </select>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">WPS built</span>
+                    <select id="pf-has-wps">
+                      <option value="no">No</option>
+                      <option value="yes">Yes</option>
+                    </select>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">WPS geog downloaded</span>
+                    <select id="pf-has-geog">
+                      <option value="no">No</option>
+                      <option value="yes">Yes</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+
+              <div class="details-stack">
+                <div class="card">
+                  <div class="tag-row">
+                    <span class="tag status-tag status-warn" id="preflight-badge">Build next</span>
+                  </div>
+                  <h3>Readiness result</h3>
+                  <p id="preflight-summary">
+                    The platform looks sane enough. Finish the missing prep stages before you try a real case.
+                  </p>
+                </div>
+                <div class="status-grid" id="preflight-status-grid"></div>
+              </div>
+            </div>
+
+            <div class="grid-2">
+              <div class="card" id="preflight-config-card">
+                <div class="copy-head">
+                  <h3>Generated <span class="mono">.wslconfig</span></h3>
+                  <div class="button-row compact">
+                    <button class="button secondary" id="copy-wsl" type="button">Copy</button>
+                  </div>
+                </div>
+                <pre class="shell"><code id="preflight-wsl-config">[wsl2]
+memory=24GB
+processors=12
+swap=16GB</code></pre>
+              </div>
+              <div class="card">
+                <div class="copy-head">
+                  <h3>Discord help template</h3>
+                  <div class="button-row compact">
+                    <button class="button secondary" id="copy-support" type="button">Copy</button>
+                  </div>
+                </div>
+                <pre class="shell"><code id="support-template">OS: Windows + WSL 2
+Host RAM: 32 GB
+Free disk: 200 GB
+Workspace: /home/&lt;user&gt; Linux filesystem
+Source: ECMWF open data
+Target domain: 200 x 200 at 3 km
+WRF built: no
+WPS built: no
+WPS geog present: no
+Last successful step:
+Exact error:</code></pre>
+              </div>
             </div>
           </section>
 
@@ -503,6 +690,159 @@ export WRF_DIR=/path/to/WRF
             </div>
           </section>
 
+          <section class="section" id="wizard">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Generator</p>
+                <h2>Use the starter wizard to generate a sane first case</h2>
+              </div>
+            </div>
+
+            <p class="lede">
+              This wizard is deliberately narrow. It only targets the same single-domain,
+              CPU-first, convection-allowing `3 km` baseline the rest of this guide recommends.
+              The point is to remove decisions, not invent a thousand knobs.
+            </p>
+
+            <div class="notice">
+              <p>
+                The default ECMWF preset here is designed to match the repo starter pack
+                exactly. If you change source, domain size, or `num_metgrid_*`, the output
+                becomes your custom case and you should treat it that way.
+              </p>
+            </div>
+
+            <div class="grid-2">
+              <div class="calc-panel">
+                <h3>Case inputs</h3>
+                <div class="form-grid">
+                  <label class="field">
+                    <span class="field-label">Initialization source</span>
+                    <select id="wiz-source"></select>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Start time in UTC</span>
+                    <input id="wiz-start-utc" type="datetime-local" value="2026-04-03T00:00">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Run length in hours</span>
+                    <input id="wiz-run-hours" type="number" min="1" max="72" step="1" value="6">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">History interval in minutes</span>
+                    <input id="wiz-history-minutes" type="number" min="15" max="180" step="15" value="60">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">e_we</span>
+                    <input id="wiz-e-we" type="number" min="80" max="480" step="10" value="200">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">e_sn</span>
+                    <input id="wiz-e-sn" type="number" min="80" max="480" step="10" value="200">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Center latitude</span>
+                    <input id="wiz-center-lat" type="number" min="-60" max="60" step="0.1" value="35">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Center longitude</span>
+                    <input id="wiz-center-lon" type="number" min="-180" max="180" step="0.1" value="-97">
+                  </label>
+
+                  <label class="field field-span">
+                    <span class="field-label">WPS geog_data_path</span>
+                    <input id="wiz-geog-data-path" type="text" value="/home/YOUR_USER/WPS_GEOG">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">num_metgrid_levels</span>
+                    <input id="wiz-num-metgrid-levels" type="number" min="1" max="99" step="1" value="33">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">num_metgrid_soil_levels</span>
+                    <input id="wiz-num-metgrid-soil-levels" type="number" min="1" max="20" step="1" value="4">
+                  </label>
+                </div>
+              </div>
+
+              <div class="details-stack">
+                <div class="card">
+                  <div class="tag-row">
+                    <span class="tag" id="wizard-current-source">ECMWF open data</span>
+                    <span class="tag" id="wizard-current-preset">32 GB 3 km starter</span>
+                  </div>
+                  <h3>Case summary</h3>
+                  <p id="wizard-summary">
+                    6-hour ECMWF case, 200 x 200 at 3 km, centered on 35.0, -97.0.
+                  </p>
+                  <p class="small" id="wizard-projection">
+                    Projection: Lambert, truelat1 30.0, truelat2 60.0, stand_lon -97.0.
+                  </p>
+                </div>
+
+                <div class="card">
+                  <h3>Validation</h3>
+                  <div id="wizard-validation">
+                    <p class="small">The wizard will show errors and warnings here.</p>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <h3>Source and Vtable plan</h3>
+                  <p class="small">
+                    <strong>Use:</strong> <span class="mono" id="wizard-vtable">Vtable.ECMWF_opendata</span>
+                  </p>
+                  <ul class="checklist" id="wizard-source-steps"></ul>
+                  <div id="wizard-source-notes"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="grid-2">
+              <div class="card">
+                <div class="copy-head">
+                  <h3>Generated <span class="mono">namelist.wps</span></h3>
+                  <div class="button-row compact">
+                    <button class="button secondary" id="copy-wps" type="button">Copy</button>
+                    <a class="button secondary" id="download-wps" href="./starter-files/namelist.wps.ecmwf-starter" download="namelist.wps">Download</a>
+                  </div>
+                </div>
+                <pre class="shell"><code id="generated-wps">&amp;share
+ wrf_core               = 'ARW',
+ max_dom                = 1,
+ start_date             = '2026-04-03_00:00:00',
+ end_date               = '2026-04-03_06:00:00',
+ interval_seconds       = 3600,
+ io_form_geogrid        = 2,
+/</code></pre>
+              </div>
+
+              <div class="card">
+                <div class="copy-head">
+                  <h3>Generated <span class="mono">namelist.input</span></h3>
+                  <div class="button-row compact">
+                    <button class="button secondary" id="copy-input" type="button">Copy</button>
+                    <a class="button secondary" id="download-input" href="./starter-files/namelist.input.ecmwf-starter" download="namelist.input">Download</a>
+                  </div>
+                </div>
+                <pre class="shell"><code id="generated-input">&amp;time_control
+ run_days                            = 0,
+ run_hours                           = 6,
+ run_minutes                         = 0,
+ run_seconds                         = 0,
+/</code></pre>
+              </div>
+            </div>
+          </section>
+
           <section class="section" id="starter-files">
             <div class="section-header">
               <div>
@@ -515,7 +855,8 @@ export WRF_DIR=/path/to/WRF
               The repo now includes a starter file pack built from two things: a locally
               verified single-domain `3 km` CPU baseline, and a community member's
               durable ECMWF/open-data workflow patterns. The point is to reuse the good
-              structure without pretending one exact case file is universal.
+              structure without pretending one exact case file is universal. The default
+              ECMWF wizard preset above is designed to render these starter files exactly.
             </p>
 
             <div class="grid-3">
@@ -548,7 +889,9 @@ export WRF_DIR=/path/to/WRF
                 Read <a href="./starter-files/README.md">the starter-files README</a>
                 before using them. Edit the dates, domain center, geog path, and
                 `num_metgrid_*` counts first. These files are a strong starting point,
-                not a promise that your case can skip thinking.
+                not a promise that your case can skip thinking. If you want the same
+                defaults without hand-editing first, use the wizard above and then copy
+                or download the generated files.
               </p>
             </div>
           </section>
