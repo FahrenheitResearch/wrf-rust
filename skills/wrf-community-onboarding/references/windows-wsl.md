@@ -91,7 +91,7 @@ Then apply:
 wsl --shutdown
 ```
 
-Wait a few seconds before reopening Ubuntu.
+Wait a few seconds before reopening Ubuntu. Microsoft notes an "8 second rule" in practice: config changes do not fully apply until WSL actually stops.
 
 ## Common documented failure modes
 
@@ -119,6 +119,16 @@ If disabled:
 bcdedit /set hypervisorlaunchtype Auto
 ```
 
+### `0x8007019e`
+
+Usually means the Windows Subsystem for Linux feature itself is not enabled.
+
+Fast fix:
+
+- enable the WSL Windows feature
+- reboot
+- retry the install
+
 ### `0x80070003`
 
 Microsoft documents that WSL must run from the system drive, usually `C:`.
@@ -127,3 +137,26 @@ Microsoft documents that WSL must run from the system drive, usually `C:`.
 
 WSL can fail if the distro `LocalState` directory is compressed or encrypted on NTFS.
 
+### `.wslconfig` changes do not seem to apply
+
+Common cause:
+
+- the user edited `%UserProfile%\.wslconfig` but never fully stopped WSL
+
+Fast fix:
+
+```powershell
+wsl --shutdown
+```
+
+Then wait a few seconds and relaunch Ubuntu.
+
+### WSL has no internet or DNS fails
+
+Common on managed PCs, VPN-heavy setups, and some firewall configurations.
+
+Fast first move:
+
+- `wsl --shutdown`
+- relaunch the distro
+- if still broken, check Microsoft's WSL troubleshooting guidance around DNS tunneling and firewall behavior

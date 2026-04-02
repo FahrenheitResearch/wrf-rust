@@ -101,8 +101,8 @@ Use them as a strong starting point, but still edit:
 
 1. Set up geog data and `namelist.wps`
 2. Run `geogrid.exe`
-3. Link meteorological GRIB input
-4. Choose the correct Vtable
+3. Link meteorological GRIB input with `link_grib.csh`
+4. Choose the correct `Vtable` and symlink it to `Vtable`
 5. Run `ungrib.exe`
 6. If the forcing uses multiple GRIB families, repeat `ungrib.exe` with distinct prefixes and list them in `fg_name`
 7. Run `metgrid.exe`
@@ -126,6 +126,20 @@ That pattern is useful, but remind users it is not magic by itself:
 - they still need the correct Vtable and field coverage
 - they may need to run `ungrib.exe` multiple times
 - the exact prefixes can vary as long as they are used consistently
+
+## Common WPS prep gotchas
+
+- `ungrib.exe` expects a file literally named `Vtable` in the run directory
+- `ungrib.exe` expects GRIB files to be linked as `GRIBFILE.AAA`, `GRIBFILE.AAB`, etc.
+- `link_grib.csh` is the normal way to make those links
+- if `metgrid.exe` says the mandatory field `TT` is missing, the upstream `ungrib.exe` output or prefix configuration is usually wrong
+- if `ungrib.exe` says `Data not found`, the requested dates often do not match what is actually present in the GRIB files
+- if using recent ECMWF open-data GRIB2, the official FAQ may require `grib_set ... packingType=grid_simple` before `ungrib.exe`
+
+## Best debug tools people skip
+
+- `g1print.exe` or `g2print.exe` to inspect GRIB fields directly
+- `rd_intermediate.exe` to inspect WPS intermediate files before blaming `metgrid.exe` or `real.exe`
 
 ## ECMWF compression gotcha
 

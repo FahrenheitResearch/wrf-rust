@@ -384,6 +384,26 @@ bcdedit /enum | findstr -i hypervisorlaunchtype</code></pre>
                 </p>
               </div>
             </div>
+
+            <div class="grid-2">
+              <div class="card">
+                <h3>Why did my <span class="mono">.wslconfig</span> change do nothing?</h3>
+                <p>
+                  Because WSL was never fully stopped. After editing
+                  <span class="mono">%UserProfile%\.wslconfig</span>, run
+                  <span class="mono">wsl --shutdown</span> and wait a few seconds before
+                  reopening Ubuntu.
+                </p>
+              </div>
+              <div class="card">
+                <h3>More Windows-side stuck points</h3>
+                <p>
+                  If you see <span class="mono">0x8007019e</span>, the WSL Windows feature
+                  itself is usually not enabled yet. If WSL has no internet, restart it first,
+                  then check Microsoft's DNS/firewall troubleshooting guidance.
+                </p>
+              </div>
+            </div>
           </section>
 
           <section class="section" id="build">
@@ -622,6 +642,13 @@ export WRF_DIR=/path/to/WRF
                 patterns, not drop-in tooling. They often depend on a larger project
                 wrapper, custom helper functions, and local path conventions.
               </p>
+              <p>
+                <strong>Official 2024+ ECMWF note:</strong> if recent ECMWF GRIB2 files still
+                fail in WPS, the WRF input-data FAQ documents a conversion step with
+                <span class="mono">grib_set -r -w packingType=grid_ccsds -s packingType=grid_simple input.grib2 output.grib2</span>,
+                then use <span class="mono">Vtable.ECMWF</span> from
+                <span class="mono">WPS v4.6+</span>.
+              </p>
             </div>
 
             <table class="matrix">
@@ -833,6 +860,43 @@ python -m wrf stats wrfout_d01_YYYY-MM-DD_HH:MM:SS sbcape slp temp</code></pre>
               </div>
             </div>
 
+            <table class="matrix">
+              <thead>
+                <tr>
+                  <th>If you see this</th>
+                  <th>Most likely problem</th>
+                  <th>First thing to do</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><span class="mono">0x80370102</span></td>
+                  <td>Virtualization / hypervisor path is not actually ready</td>
+                  <td>Check BIOS virtualization and <span class="mono">hypervisorlaunchtype</span></td>
+                </tr>
+                <tr>
+                  <td><span class="mono">Problem opening file Vtable</span></td>
+                  <td>Wrong or missing `Vtable` symlink</td>
+                  <td>Link the correct file to the literal name <span class="mono">Vtable</span></td>
+                </tr>
+                <tr>
+                  <td><span class="mono">unable to open GRIBFILE.AAA</span></td>
+                  <td>GRIB files were not linked the way <span class="mono">ungrib.exe</span> expects</td>
+                  <td>Use <span class="mono">link_grib.csh</span></td>
+                </tr>
+                <tr>
+                  <td><span class="mono">mandatory field TT was not found</span></td>
+                  <td>Bad <span class="mono">Vtable</span>, wrong source family, or wrong <span class="mono">fg_name</span></td>
+                  <td>Recheck the upstream data family and intermediate prefixes</td>
+                </tr>
+                <tr>
+                  <td><span class="mono">real.exe</span> made no <span class="mono">wrfinput_d01</span></td>
+                  <td>Date window or <span class="mono">met_em*</span> mismatch</td>
+                  <td>Match dates all the way from forcing to <span class="mono">namelist.input</span></td>
+                </tr>
+              </tbody>
+            </table>
+
             <div class="details-stack">
               <details class="branch">
                 <summary>Build fails before you ever get <span class="mono">wrf.exe</span></summary>
@@ -846,6 +910,7 @@ python -m wrf stats wrfout_d01_YYYY-MM-DD_HH:MM:SS sbcape slp temp</code></pre>
                     <li>Search the compile log for the first capital-<span class="mono">E</span> <span class="mono">Error</span>.</li>
                     <li>If you see <span class="mono">Corrupt or Old Module file</span>, treat that as the root, not the later missing objects.</li>
                     <li>Confirm compiler choice and netCDF path are consistent.</li>
+                    <li>If <span class="mono">netcdf.inc</span> is missing, make sure netCDF-Fortran is really installed in the prefix you are using.</li>
                   </ul>
                   <h4>Fastest actions</h4>
                   <ul class="checklist">
@@ -868,7 +933,63 @@ python -m wrf stats wrfout_d01_YYYY-MM-DD_HH:MM:SS sbcape slp temp</code></pre>
                   <ul class="checklist">
                     <li>Make sure WRF already built successfully.</li>
                     <li>Make sure WRF and WPS use the same compiler family.</li>
+                    <li>Make sure <span class="mono">WRF_DIR</span> points at the compiled WRF tree.</li>
                     <li>For WPS v4.4+, prefer <span class="mono">./configure --build-grib2-libs</span>.</li>
+                    <li>If unresolved <span class="mono">GOMP_*</span> or <span class="mono">__kmpc_*</span> symbols appear, simplify the build path before doing anything exotic.</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="branch">
+                <summary><span class="mono">geogrid.exe</span> fails with missing static data or bad nest dimensions</summary>
+                <div class="branch-body">
+                  <h4>Common signatures</h4>
+                  <ul class="checklist">
+                    <li><span class="mono">Could not open .../WPS_GEOG/.../index</span></li>
+                    <li>dimension errors involving <span class="mono">parent_grid_ratio</span></li>
+                  </ul>
+                  <h4>Fastest actions</h4>
+                  <ul class="checklist">
+                    <li>Use an absolute <span class="mono">geog_data_path</span>.</li>
+                    <li>Confirm the WPS geog directory actually exists and is complete.</li>
+                    <li>Recheck nest sizes and parent ratios before touching anything else.</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="branch">
+                <summary><span class="mono">ungrib.exe</span> fails with <span class="mono">GRIBFILE.AAA</span>, missing <span class="mono">Vtable</span>, or <span class="mono">Data not found</span></summary>
+                <div class="branch-body">
+                  <h4>Common signatures</h4>
+                  <ul class="checklist">
+                    <li><span class="mono">edition_num: unable to open GRIBFILE.AAA</span></li>
+                    <li><span class="mono">Problem opening file Vtable</span></li>
+                    <li><span class="mono">Data not found: YYYY-MM-DD_HH:MM:SS.0000</span></li>
+                  </ul>
+                  <h4>Fastest actions</h4>
+                  <ul class="checklist">
+                    <li>Use <span class="mono">link_grib.csh</span> so the files are linked as <span class="mono">GRIBFILE.AAA</span>, <span class="mono">GRIBFILE.AAB</span>, and so on.</li>
+                    <li>Symlink the correct file to the literal name <span class="mono">Vtable</span>.</li>
+                    <li>Confirm the GRIB files actually contain the dates you asked for.</li>
+                    <li>If this is recent ECMWF GRIB2, try the official <span class="mono">grib_set</span> conversion rule before doing anything exotic.</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="branch">
+                <summary><span class="mono">metgrid.exe</span> fails with missing <span class="mono">TT</span> or <span class="mono">Screwy NDATE</span></summary>
+                <div class="branch-body">
+                  <h4>Common signatures</h4>
+                  <ul class="checklist">
+                    <li><span class="mono">The mandatory field TT was not found in any input data</span></li>
+                    <li><span class="mono">ERROR: Screwy NDATE: 0000-00-00_00:00:00</span></li>
+                  </ul>
+                  <h4>Fastest actions</h4>
+                  <ul class="checklist">
+                    <li>Confirm the <span class="mono">fg_name</span> prefixes match the files produced by <span class="mono">ungrib.exe</span>.</li>
+                    <li>Confirm <span class="mono">ungrib.exe</span> produced the expected intermediate files for every needed field family.</li>
+                    <li>Recheck domain dates in <span class="mono">namelist.wps</span>.</li>
+                    <li>Use <span class="mono">rd_intermediate.exe</span> if you need to inspect what WPS actually produced.</li>
                   </ul>
                 </div>
               </details>
@@ -973,6 +1094,10 @@ python -m wrf stats wrfout_d01_YYYY-MM-DD_HH:MM:SS sbcape slp temp</code></pre>
                 <p>No. Keep the whole workflow inside the Linux filesystem and access it from Windows through <span class="mono">\\wsl$</span>.</p>
               </div>
               <div class="faq-card">
+                <h3>Why does <span class="mono">ungrib.exe</span> say <span class="mono">GRIBFILE.AAA</span> or <span class="mono">Vtable</span> is missing?</h3>
+                <p>Because it expects GRIB files to be linked to <span class="mono">GRIBFILE.*</span> names and it expects a file literally named <span class="mono">Vtable</span> in the WPS run directory.</p>
+              </div>
+              <div class="faq-card">
                 <h3>What should I use this repo for after the run?</h3>
                 <p>Use <span class="mono">wrf-rust</span> to inspect the output fast, confirm the file is healthy, and pull the fields you care about without a heavyweight Python stack.</p>
               </div>
@@ -998,6 +1123,10 @@ python -m wrf stats wrfout_d01_YYYY-MM-DD_HH:MM:SS sbcape slp temp</code></pre>
               <li><a href="https://www2.mmm.ucar.edu/wrf/users/docs/user_guide_v4/WRFUsersGuide.pdf">WRF Users Guide</a></li>
               <li><a href="https://www2.mmm.ucar.edu/wrf/users/download/get_sources_wps_geog.html">NCAR: WPS geographical static data downloads</a></li>
               <li><a href="https://www2.mmm.ucar.edu/wrf/site/documentation/users_guide/wps.html">WRF Model docs: WPS users guide</a></li>
+              <li><a href="https://www2.mmm.ucar.edu/wrf/site/support/faq/input_data.html">WRF Model docs: input data FAQ</a></li>
+              <li><a href="https://www2.mmm.ucar.edu/wrf/site/faq/full_installation.html">WRF Model docs: complete installation of WRF and WPS</a></li>
+              <li><a href="https://www2.mmm.ucar.edu/wrf/wrf_tutorial/troubleshooting.html">WRF tutorial: troubleshooting exercise</a></li>
+              <li><a href="https://www2.mmm.ucar.edu/wrf/users/namelist_best_prac_wps.html">WRF Model docs: namelist.wps best practices</a></li>
               <li><a href="https://data.ecmwf.int/forecasts/">ECMWF Free &amp; Open Data Portal</a></li>
               <li><a href="https://confluence.ecmwf.int/display/DAC/ECMWF%2Bopen%2Bdata%253A%2Breal-time%2Bforecasts%2Bfrom%2BIFS%2Band%2BAIFS">ECMWF open data: real-time forecasts from IFS and AIFS</a></li>
               <li><a href="https://www.ecmwf.int/en/forecasts/access-forecasts/registration-vs-anonymous-access">ECMWF: registration vs anonymous access</a></li>

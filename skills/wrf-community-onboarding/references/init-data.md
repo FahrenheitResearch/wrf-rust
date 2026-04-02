@@ -56,6 +56,18 @@ Practical workaround:
 - use `cdo -f grb2 copy input.grib2 output.grib2` to rewrite/decompress the file first
 - if a user sees `ungrib.exe` failing on otherwise valid ECMWF files, this is one of the first things to check
 
+### Official 2024+ ECMWF conversion rule
+
+WRF support documents an additional rule for newer ECMWF GRIB2:
+
+```bash
+grib_set -r -w packingType=grid_ccsds -s packingType=grid_simple input.grib2 output.grib2
+```
+
+Then use `Vtable.ECMWF` from `WPS v4.6+`.
+
+This is the official path when recent ECMWF files do not work directly with older WPS assumptions.
+
 ### Good wording
 
 "As of 2026-04-01, the easy hobbyist path for ECMWF real-time forcing is the open portal at `data.ecmwf.int/forecasts/`, and that path usually does not require an API key."
