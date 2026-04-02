@@ -10,22 +10,6 @@ Always branch by the earliest failing stage.
 - Confirm compiler and netCDF choices are consistent.
 - Confirm WPS is not being debugged before WRF itself builds.
 
-### Important local pattern
-
-Local GPU compile failures repeatedly showed stale or corrupt module-file cascades under NVFORTRAN.
-
-If the user sees:
-
-- `Corrupt or Old Module file`
-- missing `.o` files after that
-- link failures like missing `real_em.o`, `ndown_em.o`, or `libwrflib.a`
-
-then the best first move is:
-
-- stop incremental compile
-- `./clean -a`
-- rebuild from a fresh tree if needed
-
 ## 2. WPS compile failed
 
 ### Fastest checks
@@ -78,21 +62,7 @@ If CFL is blowing up from the beginning and thousands of points exceed the limit
 - check vertical resolution and physics choices
 - rerun a shorter window first
 
-## 6. GPU-only crash
-
-### Known local example
-
-- `CUDA_ERROR_ILLEGAL_ADDRESS`
-- `module_bl_ysu.F`
-
-### Action
-
-- fall back to CPU
-- or treat it as an experimental branch and debug there
-
-If the user just wants a forecast, tell them plainly to stop burning time on the GPU branch.
-
-## 7. Disk filled up
+## 6. Disk filled up
 
 ### Common causes
 
@@ -109,4 +79,3 @@ If the user just wants a forecast, tell them plainly to stop burning time on the
 - confirm free space before launch
 
 Local evidence includes a single idealized output file growing to about `56 GB`, so disk warnings should be aggressive.
-

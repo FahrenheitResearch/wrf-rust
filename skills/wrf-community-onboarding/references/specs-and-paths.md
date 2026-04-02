@@ -30,7 +30,6 @@ These are practical community recommendations, not vendor guarantees.
   - `3 km`
   - about `200 to 250` grid points each direction
   - conservative output intervals
-  - no GPU detours
 
 ### 48 to 64 GB host RAM
 
@@ -60,7 +59,7 @@ These are practical community recommendations, not vendor guarantees.
 ## Local evidence from this repo owner's runs
 
 - Verified starter case: `3 km`, `200 x 200 x 80`, about `1.86 GB` domain allocation.
-- Verified aggressive case: `1 km`, `400 x 400 x 80`, about `6.99 GB` domain allocation and about `31.2 GiB` GPU VRAM used on a `32 GiB` card.
+- Verified aggressive case: `1 km`, `400 x 400 x 80`, about `6.99 GB` domain allocation.
 - Verified extreme-output case: a `401 x 401` idealized stress run produced a single `56 GB` output file.
 
 Use those as sanity anchors when explaining why "it fits in RAM" is not the same as "this is a good beginner choice."
@@ -71,4 +70,3 @@ Use those as sanity anchors when explaining why "it fits in RAM" is not the same
 - If the user has `32 GB`, aim for `200 to 250` first.
 - If the user has `64 GB`, `300 to 350` becomes realistic.
 - If the user wants `400 x 400` at `3 km`, label it aggressive, not normal.
-

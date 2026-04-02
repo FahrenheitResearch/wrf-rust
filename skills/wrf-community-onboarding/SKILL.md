@@ -1,6 +1,6 @@
 ---
 name: wrf-community-onboarding
-description: Help weather-hobbyist and Discord users install, size, initialize, run, and troubleshoot WRF on consumer hardware, especially Windows users on WSL 2. Use this when the user needs CPU-first WRF/WPS setup guidance, ECMWF/GFS/HRRR/RAP initialization advice, domain sizing for 3 km convection-allowing runs, or branching troubleshooting for compile, WPS, real.exe, wrf.exe, disk, or experimental GPU issues.
+description: Help weather-hobbyist and Discord users install, size, initialize, run, and troubleshoot WRF on consumer hardware, especially Windows users on WSL 2. Use this when the user needs CPU-first WRF/WPS setup guidance, ECMWF/GFS/HRRR/RAP initialization advice, domain sizing for 3 km convection-allowing runs, or branching troubleshooting for compile, WPS, real.exe, wrf.exe, or disk issues.
 ---
 
 # WRF Community Onboarding
@@ -10,7 +10,6 @@ Use this skill for hobbyist or community WRF support, especially when the user:
 - is on Windows and needs WSL 2
 - wants a practical 3 km severe-weather setup on consumer hardware
 - needs help choosing ECMWF, GFS, HRRR, or RAP init data
-- wants a CPU-first path before touching experimental GPU builds
 - needs a decision tree for build, prep, runtime, or disk failures
 
 This skill is intentionally biased toward getting the user to a stable first run quickly, not toward the fanciest possible configuration.
@@ -18,7 +17,6 @@ This skill is intentionally biased toward getting the user to a stable first run
 ## Core stance
 
 - Prefer a stable CPU-first path.
-- Treat NVIDIA/OpenACC/NVHPC/GPU WRF as experimental unless the user explicitly wants that path and already has a working CPU baseline.
 - For Windows users, prefer WSL 2 and keep all WRF/WPS files inside the Linux filesystem, not `/mnt/c/...`.
 - Push users toward a small sanity run before a large real-data storm run.
 - Be explicit about disk budgeting. Hobbyist users usually get surprised by output size before they get surprised by CPU time.
@@ -30,7 +28,6 @@ This skill is intentionally biased toward getting the user to a stable first run
 - If the user needs help deciding whether their hardware is enough, load [specs-and-paths.md](references/specs-and-paths.md).
 - If the user needs a practical WRF/WPS workflow, load [build-and-run.md](references/build-and-run.md).
 - If the user asks about ECMWF, GFS, HRRR, or RAP, load [init-data.md](references/init-data.md).
-- If the user wants GPU WRF or has GPU-specific crashes, load [gpu-experimental.md](references/gpu-experimental.md).
 - If the user is already failing somewhere, load [troubleshooting.md](references/troubleshooting.md).
 
 ## Workflow
@@ -41,7 +38,6 @@ This skill is intentionally biased toward getting the user to a stable first run
    - Host RAM
    - CPU threads
    - disk free space
-   - whether they insist on GPU
    - target region
    - preferred init data
    - whether they want a first successful run or a maxed-out build
@@ -50,7 +46,6 @@ This skill is intentionally biased toward getting the user to a stable first run
    Default path:
    - Windows user -> WSL 2 + CPU-first + single-domain 3 km
    - Linux user -> CPU-first + single-domain 3 km
-   - GPU-curious user -> only after CPU works
 
 3. Recommend a domain tier.
    Use the spec tiers in [specs-and-paths.md](references/specs-and-paths.md).
@@ -90,7 +85,6 @@ This skill is intentionally biased toward getting the user to a stable first run
    - `wrf.exe` startup
    - numerical stability
    - disk exhaustion
-   - GPU-only failure
 
 ## Communication guidance
 
@@ -101,7 +95,6 @@ This skill is intentionally biased toward getting the user to a stable first run
   - not "1 km will be hard"
   - but "start with 3 km 220 x 220, confirm the pipeline, then nest or tighten resolution later"
 - If the user is on 16 GB RAM and wants a giant 3 km domain, say plainly that they are below the pleasant operating range.
-- If the user wants GPU WRF first, tell them to get a CPU run working before opening the GPU branch.
 
 ## Default response pattern
 
@@ -118,13 +111,10 @@ When the user needs troubleshooting, structure the answer as:
 2. Most likely root causes
 3. Fastest checks
 4. Minimal corrective actions
-5. When to abandon the GPU path and fall back to CPU
 
 ## Do not do this
 
 - Do not recommend `/mnt/c/...` for the main build or run tree.
-- Do not sell GPU builds as the default beginner path.
 - Do not tell users to start with the largest domain their RAM might barely fit.
 - Do not bury the fact that WSL defaults to only half the host RAM.
 - Do not imply ECMWF open-data real-time access requires the same credentials as CDS/archive access.
-

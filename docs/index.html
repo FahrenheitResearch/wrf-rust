@@ -31,7 +31,6 @@
               <span class="chip">WSL 2 for Windows users</span>
               <span class="chip">3 km severe-weather sweet spot</span>
               <span class="chip">ECMWF / GFS / HRRR / RAP</span>
-              <span class="chip">GPU path is experimental</span>
             </div>
 
             <h1>Get WRF running without burning a week on the wrong path.</h1>
@@ -88,7 +87,6 @@
             <a href="#sizing">3 km domain sizing</a>
             <a href="#run">Run order</a>
             <a href="#budget">Output budgeting</a>
-            <a href="#gpu">Experimental GPU branch</a>
             <a href="#troubleshooting">Troubleshooting tree</a>
             <a href="#faq">FAQ</a>
             <a href="#sources">Sources</a>
@@ -165,12 +163,12 @@ cp -R skills/wrf-community-onboarding ~/.codex/skills/</code></pre>
             <ol class="checklist">
               <li>If you are on Windows, install WSL 2 with Ubuntu and keep all work under <span class="mono">/home/&lt;user&gt;</span>.</li>
               <li>Give WSL explicit RAM in <span class="mono">%UserProfile%\.wslconfig</span>. Do not trust the default.</li>
-              <li>Build CPU WRF first. Build WPS second. Do not start with the GPU branch.</li>
+              <li>Build CPU WRF first. Build WPS second.</li>
               <li>Start with a single-domain <span class="mono">3 km</span> run around <span class="mono">200 to 250</span> grid points each direction.</li>
               <li>Use ECMWF open data if you want the Euro path. Use GFS if you want the simplest public fallback.</li>
               <li>Run a short sanity case before any large event simulation.</li>
               <li>Validate the output with <span class="mono">wrf-rust</span> before scaling the domain, output frequency, or runtime.</li>
-              <li>Only after that should you try larger domains, inner nests, or any GPU build.</li>
+              <li>Only after that should you try larger domains or inner nests.</li>
             </ol>
 
             <div class="path-grid">
@@ -221,8 +219,8 @@ cp -R skills/wrf-community-onboarding ~/.codex/skills/</code></pre>
                 </p>
                 <p>
                   It is self-contained and ships with reference files for Windows + WSL,
-                  hardware tiers, build order, init-data choices, GPU warnings, and a
-                  branching troubleshooting guide.
+                  hardware tiers, build order, init-data choices, and a branching
+                  troubleshooting guide.
                 </p>
               </div>
               <div class="card">
@@ -398,7 +396,6 @@ bcdedit /enum | findstr -i hypervisorlaunchtype</code></pre>
             <div class="notice strong">
               <p>
                 Stable recommendation: build CPU WRF first, then WPS, then run a short case.
-                Do not open the GPU branch until you have a clean CPU baseline.
               </p>
             </div>
 
@@ -668,7 +665,7 @@ export WRF_DIR=/path/to/WRF
               <div class="stat">
                 <h3>Verified local 1 km anchor</h3>
                 <div class="stat-number">400 x 400 x 80</div>
-                <p>Allocated about 6.99 GB and consumed about 31.2 GiB on a 32 GiB GPU.</p>
+                <p>Allocated about 6.99 GB in a very aggressive local stress case.</p>
               </div>
               <div class="stat">
                 <h3>Verified storage warning</h3>
@@ -777,35 +774,6 @@ python -m wrf stats wrfout_d01_YYYY-MM-DD_HH:MM:SS sbcape slp temp</code></pre>
             </div>
           </section>
 
-          <section class="section" id="gpu">
-            <div class="section-header">
-              <div>
-                <p class="eyebrow">Experimental</p>
-                <h2>The GPU branch exists, but it is not the beginner branch</h2>
-              </div>
-            </div>
-
-            <div class="grid-2">
-              <div class="card">
-                <h3>What local evidence says</h3>
-                <ul class="checklist">
-                  <li>A local 3 km GPU run crashed with <span class="mono">CUDA_ERROR_ILLEGAL_ADDRESS</span> in <span class="mono">module_bl_ysu.F</span>.</li>
-                  <li>A 1 km <span class="mono">400 x 400 x 80</span> case almost filled a 32 GiB GPU.</li>
-                  <li>There were device-sync issues around output handling.</li>
-                </ul>
-              </div>
-              <div class="card">
-                <h3>What to do with that</h3>
-                <ul class="checklist">
-                  <li>Get a clean CPU baseline first.</li>
-                  <li>Keep the first GPU case smaller than your ego wants.</li>
-                  <li>If the crash is GPU-only, stop pretending it is a generic WRF problem.</li>
-                  <li>If you just need a forecast, abandon GPU and go back to CPU.</li>
-                </ul>
-              </div>
-            </div>
-          </section>
-
           <section class="section" id="troubleshooting">
             <div class="section-header">
               <div>
@@ -821,8 +789,6 @@ python -m wrf stats wrfout_d01_YYYY-MM-DD_HH:MM:SS sbcape slp temp</code></pre>
                   <h4>Likely root cause</h4>
                   <p>
                     The first real compile error matters. Most later errors are just fallout.
-                    In local GPU builds, a common root pattern was stale or corrupt module-file
-                    cascades under NVFORTRAN.
                   </p>
                   <h4>Fastest checks</h4>
                   <ul class="checklist">
@@ -912,25 +878,6 @@ python -m wrf stats wrfout_d01_YYYY-MM-DD_HH:MM:SS sbcape slp temp</code></pre>
               </details>
 
               <details class="branch">
-                <summary>GPU-only crash, illegal address, or OpenACC weirdness</summary>
-                <div class="branch-body">
-                  <h4>Known local signature</h4>
-                  <p>
-                    A local 3 km GPU run failed with
-                    <span class="mono">CUDA_ERROR_ILLEGAL_ADDRESS</span> in
-                    <span class="mono">module_bl_ysu.F</span>.
-                  </p>
-                  <h4>Fastest actions</h4>
-                  <ul class="checklist">
-                    <li>Stop and confirm the CPU run works.</li>
-                    <li>Try a smaller test case.</li>
-                    <li>Treat it as a GPU branch problem, not a generic WRF problem.</li>
-                    <li>If the goal is simply to get a forecast, fall back to CPU immediately.</li>
-                  </ul>
-                </div>
-              </details>
-
-              <details class="branch">
                 <summary>Disk space vanishes while the run is alive</summary>
                 <div class="branch-body">
                   <h4>Likely root cause</h4>
@@ -973,10 +920,6 @@ python -m wrf stats wrfout_d01_YYYY-MM-DD_HH:MM:SS sbcape slp temp</code></pre>
               <div class="faq-card">
                 <h3>Should I build from <span class="mono">/mnt/c</span>?</h3>
                 <p>No. Keep the whole workflow inside the Linux filesystem and access it from Windows through <span class="mono">\\wsl$</span>.</p>
-              </div>
-              <div class="faq-card">
-                <h3>Should I start with the GPU build?</h3>
-                <p>No. Get a CPU baseline, then open the experimental branch if you still want it.</p>
               </div>
               <div class="faq-card">
                 <h3>What should I use this repo for after the run?</h3>
