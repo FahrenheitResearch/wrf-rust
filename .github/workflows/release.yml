@@ -105,7 +105,7 @@ jobs:
     needs: [linux, macos, windows, sdist]
     environment:
       name: pypi
-      url: https://pypi.org/p/wrf-rust
+      url: https://pypi.org/p/wrf-rust-next
     permissions:
       id-token: write
     steps:
