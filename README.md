@@ -5,7 +5,7 @@ Rust-powered WRF post-processing with Python bindings. 83 diagnostic variables, 
 ## Install
 
 ```bash
-pip install wrf-rust-next
+pip install wrf-rust
 ```
 
 Pre-built wheels for Python 3.10-3.13 on Linux, macOS, and Windows. No Rust toolchain, no system libraries, no conda required.
