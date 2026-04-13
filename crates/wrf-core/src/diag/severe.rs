@@ -1,11 +1,11 @@
 //! Severe weather composite diagnostic variables:
 //! stp, scp, ehi, critical_angle, ship, bri
 
-
-
 use crate::compute::ComputeOpts;
 use crate::error::WrfResult;
 use crate::file::WrfFile;
+
+const SURFACE_LAYER_HEIGHT_M: f64 = 0.0;
 
 /// Significant Tornado Parameter -- fixed layer (dimensionless). `[ny, nx]`
 ///
@@ -19,8 +19,8 @@ pub fn compute_stp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
     let tc = f.temperature_c(t)?;
     let qv = f.qvapor(t)?;
     let h_agl = f.height_agl(t)?;
-    let psfc = f.psfc(t)?;   // Pa -- compute_cape_cin converts internally
-    let t2 = f.t2_for_opts(t, opts)?;       // K  -- compute_cape_cin converts internally
+    let psfc = f.psfc(t)?; // Pa -- compute_cape_cin converts internally
+    let t2 = f.t2_for_opts(t, opts)?; // K  -- compute_cape_cin converts internally
     let q2 = f.q2_for_opts(t, opts)?;
     let u = f.u_destag(t)?;
     let v = f.v_destag(t)?;
@@ -32,12 +32,11 @@ pub fn compute_stp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
     // Surface-based CAPE + LCL
     // Pass raw Pa/K values -- compute_cape_cin converts internally
     let (sbcape, _, lcl, _) = crate::met::composite::compute_cape_cin(
-        &pres, &tc, &qv, &h_agl, &psfc, &t2, &q2,
-        nx, ny, nz, "sb",
+        &pres, &tc, &qv, &h_agl, &psfc, &t2, &q2, nx, ny, nz, "sb",
     );
 
     // 0-1 km SRH via canonical path (earth-rotated winds + 10m prepend)
-    let srh1 = crate::diag::srh::compute_srh_field(f, t, 1000.0, None)?;
+    let srh1 = crate::diag::srh::compute_srh_field(f, t, 1000.0, opts.storm_motion.as_ref())?;
 
     // 0-6 km shear magnitude
     let shear6 = crate::met::composite::compute_shear(&u, &v, &h_agl, nx, ny, nz, 0.0, 6000.0);
@@ -59,8 +58,8 @@ pub fn compute_stp_effective(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
     let tc = f.temperature_c(t)?;
     let qv = f.qvapor(t)?;
     let h_agl = f.height_agl(t)?;
-    let psfc = f.psfc(t)?;   // Pa -- compute_cape_cin converts internally
-    let t2 = f.t2_for_opts(t, opts)?;       // K  -- compute_cape_cin converts internally
+    let psfc = f.psfc(t)?; // Pa -- compute_cape_cin converts internally
+    let t2 = f.t2_for_opts(t, opts)?; // K  -- compute_cape_cin converts internally
     let q2 = f.q2_for_opts(t, opts)?;
     let u = f.u_destag(t)?;
     let v = f.v_destag(t)?;
@@ -72,8 +71,7 @@ pub fn compute_stp_effective(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
     // Mixed-layer CAPE, CIN, and LCL
     // Pass raw Pa/K values -- compute_cape_cin converts internally
     let (mlcape, mlcin, lcl, _) = crate::met::composite::compute_cape_cin(
-        &pres, &tc, &qv, &h_agl, &psfc, &t2, &q2,
-        nx, ny, nz, "ml",
+        &pres, &tc, &qv, &h_agl, &psfc, &t2, &q2, nx, ny, nz, "ml",
     );
 
     // 0-6 km shear magnitude (EBWD approximation)
@@ -82,7 +80,9 @@ pub fn compute_stp_effective(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
     // Effective-layer SRH via canonical path (earth-rotated winds + 10m prepend)
     let eff_srh = crate::diag::srh::compute_effective_srh(f, t, opts)?;
 
-    Ok(stp_eff_from_components(&mlcape, &lcl, &mlcin, &eff_srh, &shear6))
+    Ok(stp_eff_from_components(
+        &mlcape, &lcl, &mlcin, &eff_srh, &shear6,
+    ))
 }
 
 /// Generic STP dispatcher: uses opts.layer_type to choose fixed or effective.
@@ -105,9 +105,21 @@ fn stp_fixed_from_components(cape: &[f64], lcl: &[f64], srh: &[f64], shear: &[f6
         .zip(shear.iter())
         .map(|(((c, l), s), sh)| {
             let cape_term = (c / 1500.0).max(0.0);
-            let lcl_term = if *l >= 2000.0 { 0.0 } else if *l <= 1000.0 { 1.0 } else { (2000.0 - l) / 1000.0 };
+            let lcl_term = if *l >= 2000.0 {
+                0.0
+            } else if *l <= 1000.0 {
+                1.0
+            } else {
+                (2000.0 - l) / 1000.0
+            };
             let srh_term = (s / 150.0).max(0.0);
-            let shear_term = if *sh < 12.5 { 0.0 } else if *sh >= 30.0 { 1.5 } else { sh / 20.0 };
+            let shear_term = if *sh < 12.5 {
+                0.0
+            } else if *sh >= 30.0 {
+                1.5
+            } else {
+                sh / 20.0
+            };
             cape_term * lcl_term * srh_term * shear_term
         })
         .collect()
@@ -115,7 +127,13 @@ fn stp_fixed_from_components(cape: &[f64], lcl: &[f64], srh: &[f64], shear: &[f6
 
 /// Effective-layer STP: 5-term formula with CIN.
 ///   STP_eff = (mlCAPE/1500) * ((2000-mlLCL)/1000) * (ESRH/150) * (EBWD/20) * ((200+mlCIN)/150)
-fn stp_eff_from_components(cape: &[f64], lcl: &[f64], cin: &[f64], srh: &[f64], shear: &[f64]) -> Vec<f64> {
+fn stp_eff_from_components(
+    cape: &[f64],
+    lcl: &[f64],
+    cin: &[f64],
+    srh: &[f64],
+    shear: &[f64],
+) -> Vec<f64> {
     cape.iter()
         .zip(lcl.iter())
         .zip(cin.iter())
@@ -123,9 +141,21 @@ fn stp_eff_from_components(cape: &[f64], lcl: &[f64], cin: &[f64], srh: &[f64], 
         .zip(shear.iter())
         .map(|((((c, l), ci), s), sh)| {
             let cape_term = (c / 1500.0).max(0.0);
-            let lcl_term = if *l >= 2000.0 { 0.0 } else if *l <= 1000.0 { 1.0 } else { (2000.0 - l) / 1000.0 };
+            let lcl_term = if *l >= 2000.0 {
+                0.0
+            } else if *l <= 1000.0 {
+                1.0
+            } else {
+                (2000.0 - l) / 1000.0
+            };
             let srh_term = (s / 150.0).max(0.0);
-            let shear_term = if *sh < 12.5 { 0.0 } else if *sh >= 30.0 { 1.5 } else { sh / 20.0 };
+            let shear_term = if *sh < 12.5 {
+                0.0
+            } else if *sh >= 30.0 {
+                1.5
+            } else {
+                sh / 20.0
+            };
             // CIN term: (200 + mlCIN) / 150, clamped to [0, 1]
             // CIN is negative, so 200 + CIN shrinks toward 0 as CIN gets more negative
             let cin_term = ((200.0 + ci) / 150.0).clamp(0.0, 1.0);
@@ -142,8 +172,8 @@ pub fn compute_scp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
     let tc = f.temperature_c(t)?;
     let qv = f.qvapor(t)?;
     let h_agl = f.height_agl(t)?;
-    let psfc = f.psfc(t)?;   // Pa -- compute_cape_cin converts internally
-    let t2 = f.t2_for_opts(t, opts)?;       // K  -- compute_cape_cin converts internally
+    let psfc = f.psfc(t)?; // Pa -- compute_cape_cin converts internally
+    let t2 = f.t2_for_opts(t, opts)?; // K  -- compute_cape_cin converts internally
     let q2 = f.q2_for_opts(t, opts)?;
     let u = f.u_destag(t)?;
     let v = f.v_destag(t)?;
@@ -154,12 +184,11 @@ pub fn compute_scp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
 
     // Pass raw Pa/K values -- compute_cape_cin converts internally
     let (mucape, _, _, _) = crate::met::composite::compute_cape_cin(
-        &pres, &tc, &qv, &h_agl, &psfc, &t2, &q2,
-        nx, ny, nz, "mu",
+        &pres, &tc, &qv, &h_agl, &psfc, &t2, &q2, nx, ny, nz, "mu",
     );
 
     // 0-3 km SRH via canonical path (earth-rotated winds + 10m prepend)
-    let srh3 = crate::diag::srh::compute_srh_field(f, t, 3000.0, None)?;
+    let srh3 = crate::diag::srh::compute_srh_field(f, t, 3000.0, opts.storm_motion.as_ref())?;
     let shear6 = crate::met::composite::compute_shear(&u, &v, &h_agl, nx, ny, nz, 0.0, 6000.0);
 
     Ok(crate::met::composite::compute_scp(&mucape, &srh3, &shear6))
@@ -176,8 +205,8 @@ pub fn compute_ehi(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
     let tc = f.temperature_c(t)?;
     let qv = f.qvapor(t)?;
     let h_agl = f.height_agl(t)?;
-    let psfc = f.psfc(t)?;   // Pa -- compute_cape_cin converts internally
-    let t2 = f.t2_for_opts(t, opts)?;       // K  -- compute_cape_cin converts internally
+    let psfc = f.psfc(t)?; // Pa -- compute_cape_cin converts internally
+    let t2 = f.t2_for_opts(t, opts)?; // K  -- compute_cape_cin converts internally
     let q2 = f.q2_for_opts(t, opts)?;
 
     let nx = f.nx;
@@ -186,13 +215,12 @@ pub fn compute_ehi(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
 
     // Pass raw Pa/K values -- compute_cape_cin converts internally
     let (sbcape, _, _, _) = crate::met::composite::compute_cape_cin(
-        &pres, &tc, &qv, &h_agl, &psfc, &t2, &q2,
-        nx, ny, nz, "sb",
+        &pres, &tc, &qv, &h_agl, &psfc, &t2, &q2, nx, ny, nz, "sb",
     );
 
     // SRH via canonical path (earth-rotated winds + 10m prepend)
     let srh_depth = opts.depth_m.unwrap_or(1000.0);
-    let srh = crate::diag::srh::compute_srh_field(f, t, srh_depth, None)?;
+    let srh = crate::diag::srh::compute_srh_field(f, t, srh_depth, opts.storm_motion.as_ref())?;
 
     // EHI = (CAPE * SRH) / 160000
     Ok(sbcape
@@ -251,7 +279,7 @@ pub fn compute_critical_angle(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfR
             &h_prof,
             u10[ij],
             v10[ij],
-            opts.storm_motion,
+            opts.storm_motion.as_ref().map(|sm| sm.at(ij)),
         );
     });
 
@@ -289,8 +317,7 @@ pub fn compute_ship(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<
 
     // MUCAPE
     let (mucape, _, _, _) = crate::met::composite::compute_cape_cin(
-        &pres, &tc, &qv, &h_agl, &psfc, &t2, &q2,
-        nx, ny, nz, "mu",
+        &pres, &tc, &qv, &h_agl, &psfc, &t2, &q2, nx, ny, nz, "mu",
     );
 
     // 0-6 km shear
@@ -349,8 +376,8 @@ pub fn compute_bri(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
     let tc = f.temperature_c(t)?;
     let qv = f.qvapor(t)?;
     let h_agl = f.height_agl(t)?;
-    let psfc = f.psfc(t)?;   // Pa -- compute_cape_cin converts internally
-    let t2 = f.t2_for_opts(t, opts)?;       // K  -- compute_cape_cin converts internally
+    let psfc = f.psfc(t)?; // Pa -- compute_cape_cin converts internally
+    let t2 = f.t2_for_opts(t, opts)?; // K  -- compute_cape_cin converts internally
     let q2 = f.q2_for_opts(t, opts)?;
     let u = f.u_destag(t)?;
     let v = f.v_destag(t)?;
@@ -361,8 +388,7 @@ pub fn compute_bri(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
 
     // Pass raw Pa/K values -- compute_cape_cin converts internally
     let (sbcape, _, _, _) = crate::met::composite::compute_cape_cin(
-        &pres, &tc, &qv, &h_agl, &psfc, &t2, &q2,
-        nx, ny, nz, "sb",
+        &pres, &tc, &qv, &h_agl, &psfc, &t2, &q2, nx, ny, nz, "sb",
     );
 
     let shear6 = crate::met::composite::compute_shear(&u, &v, &h_agl, nx, ny, nz, 0.0, 6000.0);
@@ -373,7 +399,11 @@ pub fn compute_bri(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
         .zip(shear6.iter())
         .map(|(cape, shr)| {
             let denom = 0.5 * shr * shr;
-            if denom > 0.1 { cape / denom } else { 0.0 }
+            if denom > 0.1 {
+                cape / denom
+            } else {
+                0.0
+            }
         })
         .collect())
 }
@@ -418,7 +448,7 @@ fn critical_angle_from_profile(
 
     u_aug.push(u_sfc);
     v_aug.push(v_sfc);
-    h_aug.push(10.0);
+    h_aug.push(SURFACE_LAYER_HEIGHT_M);
 
     u_aug.extend_from_slice(u_prof);
     v_aug.extend_from_slice(v_prof);
@@ -449,7 +479,7 @@ mod tests {
 
         let mut u_aug = vec![u10];
         let mut v_aug = vec![v10];
-        let mut h_aug = vec![10.0];
+        let mut h_aug = vec![SURFACE_LAYER_HEIGHT_M];
         u_aug.extend_from_slice(&u_prof);
         v_aug.extend_from_slice(&v_prof);
         h_aug.extend_from_slice(&h_prof);
@@ -457,14 +487,8 @@ mod tests {
         let ((sm_u, sm_v), _, _) = crate::met::wind::bunkers_storm_motion(&u_aug, &v_aug, &h_aug);
         let (u_500, v_500) = interp_wind_at_height(&u_aug, &v_aug, &h_aug, 500.0);
         let expected = crate::met::wind::critical_angle(sm_u, sm_v, u10, v10, u_500, v_500);
-        let first_level = crate::met::wind::critical_angle(
-            sm_u,
-            sm_v,
-            u_prof[0],
-            v_prof[0],
-            u_500,
-            v_500,
-        );
+        let first_level =
+            crate::met::wind::critical_angle(sm_u, sm_v, u_prof[0], v_prof[0], u_500, v_500);
 
         assert!((actual - expected).abs() < 1.0e-9);
         assert!(

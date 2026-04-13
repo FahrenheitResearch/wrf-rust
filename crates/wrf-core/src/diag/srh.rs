@@ -3,16 +3,16 @@
 //! Uses proper Bunkers storm motion (crate::met), NOT wrf-python's
 //! broken 0.75*(3-10km mean wind) rotated 30 degrees.
 
-
-
 use crate::compute::ComputeOpts;
 use crate::error::WrfResult;
 use crate::file::WrfFile;
 
+const SURFACE_LAYER_HEIGHT_M: f64 = 0.0;
+
 /// Canonical SRH entry point for all grid-based SRH computations.
 ///
 /// Applies earth-rotation (SINALPHA/COSALPHA) to both 3-D and 10-m winds,
-/// prepends U10/V10 at 10 m AGL, and then computes SRH via Bunkers RM
+/// prepends U10/V10 as the surface layer, and then computes SRH via Bunkers RM
 /// (or a caller-supplied storm motion).  All SRH consumers -- including
 /// STP, SCP, EHI, and effective SRH -- should funnel through this function
 /// so that every path sees the same wind preparation.
@@ -20,7 +20,7 @@ pub fn compute_srh_field(
     f: &WrfFile,
     t: usize,
     depth_m: f64,
-    storm_motion: Option<(f64, f64)>,
+    storm_motion: Option<&crate::compute::StormMotion>,
 ) -> WrfResult<Vec<f64>> {
     // Use earth-rotated winds for SRH (matches SHARPpy/MetPy convention)
     let u_grid = f.u_destag(t)?;
@@ -56,17 +56,17 @@ pub fn compute_srh_field(
 
     let nz = f.nz;
 
-    if let Some((_sm_u, _sm_v)) = storm_motion {
+    if let Some(storm_motion) = storm_motion {
         // Custom storm motion: compute column-by-column
         let mut srh = vec![0.0f64; nxy];
         srh.iter_mut().enumerate().for_each(|(ij, srh_val)| {
-            // Prepend 10m wind as surface level
+            // Prepend 10m wind as the surface layer.
             let mut u_prof = Vec::with_capacity(nz + 1);
             let mut v_prof = Vec::with_capacity(nz + 1);
             let mut h_prof = Vec::with_capacity(nz + 1);
             u_prof.push(u10[ij]);
             v_prof.push(v10[ij]);
-            h_prof.push(10.0);
+            h_prof.push(SURFACE_LAYER_HEIGHT_M);
 
             for k in 0..nz {
                 let idx = k * nxy + ij;
@@ -75,7 +75,7 @@ pub fn compute_srh_field(
                 h_prof.push(h_agl[idx]);
             }
 
-            let (sm_u, sm_v) = storm_motion.unwrap();
+            let (sm_u, sm_v) = storm_motion.at(ij);
             let (_, _, total) = crate::met::wind::storm_relative_helicity(
                 &u_prof, &v_prof, &h_prof, depth_m, sm_u, sm_v,
             );
@@ -84,18 +84,18 @@ pub fn compute_srh_field(
         Ok(srh)
     } else {
         // Default: use grid-parallel SRH with Bunkers
-        // Prepend 10m winds as surface level for each column
+        // Prepend 10m winds as the surface layer for each column.
         let nz_aug = nz + 1;
         let mut u_aug = Vec::with_capacity(nz_aug * nxy);
         let mut v_aug = Vec::with_capacity(nz_aug * nxy);
         let mut h_aug = Vec::with_capacity(nz_aug * nxy);
         let mut p_aug = Vec::with_capacity(nz_aug * nxy);
 
-        // Level 0: 10m winds at 10m AGL, surface pressure
+        // Level 0: 10m winds anchored to the surface, with surface pressure.
         for ij in 0..nxy {
             u_aug.push(u10[ij]);
             v_aug.push(v10[ij]);
-            h_aug.push(10.0);
+            h_aug.push(SURFACE_LAYER_HEIGHT_M);
             p_aug.push(psfc_hpa[ij]);
         }
         // Levels 1..nz: model levels
@@ -116,12 +116,7 @@ pub fn compute_srh_field(
 }
 
 /// Helper: compute bulk shear magnitude for a given layer.
-fn compute_shear_field(
-    f: &WrfFile,
-    t: usize,
-    bottom_m: f64,
-    top_m: f64,
-) -> WrfResult<Vec<f64>> {
+fn compute_shear_field(f: &WrfFile, t: usize, bottom_m: f64, top_m: f64) -> WrfResult<Vec<f64>> {
     let u = f.u_destag(t)?;
     let v = f.v_destag(t)?;
     let h_agl = f.height_agl(t)?;
@@ -185,13 +180,13 @@ fn compute_bunkers_columns(
     let results: Vec<_> = (0..nxy)
         .into_iter()
         .map(|ij| {
-            // Prepend 10m wind as surface level
+            // Prepend 10m wind as the surface layer.
             let mut u_prof = Vec::with_capacity(nz + 1);
             let mut v_prof = Vec::with_capacity(nz + 1);
             let mut h_prof = Vec::with_capacity(nz + 1);
             u_prof.push(u10[ij]);
             v_prof.push(v10[ij]);
-            h_prof.push(10.0);
+            h_prof.push(SURFACE_LAYER_HEIGHT_M);
 
             for k in 0..nz {
                 let idx = k * nxy + ij;
@@ -222,18 +217,18 @@ fn compute_bunkers_columns(
 
 /// 0-1 km SRH (m^2/s^2). `[ny, nx]`
 pub fn compute_srh1(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    compute_srh_field(f, t, 1000.0, opts.storm_motion)
+    compute_srh_field(f, t, 1000.0, opts.storm_motion.as_ref())
 }
 
 /// 0-3 km SRH (m^2/s^2). `[ny, nx]`
 pub fn compute_srh3(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    compute_srh_field(f, t, 3000.0, opts.storm_motion)
+    compute_srh_field(f, t, 3000.0, opts.storm_motion.as_ref())
 }
 
 /// SRH with configurable depth (default 3000m). `[ny, nx]`
 pub fn compute_srh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let depth = opts.depth_m.unwrap_or(3000.0);
-    compute_srh_field(f, t, depth, opts.storm_motion)
+    compute_srh_field(f, t, depth, opts.storm_motion.as_ref())
 }
 
 /// 0-1 km bulk wind shear magnitude (m/s). `[ny, nx]`
@@ -312,11 +307,11 @@ pub fn compute_effective_srh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
         v10[ij] = u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij];
     }
 
-    let custom_sm = opts.storm_motion;
+    let custom_sm = opts.storm_motion.as_ref();
 
     let mut srh = vec![0.0f64; nxy];
     srh.iter_mut().enumerate().for_each(|(ij, srh_val)| {
-        // Build augmented column profiles with 10m prepend
+        // Build augmented column profiles with a surface-layer prepend.
         let mut p_prof = Vec::with_capacity(nz + 1);
         let mut t_prof = Vec::with_capacity(nz + 1);
         let mut td_prof = Vec::with_capacity(nz + 1);
@@ -324,7 +319,7 @@ pub fn compute_effective_srh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
         let mut u_prof = Vec::with_capacity(nz + 1);
         let mut v_prof = Vec::with_capacity(nz + 1);
 
-        // Prepend 10m level: use surface pressure and lowest-level T/Td as approximation
+        // Prepend 10m level: use surface pressure and lowest-level T/Td as approximation.
         let idx0 = ij; // k=0 level
         let q0 = qv[idx0].max(1e-10);
         let e0 = q0 * pres_hpa[idx0] / (0.622 + q0);
@@ -334,7 +329,7 @@ pub fn compute_effective_srh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
         p_prof.push(pres_hpa[idx0]); // approximate surface pressure
         t_prof.push(tc[idx0]);
         td_prof.push(td0);
-        h_prof.push(10.0);
+        h_prof.push(SURFACE_LAYER_HEIGHT_M);
         u_prof.push(u10[ij]);
         v_prof.push(v10[ij]);
 
@@ -407,8 +402,8 @@ pub fn compute_effective_srh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
         let h_eff: Vec<f64> = h_prof[base_k..].to_vec();
 
         // Get storm motion (from full augmented profile)
-        let (sm_u, sm_v) = if let Some((cu, cv)) = custom_sm {
-            (cu, cv)
+        let (sm_u, sm_v) = if let Some(sm) = custom_sm {
+            sm.at(ij)
         } else {
             let ((ru, rv), _, _) =
                 crate::met::wind::bunkers_storm_motion(&u_prof, &v_prof, &h_prof);
@@ -479,13 +474,13 @@ pub fn compute_mean_wind(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult
     let results: Vec<_> = (0..nxy)
         .into_iter()
         .map(|ij| {
-            // Prepend 10m wind as surface level
+            // Prepend 10m wind as the surface layer.
             let mut u_prof = Vec::with_capacity(nz + 1);
             let mut v_prof = Vec::with_capacity(nz + 1);
             let mut h_prof = Vec::with_capacity(nz + 1);
             u_prof.push(u10[ij]);
             v_prof.push(v10[ij]);
-            h_prof.push(10.0);
+            h_prof.push(SURFACE_LAYER_HEIGHT_M);
 
             for k in 0..nz {
                 let idx = k * nxy + ij;
@@ -507,4 +502,14 @@ pub fn compute_mean_wind(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult
     let mut out = mean_u;
     out.extend(mean_v);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SURFACE_LAYER_HEIGHT_M;
+
+    #[test]
+    fn surface_augmentation_anchors_10m_winds_at_zero_agl() {
+        assert_eq!(SURFACE_LAYER_HEIGHT_M, 0.0);
+    }
 }

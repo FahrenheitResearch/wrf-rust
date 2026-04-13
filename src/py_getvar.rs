@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 
 use crate::py_file::{self, WrfFile};
+use crate::py_opts;
 
 /// Compute a diagnostic variable from a WRF file.
 #[pyfunction]
@@ -12,7 +13,7 @@ fn getvar<'py>(
     timeidx: Option<usize>,
     units: Option<String>,
     parcel_type: Option<String>,
-    storm_motion: Option<(f64, f64)>,
+    storm_motion: Option<Py<PyAny>>,
     top_m: Option<f64>,
     bottom_m: Option<f64>,
     depth_m: Option<f64>,
@@ -27,7 +28,10 @@ fn getvar<'py>(
     use_varint: Option<bool>,
     use_liqskin: Option<bool>,
 ) -> PyResult<PyObject> {
-    let opts = wrf_core::ComputeOpts {
+    let opts = py_opts::build_compute_opts(
+        py,
+        wrffile.inner().ny,
+        wrffile.inner().nx,
         units,
         parcel_type,
         storm_motion,
@@ -44,7 +48,7 @@ fn getvar<'py>(
         lake_interp,
         use_varint,
         use_liqskin,
-    };
+    )?;
 
     let result = wrf_core::getvar(wrffile.inner(), name, timeidx, &opts)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;

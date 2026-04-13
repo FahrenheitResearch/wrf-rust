@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 
 mod py_file;
 mod py_getvar;
+mod py_opts;
 
 /// The native Rust module exposed as wrf._wrf
 #[pymodule]

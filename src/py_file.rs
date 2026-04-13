@@ -1,6 +1,8 @@
 use numpy::IntoPyArray;
 use pyo3::prelude::*;
 
+use crate::py_opts;
+
 /// A WRF output file handle.
 ///
 /// Opens a NetCDF WRF output file and provides access to grid metadata
@@ -78,7 +80,7 @@ impl WrfFile {
         timeidx: Option<usize>,
         units: Option<String>,
         parcel_type: Option<String>,
-        storm_motion: Option<(f64, f64)>,
+        storm_motion: Option<Py<PyAny>>,
         top_m: Option<f64>,
         bottom_m: Option<f64>,
         depth_m: Option<f64>,
@@ -93,7 +95,10 @@ impl WrfFile {
         use_varint: Option<bool>,
         use_liqskin: Option<bool>,
     ) -> PyResult<PyObject> {
-        let opts = wrf_core::ComputeOpts {
+        let opts = py_opts::build_compute_opts(
+            py,
+            self.inner.ny,
+            self.inner.nx,
             units,
             parcel_type,
             storm_motion,
@@ -110,7 +115,7 @@ impl WrfFile {
             lake_interp,
             use_varint,
             use_liqskin,
-        };
+        )?;
 
         let result = wrf_core::getvar(&self.inner, name, timeidx, &opts)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -148,13 +153,12 @@ pub fn to_numpy(py: Python<'_>, result: wrf_core::VarOutput) -> PyResult<PyObjec
             Ok(arr.into_pyarray(py).into_any().unbind())
         }
         [nz, ny, nx] => {
-            let arr =
-                ndarray::Array3::from_shape_vec((*nz, *ny, *nx), result.data).map_err(err)?;
+            let arr = ndarray::Array3::from_shape_vec((*nz, *ny, *nx), result.data).map_err(err)?;
             Ok(arr.into_pyarray(py).into_any().unbind())
         }
         [nf, nz, ny, nx] => {
-            let arr = ndarray::Array4::from_shape_vec((*nf, *nz, *ny, *nx), result.data)
-                .map_err(err)?;
+            let arr =
+                ndarray::Array4::from_shape_vec((*nf, *nz, *ny, *nx), result.data).map_err(err)?;
             Ok(arr.into_pyarray(py).into_any().unbind())
         }
         _ => {

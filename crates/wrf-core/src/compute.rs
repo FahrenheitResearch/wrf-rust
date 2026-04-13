@@ -3,6 +3,25 @@ use crate::file::WrfFile;
 use crate::units::{convert_array, parse_units};
 use crate::variables::{get_var_def, VarDim};
 
+/// Custom storm motion for SRH-family diagnostics.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StormMotion {
+    /// One `(u, v)` motion applied to every grid cell.
+    Uniform { u: f64, v: f64 },
+    /// Per-grid-cell storm motion fields, flattened `[ny, nx]`.
+    Grid { u: Vec<f64>, v: Vec<f64> },
+}
+
+impl StormMotion {
+    /// Return the storm motion at flattened grid index `ij`.
+    pub fn at(&self, ij: usize) -> (f64, f64) {
+        match self {
+            Self::Uniform { u, v } => (*u, *v),
+            Self::Grid { u, v } => (u[ij], v[ij]),
+        }
+    }
+}
+
 /// Options controlling variable computation.
 #[derive(Debug, Clone, Default)]
 pub struct ComputeOpts {
@@ -10,8 +29,8 @@ pub struct ComputeOpts {
     pub units: Option<String>,
     /// Parcel type for CAPE: "sb", "ml", "mu".
     pub parcel_type: Option<String>,
-    /// Custom storm motion (u, v) in m/s for SRH.
-    pub storm_motion: Option<(f64, f64)>,
+    /// Custom storm motion in m/s for SRH-family diagnostics.
+    pub storm_motion: Option<StormMotion>,
     /// Integration top (meters AGL) for CAPE, lapse rates, updraft helicity, etc.
     pub top_m: Option<f64>,
     /// Bottom of layer (meters AGL) for shear, mean wind, lapse rates, UH, etc.
@@ -42,6 +61,30 @@ pub struct ComputeOpts {
     /// Use liquid-skin bright-band correction for DBZ.
     /// Default (None/false) = no correction, matching wrf-python defaults.
     pub use_liqskin: Option<bool>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StormMotion;
+
+    #[test]
+    fn grid_storm_motion_returns_column_components() {
+        let motion = StormMotion::Grid {
+            u: vec![10.0, 11.0, 12.0, 13.0],
+            v: vec![20.0, 21.0, 22.0, 23.0],
+        };
+
+        assert_eq!(motion.at(0), (10.0, 20.0));
+        assert_eq!(motion.at(3), (13.0, 23.0));
+    }
+
+    #[test]
+    fn uniform_storm_motion_is_reused_for_every_column() {
+        let motion = StormMotion::Uniform { u: 12.0, v: 8.0 };
+
+        assert_eq!(motion.at(0), (12.0, 8.0));
+        assert_eq!(motion.at(99), (12.0, 8.0));
+    }
 }
 
 /// The result of computing a WRF variable.
@@ -132,18 +175,16 @@ pub fn getvar(
 
 /// Fallback: read a raw WRF variable directly from the file.
 /// Used when the variable name is not in the computed registry.
-fn getvar_raw(
-    file: &WrfFile,
-    name: &str,
-    t: usize,
-    opts: &ComputeOpts,
-) -> WrfResult<VarOutput> {
+fn getvar_raw(file: &WrfFile, name: &str, t: usize, opts: &ComputeOpts) -> WrfResult<VarOutput> {
     // Try reading the variable by its exact name (case-sensitive, uppercase WRF convention)
-    let data = file.read_var(name, t)
+    let data = file
+        .read_var(name, t)
         .or_else(|_| file.read_var(&name.to_uppercase(), t))
-        .map_err(|_| WrfError::UnknownVar(format!(
-            "{name} (not in computed registry and not found as raw variable in file)"
-        )))?;
+        .map_err(|_| {
+            WrfError::UnknownVar(format!(
+                "{name} (not in computed registry and not found as raw variable in file)"
+            ))
+        })?;
 
     let nxy = file.nxy();
     let nxyz = file.nxyz();

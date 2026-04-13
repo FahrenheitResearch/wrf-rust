@@ -13,6 +13,7 @@ Pre-built wheels for Python 3.10-3.13 on Linux, macOS, and Windows. No Rust tool
 ## Usage
 
 ```python
+import numpy as np
 from wrf import WrfFile, getvar
 
 f = WrfFile("wrfout_d01_2024-06-01_00:00:00")
@@ -36,6 +37,11 @@ cape = getvar(f, "cape", parcel_pressure=850,
 srh1 = getvar(f, "srh1")                            # 0-1 km
 srh3 = getvar(f, "srh3")                            # 0-3 km
 srh  = getvar(f, "srh", depth_m=1500, storm_motion=(12, 8))
+
+# Per-grid custom storm motion
+sm_u = np.full((f.ny, f.nx), 12.0)
+sm_v = np.full((f.ny, f.nx), 8.0)
+srh_custom = getvar(f, "srh", depth_m=1500, storm_motion=(sm_u, sm_v))
 
 # Effective inflow layer
 eff_srh  = getvar(f, "effective_srh")
@@ -147,7 +153,7 @@ All CAPE variables support `top_m` for truncated integration (e.g. `top_m=3000` 
 
 `srh1` `srh3` `srh` `effective_srh` `shear_0_1km` `shear_0_6km` `bulk_shear` `mean_wind` `bunkers_rm` `bunkers_lm` `mean_wind_0_6km`
 
-SRH uses Bunkers Internal Dynamics method. All accept `storm_motion=(u,v)`.
+SRH uses Bunkers Internal Dynamics method. `storm_motion=(u, v)` accepts either scalar components or `(ny, nx)` component grids.
 
 ### Severe composites
 
@@ -183,7 +189,7 @@ Generic `lapse_rate` accepts `bottom_m`/`top_m` or `bottom_p`/`top_p`, plus `use
 | `top_m` / `bottom_m` | Layer bounds in m AGL |
 | `top_p` / `bottom_p` | Layer bounds in hPa |
 | `depth_m` | SRH/EHI depth (m AGL) |
-| `storm_motion` | Custom (u, v) in m/s |
+| `storm_motion` | Custom storm motion `(u, v)` in m/s; each component may be a scalar or `(ny, nx)` grid |
 | `layer_type` | `"fixed"` or `"effective"` for STP |
 | `use_virtual` | Virtual temperature for lapse rates |
 | `lake_interp` | Interpolate 2m fields over lakes < N km2 |

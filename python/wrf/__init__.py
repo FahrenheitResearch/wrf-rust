@@ -62,7 +62,7 @@ __all__ = [
     "latlon_coords",
     "ll_to_xy",
 ]
-__version__ = "0.2.25"
+__version__ = "0.2.26"
 
 # ── Optional plotting imports (require matplotlib) ──
 try:
@@ -344,8 +344,11 @@ def getvar(
         Convert output to these units (e.g. "degC", "hPa", "knots").
     parcel_type : str, optional
         Parcel selection for CAPE variables: "sb", "ml", or "mu".
-    storm_motion : tuple of (float, float), optional
-        Custom storm motion (u, v) in m/s for SRH variables.
+    storm_motion : tuple, optional
+        Custom storm motion in m/s for SRH-family diagnostics. Pass either
+        a scalar ``(u, v)`` pair, a pair of 2-D component grids
+        ``(u_grid, v_grid)`` with shape ``(ny, nx)``, or a stacked array
+        with shape ``(2, ny, nx)``.
     top_m : float, optional
         Top of layer in metres AGL. Used by CAPE (truncated integration),
         shear, mean wind, lapse rates, updraft helicity.
