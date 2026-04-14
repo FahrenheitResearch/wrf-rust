@@ -1,5 +1,6 @@
 pub mod cape;
 pub mod cloud;
+pub mod ecape;
 pub mod extra;
 pub mod helicity;
 pub mod moisture;

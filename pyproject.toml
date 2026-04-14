@@ -4,8 +4,8 @@ build-backend = "maturin"
 
 [project]
 name = "wrf-rust"
-version = "0.2.29"
-description = "Rust-powered WRF post-processing with corrected effective severe diagnostics, raw staggered support, and 83 diagnostic variables"
+version = "0.2.30"
+description = "Rust-powered WRF post-processing with corrected effective severe diagnostics, ECAPE support, raw staggered support, and 92 diagnostic variables"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "Fahrenheit Research"}]

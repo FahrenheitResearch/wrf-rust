@@ -12,6 +12,7 @@ Usage:
     temp = getvar(f, "temp", timeidx=0, units="degC")
     cape = getvar(f, "sbcape", timeidx=0)
     srh  = getvar(f, "srh1", timeidx=0)
+    ecape = getvar(f, "ecape", timeidx=0, storm_motion_type="bunkers_rm")
 
     # All timesteps at once
     slp = getvar(f, "slp", timeidx=ALL_TIMES, units="hPa")
@@ -62,7 +63,7 @@ __all__ = [
     "latlon_coords",
     "ll_to_xy",
 ]
-__version__ = "0.2.29"
+__version__ = "0.2.30"
 
 # ── Optional plotting imports (require matplotlib) ──
 try:
@@ -310,6 +311,9 @@ def getvar(
     parcel_type=None,
     storm_motion=None,
     storm_motion_method=None,
+    storm_motion_type=None,
+    entrainment_rate=None,
+    pseudoadiabatic=None,
     top_m=None,
     bottom_m=None,
     depth_m=None,
@@ -344,7 +348,8 @@ def getvar(
     units : str, optional
         Convert output to these units (e.g. "degC", "hPa", "knots").
     parcel_type : str, optional
-        Parcel selection for CAPE variables: "sb", "ml", or "mu".
+        Parcel selection for CAPE and ECAPE-family variables: "sb", "ml",
+        or "mu".
     storm_motion : tuple, optional
         Custom storm motion in m/s for SRH-family diagnostics. Pass either
         a scalar ``(u, v)`` pair, a pair of 2-D component grids
@@ -354,6 +359,15 @@ def getvar(
         Default Bunkers storm-motion algorithm when ``storm_motion`` is not
         supplied. Use ``"pressure_weighted"`` (default), ``"weighted"``,
         ``"non_pressure_weighted"``, ``"unweighted"``, or ``"classic"``.
+    storm_motion_type : str, optional
+        ECAPE storm-motion type. Common values are ``"bunkers_rm"``,
+        ``"bunkers_lm"``, and ``"mean_wind"``.
+    entrainment_rate : float, optional
+        ECAPE entrainment rate forwarded to the core implementation.
+        Ignored by non-ECAPE diagnostics.
+    pseudoadiabatic : bool, optional
+        ECAPE pseudoadiabatic toggle forwarded to the core implementation.
+        Ignored by non-ECAPE diagnostics.
     top_m : float, optional
         Top of layer in metres AGL. Used by CAPE (truncated integration),
         shear, mean wind, lapse rates, updraft helicity.
@@ -415,6 +429,9 @@ def getvar(
         parcel_type=parcel_type,
         storm_motion=storm_motion,
         storm_motion_method=storm_motion_method,
+        storm_motion_type=storm_motion_type,
+        entrainment_rate=entrainment_rate,
+        pseudoadiabatic=pseudoadiabatic,
         top_m=top_m,
         bottom_m=bottom_m,
         depth_m=depth_m,

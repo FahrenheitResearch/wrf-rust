@@ -24,6 +24,7 @@ pub struct VarDef {
 // ── Compute function imports ──
 use crate::diag::cape as dcape;
 use crate::diag::cloud as dcloud;
+use crate::diag::ecape as decape;
 use crate::diag::extra as dextra;
 use crate::diag::helicity as dhel;
 use crate::diag::moisture as dmoist;
@@ -689,6 +690,54 @@ pub static VARS: &[VarDef] = &[
         compute: dcape::compute_effective_inflow_cape,
     },
     VarDef {
+        name: "ecape",
+        aliases: &["entraining_cape"],
+        description: "Entraining CAPE from ecape-rs",
+        default_units: "J/kg",
+        dim: VarDim::TwoD,
+        compute: decape::compute_ecape,
+    },
+    VarDef {
+        name: "ncape",
+        aliases: &["normalized_cape"],
+        description: "Normalized CAPE from ecape-rs",
+        default_units: "J/kg",
+        dim: VarDim::TwoD,
+        compute: decape::compute_ncape,
+    },
+    VarDef {
+        name: "ecape_cape",
+        aliases: &["entraining_parcel_cape"],
+        description: "Entraining parcel CAPE from ecape-rs",
+        default_units: "J/kg",
+        dim: VarDim::TwoD,
+        compute: decape::compute_ecape_cape,
+    },
+    VarDef {
+        name: "ecape_cin",
+        aliases: &["ecin", "entraining_parcel_cin"],
+        description: "Entraining parcel CIN from ecape-rs",
+        default_units: "J/kg",
+        dim: VarDim::TwoD,
+        compute: decape::compute_ecape_cin,
+    },
+    VarDef {
+        name: "ecape_lfc",
+        aliases: &["entraining_parcel_lfc"],
+        description: "Entraining parcel LFC from ecape-rs",
+        default_units: "m",
+        dim: VarDim::TwoD,
+        compute: decape::compute_ecape_lfc,
+    },
+    VarDef {
+        name: "ecape_el",
+        aliases: &["entraining_parcel_el"],
+        description: "Entraining parcel EL from ecape-rs",
+        default_units: "m",
+        dim: VarDim::TwoD,
+        compute: decape::compute_ecape_el,
+    },
+    VarDef {
         name: "effective_srh",
         aliases: &["srh_eff", "eff_srh"],
         description: "SRH over effective inflow layer (Bunkers)",
@@ -754,5 +803,7 @@ mod tests {
         assert_eq!(get_var_def("cape_3d").unwrap().name, "cape3d");
         assert_eq!(get_var_def("mdbz").unwrap().name, "maxdbz");
         assert_eq!(get_var_def("helicity").unwrap().name, "uhel");
+        assert_eq!(get_var_def("entraining_cape").unwrap().name, "ecape");
+        assert_eq!(get_var_def("ecin").unwrap().name, "ecape_cin");
     }
 }

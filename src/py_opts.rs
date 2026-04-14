@@ -91,6 +91,31 @@ fn parse_storm_motion_method(
     }
 }
 
+fn parse_storm_motion_type(storm_motion_type: Option<String>) -> PyResult<Option<String>> {
+    let Some(motion_type) = storm_motion_type else {
+        return Ok(None);
+    };
+
+    let normalized = motion_type
+        .trim()
+        .to_ascii_lowercase()
+        .replace('-', "_")
+        .replace(' ', "_");
+
+    let canonical = match normalized.as_str() {
+        "bunkers_rm" | "bunkers_right" | "right_moving" | "right" | "rm" => "bunkers_rm",
+        "bunkers_lm" | "bunkers_left" | "left_moving" | "left" | "lm" => "bunkers_lm",
+        "mean_wind" | "meanwind" | "mean" | "mw" => "mean_wind",
+        _ => {
+            return Err(PyErr::new::<PyValueError, _>(
+                "storm_motion_type must be one of 'bunkers_rm', 'bunkers_lm', or 'mean_wind'",
+            ));
+        }
+    };
+
+    Ok(Some(canonical.to_string()))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build_compute_opts(
     py: Python<'_>,
@@ -100,6 +125,9 @@ pub fn build_compute_opts(
     parcel_type: Option<String>,
     storm_motion: Option<Py<PyAny>>,
     storm_motion_method: Option<String>,
+    storm_motion_type: Option<String>,
+    entrainment_rate: Option<f64>,
+    pseudoadiabatic: Option<bool>,
     top_m: Option<f64>,
     bottom_m: Option<f64>,
     depth_m: Option<f64>,
@@ -116,12 +144,16 @@ pub fn build_compute_opts(
 ) -> PyResult<wrf_core::ComputeOpts> {
     let storm_motion = parse_storm_motion(storm_motion.as_ref().map(|obj| obj.bind(py)), ny, nx)?;
     let storm_motion_method = parse_storm_motion_method(storm_motion_method)?;
+    let storm_motion_type = parse_storm_motion_type(storm_motion_type)?;
 
     Ok(wrf_core::ComputeOpts {
         units,
         parcel_type,
         storm_motion,
         storm_motion_method,
+        storm_motion_type,
+        entrainment_rate,
+        pseudoadiabatic,
         top_m,
         bottom_m,
         depth_m,
@@ -140,7 +172,7 @@ pub fn build_compute_opts(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_storm_motion, parse_storm_motion_method};
+    use super::{parse_storm_motion, parse_storm_motion_method, parse_storm_motion_type};
     use pyo3::prelude::*;
     use wrf_core::{StormMotion, StormMotionMethod};
 
@@ -184,6 +216,18 @@ mod tests {
         assert_eq!(
             parse_storm_motion_method(Some("weighted".to_string())).unwrap(),
             Some(StormMotionMethod::PressureWeighted)
+        );
+    }
+
+    #[test]
+    fn parses_storm_motion_type_aliases() {
+        assert_eq!(
+            parse_storm_motion_type(Some("right-moving".to_string())).unwrap(),
+            Some("bunkers_rm".to_string())
+        );
+        assert_eq!(
+            parse_storm_motion_type(Some("mean wind".to_string())).unwrap(),
+            Some("mean_wind".to_string())
         );
     }
 }

@@ -72,7 +72,7 @@ impl WrfFile {
     }
 
     /// Compute a diagnostic variable.
-    #[pyo3(signature = (name, timeidx=None, units=None, parcel_type=None, storm_motion=None, storm_motion_method=None, top_m=None, bottom_m=None, depth_m=None, parcel_pressure=None, parcel_temperature=None, parcel_dewpoint=None, bottom_p=None, top_p=None, layer_type=None, use_virtual=None, lake_interp=None, use_varint=None, use_liqskin=None))]
+    #[pyo3(signature = (name, timeidx=None, units=None, parcel_type=None, storm_motion=None, storm_motion_method=None, storm_motion_type=None, entrainment_rate=None, pseudoadiabatic=None, top_m=None, bottom_m=None, depth_m=None, parcel_pressure=None, parcel_temperature=None, parcel_dewpoint=None, bottom_p=None, top_p=None, layer_type=None, use_virtual=None, lake_interp=None, use_varint=None, use_liqskin=None))]
     fn getvar<'py>(
         &self,
         py: Python<'py>,
@@ -82,6 +82,9 @@ impl WrfFile {
         parcel_type: Option<String>,
         storm_motion: Option<Py<PyAny>>,
         storm_motion_method: Option<String>,
+        storm_motion_type: Option<String>,
+        entrainment_rate: Option<f64>,
+        pseudoadiabatic: Option<bool>,
         top_m: Option<f64>,
         bottom_m: Option<f64>,
         depth_m: Option<f64>,
@@ -104,6 +107,9 @@ impl WrfFile {
             parcel_type,
             storm_motion,
             storm_motion_method,
+            storm_motion_type,
+            entrainment_rate,
+            pseudoadiabatic,
             top_m,
             bottom_m,
             depth_m,
@@ -125,7 +131,7 @@ impl WrfFile {
         to_numpy(py, result)
     }
 
-    #[pyo3(signature = (name, units=None, parcel_type=None, storm_motion=None, storm_motion_method=None, top_m=None, bottom_m=None, depth_m=None, parcel_pressure=None, parcel_temperature=None, parcel_dewpoint=None, bottom_p=None, top_p=None, layer_type=None, use_virtual=None, lake_interp=None, use_varint=None, use_liqskin=None))]
+    #[pyo3(signature = (name, units=None, parcel_type=None, storm_motion=None, storm_motion_method=None, storm_motion_type=None, entrainment_rate=None, pseudoadiabatic=None, top_m=None, bottom_m=None, depth_m=None, parcel_pressure=None, parcel_temperature=None, parcel_dewpoint=None, bottom_p=None, top_p=None, layer_type=None, use_virtual=None, lake_interp=None, use_varint=None, use_liqskin=None))]
     fn getvar_all_times<'py>(
         &self,
         py: Python<'py>,
@@ -134,6 +140,9 @@ impl WrfFile {
         parcel_type: Option<String>,
         storm_motion: Option<Py<PyAny>>,
         storm_motion_method: Option<String>,
+        storm_motion_type: Option<String>,
+        entrainment_rate: Option<f64>,
+        pseudoadiabatic: Option<bool>,
         top_m: Option<f64>,
         bottom_m: Option<f64>,
         depth_m: Option<f64>,
@@ -156,6 +165,9 @@ impl WrfFile {
             parcel_type,
             storm_motion,
             storm_motion_method,
+            storm_motion_type,
+            entrainment_rate,
+            pseudoadiabatic,
             top_m,
             bottom_m,
             depth_m,

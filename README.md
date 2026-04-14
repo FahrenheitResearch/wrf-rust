@@ -1,6 +1,6 @@
 # wrf-rust
 
-Rust-powered WRF post-processing with Python bindings. 83 diagnostic variables, built-in plotting, and parallel computation.
+Rust-powered WRF post-processing with Python bindings. 85 diagnostic variables, built-in plotting, and parallel computation.
 
 ## Install
 
@@ -49,6 +49,11 @@ sb3cap = getvar(f, "sbcape", top_m=3000)           # 0-3 km CAPE
 # Custom parcel
 cape = getvar(f, "cape", parcel_pressure=850,
               parcel_temperature=20, parcel_dewpoint=15)
+
+# ECAPE family
+ecape = getvar(f, "ecape", storm_motion_type="bunkers_rm",
+               entrainment_rate=0.0005, pseudoadiabatic=False)
+ecin  = getvar(f, "ecin", storm_motion_type="mean_wind")
 
 # SRH with Bunkers storm motion
 srh1 = getvar(f, "srh1")                            # 0-1 km
@@ -137,11 +142,11 @@ Benchmarked on a 199x199x79 WRF grid. The fields below matched wrf-python on tha
 | SLP | 0.517s | 0.497s | 1x |
 | Wind destagger | 0.089s | 0.081s | 1x |
 
-Plus 17 variables wrf-python doesn't have (STP, SCP, EHI, critical angle, shear, Bunkers, lapse rates, fire indices, effective inflow layer).
+Plus 23 variables wrf-python doesn't have (STP, SCP, EHI, critical angle, ECAPE, shear, Bunkers, lapse rates, fire indices, effective inflow layer).
 
 ## Variables
 
-83 diagnostic variables. All support `units=` parameter.
+92 diagnostic variables. All support `units=` parameter.
 
 ### Thermodynamics
 
@@ -163,6 +168,8 @@ Plus 17 variables wrf-python doesn't have (STP, SCP, EHI, critical angle, shear,
 
 All CAPE variables support `top_m` for truncated integration (e.g. `top_m=3000` for 3CAPE). Generic `cape`/`cin` accept `parcel_type` or custom parcel (`parcel_pressure`, `parcel_temperature`, `parcel_dewpoint`). `effective_inflow` returns a two-plane output: effective layer base followed by effective layer top, both in meters AGL.
 
+ECAPE-family variables use the same `getvar()` entry point but also accept `storm_motion_type`, `entrainment_rate`, and `pseudoadiabatic`. They support `parcel_type="sb"`, `"ml"`, or `"mu"`, but they do not currently support the generic custom parcel thermodynamics (`parcel_pressure`, `parcel_temperature`, `parcel_dewpoint`).
+
 ### Wind
 
 `ua` `va` `wa` `wspd` `wdir` `wspd10` `wdir10` `uvmet` `uvmet10`
@@ -178,6 +185,12 @@ SRH/Bunkers diagnostics default to pressure-weighted Bunkers layer means when pr
 `stp` `stp_fixed` `stp_effective` `scp` `ehi` `critical_angle` `ship` `bri`
 
 STP supports `layer_type="effective"` for the 5-term formula with MLCIN. Effective `stp` uses ESRH + EBWD, and `scp` uses MUCAPE + effective SRH + EBWD.
+
+### ECAPE
+
+`ecape` `ncape` `ecape_cape` `ecape_cin` `ecape_lfc` `ecape_el`
+
+ECAPE diagnostics accept `parcel_type`, `storm_motion` or `storm_motion_type`, `entrainment_rate`, and `pseudoadiabatic`.
 
 ### Radar & cloud
 
@@ -209,6 +222,9 @@ Generic `lapse_rate` accepts `bottom_m`/`top_m` or `bottom_p`/`top_p`, plus `use
 | `depth_m` | SRH/EHI depth (m AGL) |
 | `storm_motion` | Custom storm motion `(u, v)` in m/s; each component may be a scalar or `(ny, nx)` grid |
 | `storm_motion_method` | Default Bunkers method: `"pressure_weighted"` (default) or `"non_pressure_weighted"` / `"classic"` |
+| `storm_motion_type` | ECAPE storm-motion type: `"bunkers_rm"`, `"bunkers_lm"`, or `"mean_wind"` |
+| `entrainment_rate` | ECAPE entrainment rate passed through to the core implementation |
+| `pseudoadiabatic` | ECAPE pseudoadiabatic toggle |
 | `layer_type` | `"fixed"` or `"effective"` for STP |
 | `use_virtual` | Virtual temperature for lapse rates |
 | `lake_interp` | Interpolate 2m fields over lakes < N km2 |

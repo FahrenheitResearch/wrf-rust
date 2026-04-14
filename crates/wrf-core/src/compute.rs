@@ -42,6 +42,8 @@ pub struct ComputeOpts {
     pub storm_motion: Option<StormMotion>,
     /// Default Bunkers storm-motion algorithm when `storm_motion` is not supplied.
     pub storm_motion_method: Option<StormMotionMethod>,
+    /// Storm-motion family for ECAPE calculations: "right_moving", "left_moving", or "mean_wind".
+    pub storm_motion_type: Option<String>,
     /// Integration top (meters AGL) for CAPE, lapse rates, updraft helicity, etc.
     pub top_m: Option<f64>,
     /// Bottom of layer (meters AGL) for shear, mean wind, lapse rates, UH, etc.
@@ -66,6 +68,10 @@ pub struct ComputeOpts {
     /// 0 or None = disabled. Typical value: 1000.
     /// Removes lake artifacts in T2/Q2 that corrupt CAPE, STP, etc.
     pub lake_interp: Option<f64>,
+    /// Explicit entrainment rate for ECAPE parcel calculations (1/m). If omitted, ecape-rs derives it.
+    pub entrainment_rate: Option<f64>,
+    /// Use pseudoadiabatic ascent for ECAPE parcel calculations. Default follows ecape-rs.
+    pub pseudoadiabatic: Option<bool>,
     /// Use variable intercept parameters (Thompson microphysics) for DBZ.
     /// Default (None/false) = constant intercepts matching wrf-python defaults.
     pub use_varint: Option<bool>,
