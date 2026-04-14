@@ -72,7 +72,7 @@ impl WrfFile {
     }
 
     /// Compute a diagnostic variable.
-    #[pyo3(signature = (name, timeidx=None, units=None, parcel_type=None, storm_motion=None, storm_motion_method=None, storm_motion_type=None, entrainment_rate=None, pseudoadiabatic=None, top_m=None, bottom_m=None, depth_m=None, parcel_pressure=None, parcel_temperature=None, parcel_dewpoint=None, bottom_p=None, top_p=None, layer_type=None, use_virtual=None, lake_interp=None, use_varint=None, use_liqskin=None))]
+    #[pyo3(signature = (name, timeidx=None, units=None, parcel_type=None, storm_motion=None, storm_motion_method=None, storm_motion_type=None, entrainment_rate=None, pseudoadiabatic=None, top_m=None, bottom_m=None, depth_m=None, parcel_pressure=None, parcel_temperature=None, parcel_dewpoint=None, bottom_p=None, top_p=None, layer_type=None, use_virtual=None, lake_interp=None, use_varint=None, use_liqskin=None, ecape_strict=None))]
     fn getvar<'py>(
         &self,
         py: Python<'py>,
@@ -98,6 +98,7 @@ impl WrfFile {
         lake_interp: Option<f64>,
         use_varint: Option<bool>,
         use_liqskin: Option<bool>,
+        ecape_strict: Option<bool>,
     ) -> PyResult<PyObject> {
         let opts = py_opts::build_compute_opts(
             py,
@@ -123,6 +124,7 @@ impl WrfFile {
             lake_interp,
             use_varint,
             use_liqskin,
+            ecape_strict,
         )?;
 
         let result = wrf_core::getvar(&self.inner, name, timeidx, &opts)
@@ -131,7 +133,7 @@ impl WrfFile {
         to_numpy(py, result)
     }
 
-    #[pyo3(signature = (name, units=None, parcel_type=None, storm_motion=None, storm_motion_method=None, storm_motion_type=None, entrainment_rate=None, pseudoadiabatic=None, top_m=None, bottom_m=None, depth_m=None, parcel_pressure=None, parcel_temperature=None, parcel_dewpoint=None, bottom_p=None, top_p=None, layer_type=None, use_virtual=None, lake_interp=None, use_varint=None, use_liqskin=None))]
+    #[pyo3(signature = (name, units=None, parcel_type=None, storm_motion=None, storm_motion_method=None, storm_motion_type=None, entrainment_rate=None, pseudoadiabatic=None, top_m=None, bottom_m=None, depth_m=None, parcel_pressure=None, parcel_temperature=None, parcel_dewpoint=None, bottom_p=None, top_p=None, layer_type=None, use_virtual=None, lake_interp=None, use_varint=None, use_liqskin=None, ecape_strict=None))]
     fn getvar_all_times<'py>(
         &self,
         py: Python<'py>,
@@ -156,6 +158,7 @@ impl WrfFile {
         lake_interp: Option<f64>,
         use_varint: Option<bool>,
         use_liqskin: Option<bool>,
+        ecape_strict: Option<bool>,
     ) -> PyResult<PyObject> {
         let opts = py_opts::build_compute_opts(
             py,
@@ -181,6 +184,7 @@ impl WrfFile {
             lake_interp,
             use_varint,
             use_liqskin,
+            ecape_strict,
         )?;
 
         let result = wrf_core::getvar_all_times(&self.inner, name, &opts)

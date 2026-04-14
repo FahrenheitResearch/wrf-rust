@@ -23,6 +23,44 @@ struct EcapeSummary {
     el: f64,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ResolvedEcapeOpts {
+    parcel: CapeType,
+    storm_motion: EcapeStormMotionType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EcapeFailure {
+    InsufficientLevels,
+    Solver,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct EcapeFailureReport {
+    insufficient_columns: usize,
+    solver_failures: usize,
+}
+
+impl EcapeFailureReport {
+    fn record(&mut self, failure: Option<EcapeFailure>) {
+        match failure {
+            Some(EcapeFailure::InsufficientLevels) => self.insufficient_columns += 1,
+            Some(EcapeFailure::Solver) => self.solver_failures += 1,
+            None => {}
+        }
+    }
+
+    fn total(self) -> usize {
+        self.insufficient_columns + self.solver_failures
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct EcapeColumnResult {
+    summary: EcapeSummary,
+    failure: Option<EcapeFailure>,
+}
+
 const ECAPE_STACK_FIELDS: usize = 6;
 
 fn dewpoint_k_from_q(q_kgkg: f64, p_pa: f64, temp_k: f64) -> f64 {
@@ -60,43 +98,50 @@ fn validate_ecape_opts(opts: &ComputeOpts) -> WrfResult<()> {
     Ok(())
 }
 
-fn resolve_parcel_type(opts: &ComputeOpts) -> WrfResult<CapeType> {
-    match opts
-        .parcel_type
-        .as_deref()
-        .unwrap_or("sb")
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "sb" | "surface_based" | "surface" => Ok(CapeType::SurfaceBased),
-        "ml" | "mixed_layer" => Ok(CapeType::MixedLayer),
-        "mu" | "most_unstable" => Ok(CapeType::MostUnstable),
-        other => Err(WrfError::InvalidParam(format!(
-            "unsupported ECAPE parcel_type '{other}'; expected 'sb', 'ml', or 'mu'"
-        ))),
+fn resolve_ecape_opts(opts: &ComputeOpts) -> WrfResult<ResolvedEcapeOpts> {
+    let parcel =
+        CapeType::parse_normalized(opts.parcel_type.as_deref().unwrap_or("sb")).map_err(|err| {
+            WrfError::InvalidParam(format!(
+                "unsupported ECAPE parcel_type '{}'; expected 'sb', 'ml', or 'mu'",
+                err.value()
+            ))
+        })?;
+    if matches!(parcel, CapeType::UserDefined) {
+        return Err(WrfError::InvalidParam(
+            "ecape variables do not support custom parcel thermodynamics; use parcel_type=\"sb\", \"ml\", or \"mu\"".into(),
+        ));
+    }
+
+    let storm_motion =
+        EcapeStormMotionType::parse_normalized(opts.storm_motion_type.as_deref().unwrap_or("right_moving"))
+            .map_err(|err| {
+                WrfError::InvalidParam(format!(
+                    "unsupported ECAPE storm_motion_type '{}'; expected 'bunkers_rm', 'bunkers_lm', or 'mean_wind'",
+                    err.value()
+                ))
+            })?;
+
+    Ok(ResolvedEcapeOpts {
+        parcel,
+        storm_motion,
+    })
+}
+
+fn ecape_parcel_cache_slug(parcel: CapeType) -> &'static str {
+    match parcel {
+        CapeType::SurfaceBased => "sb",
+        CapeType::MixedLayer => "ml",
+        CapeType::MostUnstable => "mu",
+        CapeType::UserDefined => "user_defined",
     }
 }
 
-fn resolve_storm_motion_type(opts: &ComputeOpts) -> WrfResult<EcapeStormMotionType> {
-    match opts
-        .storm_motion_type
-        .as_deref()
-        .unwrap_or("right_moving")
-        .trim()
-        .to_ascii_lowercase()
-        .replace('-', "_")
-        .as_str()
-    {
-        "bunkers_rm" | "right_moving" | "right" | "rm" => {
-            Ok(EcapeStormMotionType::RightMoving)
-        }
-        "bunkers_lm" | "left_moving" | "left" | "lm" => Ok(EcapeStormMotionType::LeftMoving),
-        "mean_wind" | "mean" => Ok(EcapeStormMotionType::MeanWind),
-        "user_defined" | "custom" => Ok(EcapeStormMotionType::UserDefined),
-        other => Err(WrfError::InvalidParam(format!(
-            "unsupported ECAPE storm_motion_type '{other}'; expected 'bunkers_rm', 'bunkers_lm', or 'mean_wind'"
-        ))),
+fn ecape_storm_motion_cache_slug(storm_motion: EcapeStormMotionType) -> &'static str {
+    match storm_motion {
+        EcapeStormMotionType::RightMoving => "bunkers_rm",
+        EcapeStormMotionType::LeftMoving => "bunkers_lm",
+        EcapeStormMotionType::MeanWind => "mean_wind",
+        EcapeStormMotionType::UserDefined => "user_defined",
     }
 }
 
@@ -221,20 +266,13 @@ fn build_surface_augmented_ecape_column(
     (pressure_pa, height_m, temp_k, dewpoint_k, u_ms, v_ms)
 }
 
-fn ecape_cache_key(opts: &ComputeOpts) -> Option<String> {
-    let parcel_type = opts
-        .parcel_type
-        .as_deref()
-        .unwrap_or("sb")
-        .trim()
-        .to_ascii_lowercase();
-    let storm_motion_type = opts
-        .storm_motion_type
-        .as_deref()
-        .unwrap_or("right_moving")
-        .trim()
-        .to_ascii_lowercase()
-        .replace('-', "_");
+fn ecape_cache_key(opts: &ComputeOpts, resolved: ResolvedEcapeOpts) -> Option<String> {
+    let parcel_type = ecape_parcel_cache_slug(resolved.parcel);
+    let storm_motion_type = if opts.storm_motion.is_some() {
+        "user_defined"
+    } else {
+        ecape_storm_motion_cache_slug(resolved.storm_motion)
+    };
     let entrainment = opts
         .entrainment_rate
         .map(|v| format!("{:016x}", v.to_bits()))
@@ -255,9 +293,14 @@ fn ecape_cache_key(opts: &ComputeOpts) -> Option<String> {
         }
         Some(StormMotion::Grid { .. }) => return None,
     };
+    let strict = if opts.ecape_strict.unwrap_or(false) {
+        "strict"
+    } else {
+        "silent"
+    };
 
     Some(format!(
-        "ecape_stack_{parcel_type}_{storm_motion_type}_{entrainment}_{pseudoadiabatic}_{lake_interp}_{storm_motion}"
+        "ecape_stack_{parcel_type}_{storm_motion_type}_{entrainment}_{pseudoadiabatic}_{lake_interp}_{storm_motion}_{strict}"
     ))
 }
 
@@ -298,15 +341,37 @@ fn unpack_ecape_stack(
     ))
 }
 
+fn summarize_ecape_failures(results: &[EcapeColumnResult]) -> EcapeFailureReport {
+    let mut report = EcapeFailureReport::default();
+    for result in results {
+        report.record(result.failure);
+    }
+    report
+}
+
+fn check_ecape_failures(report: EcapeFailureReport, opts: &ComputeOpts) -> WrfResult<()> {
+    if opts.ecape_strict.unwrap_or(false) && report.total() > 0 {
+        return Err(WrfError::Compute(format!(
+            "ECAPE strict mode found {} failed columns ({} insufficient-column, {} solver-error); default mode silently zero-fills these columns",
+            report.total(),
+            report.insufficient_columns,
+            report.solver_failures
+        )));
+    }
+
+    Ok(())
+}
+
 fn compute_ecape_fields(
     f: &WrfFile,
     t: usize,
     opts: &ComputeOpts,
 ) -> WrfResult<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)> {
     validate_ecape_opts(opts)?;
+    let resolved = resolve_ecape_opts(opts)?;
 
     let nxy = f.nx * f.ny;
-    if let Some(key) = ecape_cache_key(opts) {
+    if let Some(key) = ecape_cache_key(opts, resolved) {
         if let Some(stacked) = f.cached_field(&key) {
             if let Some(fields) = unpack_ecape_stack(&stacked, nxy) {
                 return Ok(fields);
@@ -348,10 +413,10 @@ fn compute_ecape_fields(
         v10_earth[ij] = u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij];
     }
 
-    let parcel_type = resolve_parcel_type(opts)?;
-    let storm_motion_type = resolve_storm_motion_type(opts)?;
+    let parcel_type = resolved.parcel;
+    let storm_motion_type = resolved.storm_motion;
 
-    let results: Vec<EcapeSummary> = (0..nxy)
+    let results: Vec<EcapeColumnResult> = (0..nxy)
         .into_par_iter()
         .map(|ij| {
             let (pressure_pa, height_m, temp_k, dewpoint_k, u_ms, v_ms) =
@@ -373,7 +438,10 @@ fn compute_ecape_fields(
                 );
 
             if pressure_pa.len() < 2 {
-                return EcapeSummary::default();
+                return EcapeColumnResult {
+                    summary: EcapeSummary::default(),
+                    failure: Some(EcapeFailure::InsufficientLevels),
+                };
             }
 
             let parcel_opts = build_parcel_options(opts, ij, parcel_type, storm_motion_type);
@@ -386,18 +454,26 @@ fn compute_ecape_fields(
                 &v_ms,
                 &parcel_opts,
             ) {
-                Ok(result) => EcapeSummary {
-                    ecape: result.ecape_jkg,
-                    ncape: result.ncape_jkg,
-                    cape: result.cape_jkg,
-                    cin: result.cin_jkg,
-                    lfc: result.lfc_m.unwrap_or(0.0),
-                    el: result.el_m.unwrap_or(0.0),
+                Ok(result) => EcapeColumnResult {
+                    summary: EcapeSummary {
+                        ecape: result.ecape_jkg,
+                        ncape: result.ncape_jkg,
+                        cape: result.cape_jkg,
+                        cin: result.cin_jkg,
+                        lfc: result.lfc_m.unwrap_or(0.0),
+                        el: result.el_m.unwrap_or(0.0),
+                    },
+                    failure: None,
                 },
-                Err(_) => EcapeSummary::default(),
+                Err(_) => EcapeColumnResult {
+                    summary: EcapeSummary::default(),
+                    failure: Some(EcapeFailure::Solver),
+                },
             }
         })
         .collect();
+
+    check_ecape_failures(summarize_ecape_failures(&results), opts)?;
 
     let mut ecape = Vec::with_capacity(nxy);
     let mut ncape = Vec::with_capacity(nxy);
@@ -407,15 +483,15 @@ fn compute_ecape_fields(
     let mut el = Vec::with_capacity(nxy);
 
     for result in results {
-        ecape.push(result.ecape);
-        ncape.push(result.ncape);
-        cape.push(result.cape);
-        cin.push(result.cin);
-        lfc.push(result.lfc);
-        el.push(result.el);
+        ecape.push(result.summary.ecape);
+        ncape.push(result.summary.ncape);
+        cape.push(result.summary.cape);
+        cin.push(result.summary.cin);
+        lfc.push(result.summary.lfc);
+        el.push(result.summary.el);
     }
 
-    if let Some(key) = ecape_cache_key(opts) {
+    if let Some(key) = ecape_cache_key(opts, resolved) {
         let stacked = pack_ecape_stack(&ecape, &ncape, &cape, &cin, &lfc, &el);
         f.store_cached_field(key, stacked);
     }
@@ -462,6 +538,21 @@ mod tests {
         ComputeOpts::default()
     }
 
+    fn q_from_dewpoint_k(td_k: f64, p_pa: f64) -> f64 {
+        let td_c = td_k - 273.15;
+        let e_hpa = 6.112 * ((17.67 * td_c) / (td_c + 243.5)).exp();
+        let p_hpa = p_pa / 100.0;
+        0.622 * e_hpa / (p_hpa - e_hpa)
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        let tolerance = 1e-6_f64.max(expected.abs() * 1e-10);
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "actual={actual}, expected={expected}, tolerance={tolerance}"
+        );
+    }
+
     #[test]
     fn rejects_custom_parcel_thermodynamics() {
         let mut opts = base_opts();
@@ -477,20 +568,41 @@ mod tests {
     fn resolves_supported_parcel_types() {
         let mut opts = base_opts();
         assert!(matches!(
-            resolve_parcel_type(&opts).unwrap(),
+            resolve_ecape_opts(&opts).unwrap().parcel,
             CapeType::SurfaceBased
         ));
 
         opts.parcel_type = Some("ml".into());
         assert!(matches!(
-            resolve_parcel_type(&opts).unwrap(),
+            resolve_ecape_opts(&opts).unwrap().parcel,
             CapeType::MixedLayer
         ));
 
         opts.parcel_type = Some("mu".into());
         assert!(matches!(
-            resolve_parcel_type(&opts).unwrap(),
+            resolve_ecape_opts(&opts).unwrap().parcel,
             CapeType::MostUnstable
+        ));
+    }
+
+    #[test]
+    fn resolves_supported_storm_motion_types() {
+        let mut opts = base_opts();
+        assert!(matches!(
+            resolve_ecape_opts(&opts).unwrap().storm_motion,
+            EcapeStormMotionType::RightMoving
+        ));
+
+        opts.storm_motion_type = Some("left moving".into());
+        assert!(matches!(
+            resolve_ecape_opts(&opts).unwrap().storm_motion,
+            EcapeStormMotionType::LeftMoving
+        ));
+
+        opts.storm_motion_type = Some("mean-wind".into());
+        assert!(matches!(
+            resolve_ecape_opts(&opts).unwrap().storm_motion,
+            EcapeStormMotionType::MeanWind
         ));
     }
 
@@ -522,7 +634,93 @@ mod tests {
             v: vec![3.0, 4.0],
         });
 
-        assert!(ecape_cache_key(&opts).is_none());
+        let resolved = resolve_ecape_opts(&opts).unwrap();
+        assert!(ecape_cache_key(&opts, resolved).is_none());
+    }
+
+    #[test]
+    fn ecape_cache_key_uses_resolver_canonical_names() {
+        let mut alias_opts = base_opts();
+        alias_opts.parcel_type = Some("surface".into());
+        alias_opts.storm_motion_type = Some("right-moving".into());
+
+        let mut canonical_opts = base_opts();
+        canonical_opts.parcel_type = Some("sb".into());
+        canonical_opts.storm_motion_type = Some("bunkers_rm".into());
+
+        let alias_resolved = resolve_ecape_opts(&alias_opts).unwrap();
+        let canonical_resolved = resolve_ecape_opts(&canonical_opts).unwrap();
+
+        assert_eq!(alias_resolved.parcel, canonical_resolved.parcel);
+        assert_eq!(alias_resolved.storm_motion, canonical_resolved.storm_motion);
+        assert_eq!(
+            ecape_cache_key(&alias_opts, alias_resolved),
+            ecape_cache_key(&canonical_opts, canonical_resolved)
+        );
+    }
+
+    #[test]
+    fn ecape_strict_mode_has_separate_cache_key() {
+        let silent_opts = base_opts();
+        let mut strict_opts = base_opts();
+        strict_opts.ecape_strict = Some(true);
+
+        assert_ne!(
+            ecape_cache_key(&silent_opts, resolve_ecape_opts(&silent_opts).unwrap()),
+            ecape_cache_key(&strict_opts, resolve_ecape_opts(&strict_opts).unwrap())
+        );
+    }
+
+    #[test]
+    fn explicit_storm_motion_key_ignores_unused_motion_type() {
+        let mut right_opts = base_opts();
+        right_opts.storm_motion = Some(StormMotion::Uniform { u: 10.0, v: 5.0 });
+        right_opts.storm_motion_type = Some("bunkers_rm".into());
+
+        let mut left_opts = right_opts.clone();
+        left_opts.storm_motion_type = Some("bunkers_lm".into());
+
+        assert_eq!(
+            ecape_cache_key(&right_opts, resolve_ecape_opts(&right_opts).unwrap()),
+            ecape_cache_key(&left_opts, resolve_ecape_opts(&left_opts).unwrap())
+        );
+    }
+
+    #[test]
+    fn ecape_failure_report_counts_reasons() {
+        let results = vec![
+            EcapeColumnResult {
+                summary: EcapeSummary::default(),
+                failure: None,
+            },
+            EcapeColumnResult {
+                summary: EcapeSummary::default(),
+                failure: Some(EcapeFailure::InsufficientLevels),
+            },
+            EcapeColumnResult {
+                summary: EcapeSummary::default(),
+                failure: Some(EcapeFailure::Solver),
+            },
+        ];
+
+        let report = summarize_ecape_failures(&results);
+        assert_eq!(report.insufficient_columns, 1);
+        assert_eq!(report.solver_failures, 1);
+        assert_eq!(report.total(), 2);
+    }
+
+    #[test]
+    fn ecape_failure_report_only_errors_in_strict_mode() {
+        let report = EcapeFailureReport {
+            insufficient_columns: 1,
+            solver_failures: 2,
+        };
+        assert!(check_ecape_failures(report, &base_opts()).is_ok());
+
+        let mut strict_opts = base_opts();
+        strict_opts.ecape_strict = Some(true);
+        let err = check_ecape_failures(report, &strict_opts).unwrap_err();
+        assert!(matches!(err, WrfError::Compute(_)));
     }
 
     #[test]
@@ -543,5 +741,126 @@ mod tests {
         assert_eq!(unpacked.3, vec![7.0, 8.0]);
         assert_eq!(unpacked.4, vec![9.0, 10.0]);
         assert_eq!(unpacked.5, vec![11.0, 12.0]);
+    }
+
+    #[test]
+    fn shared_parity_fixture_matches_ecape_rs_expected_values() {
+        let height_m = [
+            0.0, 250.0, 500.0, 750.0, 1000.0, 1500.0, 2000.0, 2500.0, 3000.0, 4000.0, 5000.0,
+            6000.0, 7500.0, 9000.0, 10500.0, 12000.0, 14000.0, 16000.0,
+        ];
+        let pressure_pa = [
+            100000.0,
+            96923.32344763441,
+            93941.30628134758,
+            91051.03613800342,
+            88249.69025845954,
+            82902.91181804004,
+            77880.07830714049,
+            73161.56289466418,
+            68728.92787909723,
+            60653.06597126334,
+            53526.142851899036,
+            47236.65527410147,
+            39160.5626676799,
+            32465.24673583497,
+            26914.634872918385,
+            22313.016014842982,
+            17377.394345044515,
+            13533.52832366127,
+        ];
+        let temperature_k = [
+            302.0, 300.2, 298.4, 296.6, 294.8, 291.2, 287.6, 284.0, 280.4, 273.2, 266.0, 258.8,
+            248.0, 237.2, 226.4, 215.6, 215.6, 215.6,
+        ];
+        let dewpoint_k = [
+            296.0, 295.625, 295.25, 294.875, 294.3, 290.7, 287.1, 283.5, 279.9, 272.7, 265.5,
+            258.3, 247.5, 236.7, 225.9, 215.1, 215.1, 215.1,
+        ];
+        let u_wind_ms = [
+            4.0, 4.625, 5.25, 5.875, 6.5, 7.75, 9.0, 10.25, 11.5, 14.0, 16.5, 19.0, 22.75, 26.5,
+            30.25, 34.0, 39.0, 44.0,
+        ];
+        let v_wind_ms = [
+            1.0, 1.375, 1.75, 2.125, 2.5, 3.25, 4.0, 4.75, 5.5, 7.0, 8.5, 10.0, 12.25, 14.5, 16.75,
+            19.0, 22.0, 25.0,
+        ];
+        let qvapor: Vec<f64> = pressure_pa
+            .iter()
+            .zip(dewpoint_k)
+            .map(|(&p, td)| q_from_dewpoint_k(td, p))
+            .collect();
+
+        let (pressure, height, temp, dewpoint, u, v) = build_surface_augmented_ecape_column(
+            &pressure_pa[1..],
+            &temperature_k[1..],
+            &qvapor[1..],
+            &height_m[1..],
+            &u_wind_ms[1..],
+            &v_wind_ms[1..],
+            pressure_pa[0],
+            temperature_k[0],
+            qvapor[0],
+            u_wind_ms[0],
+            v_wind_ms[0],
+            pressure_pa.len() - 1,
+            1,
+            0,
+        );
+
+        let cases = [
+            (
+                CapeType::SurfaceBased,
+                (
+                    2011.5445493759416,
+                    0.0,
+                    2846.0409852115004,
+                    -44.991140025487326,
+                    1360.0,
+                    12220.0,
+                ),
+            ),
+            (
+                CapeType::MixedLayer,
+                (
+                    2115.38982529213,
+                    0.0,
+                    3040.829940651471,
+                    -8.677832569217891,
+                    1180.0,
+                    12240.0,
+                ),
+            ),
+            (
+                CapeType::MostUnstable,
+                (
+                    2097.6810414544825,
+                    0.0,
+                    3010.1256185714574,
+                    -0.23088078138348503,
+                    1100.0,
+                    12200.0,
+                ),
+            ),
+        ];
+
+        for (cape_type, expected) in cases {
+            let options = ParcelOptions {
+                cape_type,
+                storm_motion_type: EcapeStormMotionType::UserDefined,
+                storm_motion_u_ms: Some(12.0),
+                storm_motion_v_ms: Some(6.0),
+                ..ParcelOptions::default()
+            };
+
+            let result =
+                calc_ecape_parcel(&height, &pressure, &temp, &dewpoint, &u, &v, &options).unwrap();
+            assert_close(result.ecape_jkg, expected.0);
+            assert_close(result.ncape_jkg, expected.1);
+            assert_close(result.cape_jkg, expected.2);
+            assert_close(result.cin_jkg, expected.3);
+            assert_close(result.lfc_m.unwrap_or(0.0), expected.4);
+            assert_close(result.el_m.unwrap_or(0.0), expected.5);
+        }
     }
 }

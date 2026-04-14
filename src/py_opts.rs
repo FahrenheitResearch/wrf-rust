@@ -141,6 +141,7 @@ pub fn build_compute_opts(
     lake_interp: Option<f64>,
     use_varint: Option<bool>,
     use_liqskin: Option<bool>,
+    ecape_strict: Option<bool>,
 ) -> PyResult<wrf_core::ComputeOpts> {
     let storm_motion = parse_storm_motion(storm_motion.as_ref().map(|obj| obj.bind(py)), ny, nx)?;
     let storm_motion_method = parse_storm_motion_method(storm_motion_method)?;
@@ -167,6 +168,7 @@ pub fn build_compute_opts(
         lake_interp,
         use_varint,
         use_liqskin,
+        ecape_strict,
     })
 }
 

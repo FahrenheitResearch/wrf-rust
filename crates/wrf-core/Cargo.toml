@@ -14,4 +14,4 @@ netcdf = { version = "0.12", optional = true }
 ndarray = "0.16"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"], optional = true }
 rayon = "1.10"
-ecape-rs = { git = "https://github.com/FahrenheitResearch/ecape-rs", rev = "ce739db733dfb12464761935243418e0a155124b" }
+ecape-rs = { git = "https://github.com/FahrenheitResearch/ecape-rs", rev = "82922534c02a888e773c50463b5a49d535606276" }

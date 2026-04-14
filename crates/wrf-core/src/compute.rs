@@ -72,6 +72,8 @@ pub struct ComputeOpts {
     pub entrainment_rate: Option<f64>,
     /// Use pseudoadiabatic ascent for ECAPE parcel calculations. Default follows ecape-rs.
     pub pseudoadiabatic: Option<bool>,
+    /// If true, ECAPE grid calculations error with failure counts instead of silently zero-filling failed columns.
+    pub ecape_strict: Option<bool>,
     /// Use variable intercept parameters (Thompson microphysics) for DBZ.
     /// Default (None/false) = constant intercepts matching wrf-python defaults.
     pub use_varint: Option<bool>,

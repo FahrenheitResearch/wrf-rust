@@ -63,7 +63,7 @@ __all__ = [
     "latlon_coords",
     "ll_to_xy",
 ]
-__version__ = "0.2.33"
+__version__ = "0.2.34"
 
 # ── Optional plotting imports (require matplotlib) ──
 try:
@@ -331,6 +331,7 @@ def getvar(
     cache=None,
     meta=None,
     squeeze=True,
+    ecape_strict=None,
 ):
     """Compute a diagnostic variable from a WRF file.
 
@@ -409,6 +410,10 @@ def getvar(
         arrays, so this flag is ignored.
     squeeze : bool
         If True (default), remove length-1 leading dimensions.
+    ecape_strict : bool, optional
+        If True, ECAPE-family variables raise an error with failed-column
+        counts instead of silently zero-filling ECAPE columns that cannot be
+        computed. Default behavior remains silent zero-fill.
 
     Returns
     -------
@@ -432,6 +437,7 @@ def getvar(
         storm_motion_type=storm_motion_type,
         entrainment_rate=entrainment_rate,
         pseudoadiabatic=pseudoadiabatic,
+        ecape_strict=ecape_strict,
         top_m=top_m,
         bottom_m=bottom_m,
         depth_m=depth_m,
