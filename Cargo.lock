@@ -346,12 +346,13 @@ dependencies = [
 
 [[package]]
 name = "ecape-rs"
-version = "0.1.0"
-source = "git+https://github.com/FahrenheitResearch/ecape-rs?rev=fac8292886800d226051a3098141c9e554106d5f#fac8292886800d226051a3098141c9e554106d5f"
+version = "0.1.1"
+source = "git+https://github.com/FahrenheitResearch/ecape-rs?rev=ce739db733dfb12464761935243418e0a155124b#ce739db733dfb12464761935243418e0a155124b"
 dependencies = [
  "metrust",
  "serde",
  "serde_json",
+ "wx-math",
 ]
 
 [[package]]
