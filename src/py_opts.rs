@@ -1,7 +1,7 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
-use wrf_core::StormMotion;
+use wrf_core::{StormMotion, StormMotionMethod};
 
 fn flatten_component_grid(
     grid: Vec<Vec<f64>>,
@@ -71,6 +71,26 @@ or a stacked array with shape (2, {ny}, {nx})"
     )))
 }
 
+fn parse_storm_motion_method(
+    storm_motion_method: Option<String>,
+) -> PyResult<Option<StormMotionMethod>> {
+    let Some(method) = storm_motion_method else {
+        return Ok(None);
+    };
+
+    let normalized = method.trim().to_ascii_lowercase().replace('-', "_");
+    match normalized.as_str() {
+        "pressure_weighted" | "weighted" => Ok(Some(StormMotionMethod::PressureWeighted)),
+        "non_pressure_weighted" | "unweighted" | "classic" => {
+            Ok(Some(StormMotionMethod::NonPressureWeighted))
+        }
+        _ => Err(PyErr::new::<PyValueError, _>(
+            "storm_motion_method must be one of 'pressure_weighted', 'weighted', \
+'non_pressure_weighted', 'unweighted', or 'classic'",
+        )),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build_compute_opts(
     py: Python<'_>,
@@ -79,6 +99,7 @@ pub fn build_compute_opts(
     units: Option<String>,
     parcel_type: Option<String>,
     storm_motion: Option<Py<PyAny>>,
+    storm_motion_method: Option<String>,
     top_m: Option<f64>,
     bottom_m: Option<f64>,
     depth_m: Option<f64>,
@@ -94,11 +115,13 @@ pub fn build_compute_opts(
     use_liqskin: Option<bool>,
 ) -> PyResult<wrf_core::ComputeOpts> {
     let storm_motion = parse_storm_motion(storm_motion.as_ref().map(|obj| obj.bind(py)), ny, nx)?;
+    let storm_motion_method = parse_storm_motion_method(storm_motion_method)?;
 
     Ok(wrf_core::ComputeOpts {
         units,
         parcel_type,
         storm_motion,
+        storm_motion_method,
         top_m,
         bottom_m,
         depth_m,
@@ -117,9 +140,9 @@ pub fn build_compute_opts(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_storm_motion;
+    use super::{parse_storm_motion, parse_storm_motion_method};
     use pyo3::prelude::*;
-    use wrf_core::StormMotion;
+    use wrf_core::{StormMotion, StormMotionMethod};
 
     #[test]
     fn parses_uniform_storm_motion_tuple() {
@@ -154,5 +177,13 @@ mod tests {
                 })
             );
         });
+    }
+
+    #[test]
+    fn parses_pressure_weighted_storm_motion_method_alias() {
+        assert_eq!(
+            parse_storm_motion_method(Some("weighted".to_string())).unwrap(),
+            Some(StormMotionMethod::PressureWeighted)
+        );
     }
 }

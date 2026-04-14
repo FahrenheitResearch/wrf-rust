@@ -62,7 +62,7 @@ __all__ = [
     "latlon_coords",
     "ll_to_xy",
 ]
-__version__ = "0.2.26"
+__version__ = "0.2.29"
 
 # ── Optional plotting imports (require matplotlib) ──
 try:
@@ -309,6 +309,7 @@ def getvar(
     units=None,
     parcel_type=None,
     storm_motion=None,
+    storm_motion_method=None,
     top_m=None,
     bottom_m=None,
     depth_m=None,
@@ -349,6 +350,10 @@ def getvar(
         a scalar ``(u, v)`` pair, a pair of 2-D component grids
         ``(u_grid, v_grid)`` with shape ``(ny, nx)``, or a stacked array
         with shape ``(2, ny, nx)``.
+    storm_motion_method : str, optional
+        Default Bunkers storm-motion algorithm when ``storm_motion`` is not
+        supplied. Use ``"pressure_weighted"`` (default), ``"weighted"``,
+        ``"non_pressure_weighted"``, ``"unweighted"``, or ``"classic"``.
     top_m : float, optional
         Top of layer in metres AGL. Used by CAPE (truncated integration),
         shear, mean wind, lapse rates, updraft helicity.
@@ -409,6 +414,7 @@ def getvar(
         units=units,
         parcel_type=parcel_type,
         storm_motion=storm_motion,
+        storm_motion_method=storm_motion_method,
         top_m=top_m,
         bottom_m=bottom_m,
         depth_m=depth_m,

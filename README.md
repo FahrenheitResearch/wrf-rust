@@ -54,6 +54,7 @@ cape = getvar(f, "cape", parcel_pressure=850,
 srh1 = getvar(f, "srh1")                            # 0-1 km
 srh3 = getvar(f, "srh3")                            # 0-3 km
 srh  = getvar(f, "srh", depth_m=1500, storm_motion=(12, 8))
+srh_pw = getvar(f, "srh1", storm_motion_method="pressure_weighted")
 
 # Per-grid custom storm motion
 sm_u = np.full((f.ny, f.nx), 12.0)
@@ -170,7 +171,7 @@ All CAPE variables support `top_m` for truncated integration (e.g. `top_m=3000` 
 
 `srh1` `srh3` `srh` `effective_srh` `shear_0_1km` `shear_0_6km` `bulk_shear` `mean_wind` `bunkers_rm` `bunkers_lm` `mean_wind_0_6km`
 
-SRH uses Bunkers Internal Dynamics method. `storm_motion=(u, v)` accepts either scalar components or `(ny, nx)` component grids.
+SRH/Bunkers diagnostics default to pressure-weighted Bunkers layer means when pressure is available. Set `storm_motion_method="non_pressure_weighted"` (or `"classic"`) to force the non-pressure-weighted path. `storm_motion=(u, v)` accepts either scalar components or `(ny, nx)` component grids.
 
 ### Severe composites
 
@@ -207,6 +208,7 @@ Generic `lapse_rate` accepts `bottom_m`/`top_m` or `bottom_p`/`top_p`, plus `use
 | `top_p` / `bottom_p` | Layer bounds in hPa |
 | `depth_m` | SRH/EHI depth (m AGL) |
 | `storm_motion` | Custom storm motion `(u, v)` in m/s; each component may be a scalar or `(ny, nx)` grid |
+| `storm_motion_method` | Default Bunkers method: `"pressure_weighted"` (default) or `"non_pressure_weighted"` / `"classic"` |
 | `layer_type` | `"fixed"` or `"effective"` for STP |
 | `use_virtual` | Virtual temperature for lapse rates |
 | `lake_interp` | Interpolate 2m fields over lakes < N km2 |

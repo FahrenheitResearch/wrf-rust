@@ -118,6 +118,40 @@ fn pressure_weighted_layer_mean(
     }
 }
 
+/// Pressure-weighted Bunkers storm motion using pressure-weighted 0-6 km, 0-500 m,
+/// and 5.5-6 km layer means.
+pub fn pressure_weighted_bunkers_storm_motion(
+    heights: &[f64],
+    u_prof: &[f64],
+    v_prof: &[f64],
+    p_prof: &[f64],
+) -> ((f64, f64), (f64, f64), (f64, f64)) {
+    let deviation = 7.5;
+
+    let (mean_u, mean_v) =
+        pressure_weighted_layer_mean(heights, u_prof, v_prof, p_prof, 0.0, 6000.0);
+    let (low_u, low_v) = pressure_weighted_layer_mean(heights, u_prof, v_prof, p_prof, 0.0, 500.0);
+    let (high_u, high_v) =
+        pressure_weighted_layer_mean(heights, u_prof, v_prof, p_prof, 5500.0, 6000.0);
+
+    let shear_u = high_u - low_u;
+    let shear_v = high_v - low_v;
+    let shear_mag = (shear_u * shear_u + shear_v * shear_v).sqrt();
+    if shear_mag <= 0.1 {
+        return ((mean_u, mean_v), (mean_u, mean_v), (mean_u, mean_v));
+    }
+
+    let scale = deviation / shear_mag;
+    let dev_u = shear_v * scale;
+    let dev_v = -shear_u * scale;
+
+    (
+        (mean_u + dev_u, mean_v + dev_v),
+        (mean_u - dev_u, mean_v - dev_v),
+        (mean_u, mean_v),
+    )
+}
+
 /// Compute dewpoint (Celsius) from mixing ratio (kg/kg) and pressure (hPa).
 pub fn dewpoint_from_q(q: f64, p_hpa: f64) -> f64 {
     let q = q.max(1.0e-10); // avoid log(0)
@@ -257,7 +291,7 @@ pub fn compute_srh(
     compute_srh_with_pressure(u_3d, v_3d, height_agl_3d, &[], nx, ny, nz, top_m)
 }
 
-/// Compute SRH with pressure-weighted Bunkers storm motion (SHARPpy convention).
+/// Compute SRH with pressure-weighted Bunkers storm motion when pressure is available.
 pub fn compute_srh_with_pressure(
     u_3d: &[f64],
     v_3d: &[f64],
@@ -307,7 +341,7 @@ pub fn compute_srh_with_pressure(
 }
 
 /// Compute SRH for a single column using Bunkers storm motion.
-/// If `p_prof` is non-empty, uses pressure-weighted mean wind (SHARPpy convention).
+/// If `p_prof` is non-empty, uses pressure-weighted layer means.
 /// Otherwise falls back to arithmetic mean.
 fn compute_srh_column(
     heights: &[f64],
@@ -323,21 +357,9 @@ fn compute_srh_column(
 
     let has_pressure = p_prof.len() == nz;
     let (storm_u, storm_v) = if has_pressure {
-        let (mean_u, mean_v) =
-            pressure_weighted_layer_mean(heights, u_prof, v_prof, p_prof, 0.0, 6000.0);
-        let (low_u, low_v) =
-            pressure_weighted_layer_mean(heights, u_prof, v_prof, p_prof, 0.0, 500.0);
-        let (high_u, high_v) =
-            pressure_weighted_layer_mean(heights, u_prof, v_prof, p_prof, 5500.0, 6000.0);
-        let shear_u = high_u - low_u;
-        let shear_v = high_v - low_v;
-        let shear_mag = (shear_u * shear_u + shear_v * shear_v).sqrt();
-        if shear_mag > 0.1 {
-            let scale = 7.5 / shear_mag;
-            (mean_u + shear_v * scale, mean_v - shear_u * scale)
-        } else {
-            (mean_u, mean_v)
-        }
+        let ((storm_u, storm_v), _, _) =
+            pressure_weighted_bunkers_storm_motion(heights, u_prof, v_prof, p_prof);
+        (storm_u, storm_v)
     } else {
         let ((storm_u, storm_v), _, _) =
             crate::met::wind::bunkers_storm_motion(u_prof, v_prof, heights);

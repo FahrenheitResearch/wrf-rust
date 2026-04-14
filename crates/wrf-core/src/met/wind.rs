@@ -267,16 +267,18 @@ pub fn mean_wind_npw(
         return (0.0, 0.0);
     }
 
-    // Include all levels within the layer, plus interpolated top endpoint
-    // Matches Solarpower07 / SHARPpy convention
+    // Include interpolated layer endpoints plus any interior profile levels.
+    // Matches Solarpower07 / SHARPpy convention.
+    let u_bot = interp_at_height(u_prof, height_prof, bottom_m).unwrap_or(u_prof[0]);
+    let v_bot = interp_at_height(v_prof, height_prof, bottom_m).unwrap_or(v_prof[0]);
     let u_top = interp_at_height(u_prof, height_prof, top_m).unwrap_or(u_prof[n - 1]);
     let v_top = interp_at_height(v_prof, height_prof, top_m).unwrap_or(v_prof[n - 1]);
 
-    let mut sum_u = u_prof[0] + u_top; // surface + interpolated top
-    let mut sum_v = v_prof[0] + v_top;
+    let mut sum_u = u_bot + u_top;
+    let mut sum_v = v_bot + v_top;
     let mut count = 2usize;
 
-    for i in 1..n {
+    for i in 0..n {
         if height_prof[i] > bottom_m && height_prof[i] < top_m {
             sum_u += u_prof[i];
             sum_v += v_prof[i];
@@ -433,12 +435,12 @@ mod tests {
         let ((rm_u, rm_v), (lm_u, lm_v), (mean_u, mean_v)) =
             bunkers_storm_motion(&u_prof, &v_prof, &heights_m);
 
-        assert_close(mean_u, 7.399939520385588);
-        assert_close(mean_v, 11.879779884905217);
-        assert_close(rm_u, 12.003125863547057);
-        assert_close(rm_v, 5.958574307479979);
-        assert_close(lm_u, 2.7967531772241188);
-        assert_close(lm_v, 17.800985462330456);
+        assert_close(mean_u, 6.247699656874275);
+        assert_close(mean_v, 10.53760757690408);
+        assert_close(rm_u, 11.1883411258556);
+        assert_close(rm_v, 4.89490770228891);
+        assert_close(lm_u, 1.3070581878929506);
+        assert_close(lm_v, 16.180307451519248);
     }
 
     #[test]
@@ -452,5 +454,17 @@ mod tests {
         // Surface + interior 3 km level + interpolated 6 km endpoint (12 m/s)
         assert_close(mean_u, 6.0);
         assert_close(mean_v, 0.0);
+    }
+
+    #[test]
+    fn mean_wind_npw_uses_interpolated_bottom_for_elevated_layers() {
+        let heights_m = [0.0, 1000.0, 2000.0, 5500.0, 6000.0, 7000.0];
+        let u_prof = [0.0, 10.0, 20.0, 55.0, 60.0, 70.0];
+        let v_prof = [0.0, 0.0, 0.0, 5.0, 10.0, 10.0];
+
+        let (mean_u, mean_v) = mean_wind_npw(&u_prof, &v_prof, &heights_m, 5500.0, 6000.0);
+
+        assert_close(mean_u, 57.5);
+        assert_close(mean_v, 7.5);
     }
 }

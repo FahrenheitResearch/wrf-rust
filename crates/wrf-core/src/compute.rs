@@ -22,6 +22,15 @@ impl StormMotion {
     }
 }
 
+/// Algorithm used to derive default Bunkers storm motion when no explicit storm vector is given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StormMotionMethod {
+    /// Use pressure-weighted layer means when pressure data are available.
+    PressureWeighted,
+    /// Use non-pressure-weighted Bunkers layer means.
+    NonPressureWeighted,
+}
+
 /// Options controlling variable computation.
 #[derive(Debug, Clone, Default)]
 pub struct ComputeOpts {
@@ -31,6 +40,8 @@ pub struct ComputeOpts {
     pub parcel_type: Option<String>,
     /// Custom storm motion in m/s for SRH-family diagnostics.
     pub storm_motion: Option<StormMotion>,
+    /// Default Bunkers storm-motion algorithm when `storm_motion` is not supplied.
+    pub storm_motion_method: Option<StormMotionMethod>,
     /// Integration top (meters AGL) for CAPE, lapse rates, updraft helicity, etc.
     pub top_m: Option<f64>,
     /// Bottom of layer (meters AGL) for shear, mean wind, lapse rates, UH, etc.

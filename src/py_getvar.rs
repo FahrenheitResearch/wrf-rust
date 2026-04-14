@@ -5,7 +5,7 @@ use crate::py_opts;
 
 /// Compute a diagnostic variable from a WRF file.
 #[pyfunction]
-#[pyo3(signature = (wrffile, name, timeidx=None, units=None, parcel_type=None, storm_motion=None, top_m=None, bottom_m=None, depth_m=None, parcel_pressure=None, parcel_temperature=None, parcel_dewpoint=None, bottom_p=None, top_p=None, layer_type=None, use_virtual=None, lake_interp=None, use_varint=None, use_liqskin=None))]
+#[pyo3(signature = (wrffile, name, timeidx=None, units=None, parcel_type=None, storm_motion=None, storm_motion_method=None, top_m=None, bottom_m=None, depth_m=None, parcel_pressure=None, parcel_temperature=None, parcel_dewpoint=None, bottom_p=None, top_p=None, layer_type=None, use_virtual=None, lake_interp=None, use_varint=None, use_liqskin=None))]
 fn getvar<'py>(
     py: Python<'py>,
     wrffile: &WrfFile,
@@ -14,6 +14,7 @@ fn getvar<'py>(
     units: Option<String>,
     parcel_type: Option<String>,
     storm_motion: Option<Py<PyAny>>,
+    storm_motion_method: Option<String>,
     top_m: Option<f64>,
     bottom_m: Option<f64>,
     depth_m: Option<f64>,
@@ -35,6 +36,7 @@ fn getvar<'py>(
         units,
         parcel_type,
         storm_motion,
+        storm_motion_method,
         top_m,
         bottom_m,
         depth_m,
@@ -58,7 +60,7 @@ fn getvar<'py>(
 
 /// Compute and stack all timesteps for a diagnostic variable.
 #[pyfunction]
-#[pyo3(signature = (wrffile, name, units=None, parcel_type=None, storm_motion=None, top_m=None, bottom_m=None, depth_m=None, parcel_pressure=None, parcel_temperature=None, parcel_dewpoint=None, bottom_p=None, top_p=None, layer_type=None, use_virtual=None, lake_interp=None, use_varint=None, use_liqskin=None))]
+#[pyo3(signature = (wrffile, name, units=None, parcel_type=None, storm_motion=None, storm_motion_method=None, top_m=None, bottom_m=None, depth_m=None, parcel_pressure=None, parcel_temperature=None, parcel_dewpoint=None, bottom_p=None, top_p=None, layer_type=None, use_virtual=None, lake_interp=None, use_varint=None, use_liqskin=None))]
 fn getvar_all_times<'py>(
     py: Python<'py>,
     wrffile: &WrfFile,
@@ -66,6 +68,7 @@ fn getvar_all_times<'py>(
     units: Option<String>,
     parcel_type: Option<String>,
     storm_motion: Option<Py<PyAny>>,
+    storm_motion_method: Option<String>,
     top_m: Option<f64>,
     bottom_m: Option<f64>,
     depth_m: Option<f64>,
@@ -87,6 +90,7 @@ fn getvar_all_times<'py>(
         units,
         parcel_type,
         storm_motion,
+        storm_motion_method,
         top_m,
         bottom_m,
         depth_m,

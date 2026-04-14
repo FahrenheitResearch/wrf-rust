@@ -1,13 +1,18 @@
 //! Severe weather composite diagnostic variables:
 //! stp, scp, ehi, critical_angle, ship, bri
 
-use crate::compute::ComputeOpts;
+use crate::compute::{ComputeOpts, StormMotionMethod};
 use crate::diag::cape::{build_surface_augmented_thermo_column, find_effective_inflow_layer};
 use crate::error::WrfResult;
 use crate::file::WrfFile;
 use rayon::prelude::*;
 
 const SURFACE_LAYER_HEIGHT_M: f64 = 0.0;
+
+fn resolved_storm_motion_method(opts: &ComputeOpts) -> StormMotionMethod {
+    opts.storm_motion_method
+        .unwrap_or(StormMotionMethod::PressureWeighted)
+}
 
 fn build_augmented_wind_profile(
     u_3d: &[f64],
@@ -182,7 +187,13 @@ pub fn compute_stp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
     );
 
     // 0-1 km SRH via canonical path (earth-rotated winds + 10m prepend)
-    let srh1 = crate::diag::srh::compute_srh_field(f, t, 1000.0, opts.storm_motion.as_ref())?;
+    let srh1 = crate::diag::srh::compute_srh_field(
+        f,
+        t,
+        1000.0,
+        opts.storm_motion.as_ref(),
+        opts.storm_motion_method,
+    )?;
 
     // 0-6 km shear magnitude
     let shear6 = crate::met::composite::compute_shear(&u, &v, &h_agl, nx, ny, nz, 0.0, 6000.0);
@@ -359,7 +370,13 @@ pub fn compute_ehi(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
 
     // SRH via canonical path (earth-rotated winds + 10m prepend)
     let srh_depth = opts.depth_m.unwrap_or(1000.0);
-    let srh = crate::diag::srh::compute_srh_field(f, t, srh_depth, opts.storm_motion.as_ref())?;
+    let srh = crate::diag::srh::compute_srh_field(
+        f,
+        t,
+        srh_depth,
+        opts.storm_motion.as_ref(),
+        opts.storm_motion_method,
+    )?;
 
     // EHI = (CAPE * SRH) / 160000
     Ok(sbcape
@@ -378,6 +395,8 @@ pub fn compute_critical_angle(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfR
     let sina = f.sinalpha(t)?;
     let cosa = f.cosalpha(t)?;
     let h_agl = f.height_agl(t)?;
+    let pres_hpa = f.pressure_hpa(t)?;
+    let psfc_hpa: Vec<f64> = f.psfc(t)?.iter().map(|p| p / 100.0).collect();
 
     let nx = f.nx;
     let ny = f.ny;
@@ -404,21 +423,27 @@ pub fn compute_critical_angle(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfR
         let mut u_prof = Vec::with_capacity(nz);
         let mut v_prof = Vec::with_capacity(nz);
         let mut h_prof = Vec::with_capacity(nz);
+        let mut p_prof = Vec::with_capacity(nz + 1);
+
+        p_prof.push(psfc_hpa[ij]);
 
         for k in 0..nz {
             let idx = k * nxy + ij;
             u_prof.push(u[idx]);
             v_prof.push(v[idx]);
             h_prof.push(h_agl[idx]);
+            p_prof.push(pres_hpa[idx]);
         }
 
         *val = critical_angle_from_profile(
             &u_prof,
             &v_prof,
             &h_prof,
+            &p_prof,
             u10[ij],
             v10[ij],
             opts.storm_motion.as_ref().map(|sm| sm.at(ij)),
+            resolved_storm_motion_method(opts),
         );
     });
 
@@ -603,24 +628,37 @@ fn critical_angle_from_profile(
     u_prof: &[f64],
     v_prof: &[f64],
     h_prof: &[f64],
+    p_prof: &[f64],
     u_sfc: f64,
     v_sfc: f64,
     storm_motion: Option<(f64, f64)>,
+    storm_motion_method: StormMotionMethod,
 ) -> f64 {
     let mut u_aug = Vec::with_capacity(u_prof.len() + 1);
     let mut v_aug = Vec::with_capacity(v_prof.len() + 1);
     let mut h_aug = Vec::with_capacity(h_prof.len() + 1);
+    let mut p_aug = Vec::with_capacity(p_prof.len());
 
     u_aug.push(u_sfc);
     v_aug.push(v_sfc);
     h_aug.push(SURFACE_LAYER_HEIGHT_M);
+    p_aug.extend_from_slice(p_prof);
 
     u_aug.extend_from_slice(u_prof);
     v_aug.extend_from_slice(v_prof);
     h_aug.extend_from_slice(h_prof);
 
     let (sm_u, sm_v) = storm_motion.unwrap_or_else(|| {
-        let ((ru, rv), _, _) = crate::met::wind::bunkers_storm_motion(&u_aug, &v_aug, &h_aug);
+        let ((ru, rv), _, _) = match storm_motion_method {
+            StormMotionMethod::PressureWeighted => {
+                crate::met::composite::pressure_weighted_bunkers_storm_motion(
+                    &h_aug, &u_aug, &v_aug, &p_aug,
+                )
+            }
+            StormMotionMethod::NonPressureWeighted => {
+                crate::met::wind::bunkers_storm_motion(&u_aug, &v_aug, &h_aug)
+            }
+        };
         (ru, rv)
     });
     let (u_500, v_500) = interp_wind_at_height(&u_aug, &v_aug, &h_aug, 500.0);
@@ -644,10 +682,20 @@ mod tests {
         let u_prof = [18.0, 24.0, 32.0, 42.0];
         let v_prof = [8.0, 14.0, 20.0, 28.0];
         let h_prof = [100.0, 500.0, 1500.0, 6000.0];
+        let p_prof = [1000.0, 960.0, 850.0, 500.0];
         let u10 = 5.0;
         let v10 = 2.0;
 
-        let actual = critical_angle_from_profile(&u_prof, &v_prof, &h_prof, u10, v10, None);
+        let actual = critical_angle_from_profile(
+            &u_prof,
+            &v_prof,
+            &h_prof,
+            &p_prof,
+            u10,
+            v10,
+            None,
+            StormMotionMethod::NonPressureWeighted,
+        );
 
         let mut u_aug = vec![u10];
         let mut v_aug = vec![v10];
