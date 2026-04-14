@@ -569,6 +569,22 @@ pub static VARS: &[VarDef] = &[
         compute: dsevere::compute_ehi,
     },
     VarDef {
+        name: "ecape_scp",
+        aliases: &["entraining_scp", "experimental_ecape_scp"],
+        description: "Experimental SCP analog using ECAPE for the buoyancy term",
+        default_units: "dimensionless",
+        dim: VarDim::TwoD,
+        compute: dsevere::compute_ecape_scp,
+    },
+    VarDef {
+        name: "ecape_ehi",
+        aliases: &["entraining_ehi", "experimental_ecape_ehi"],
+        description: "Experimental EHI analog using ECAPE for the buoyancy term",
+        default_units: "dimensionless",
+        dim: VarDim::TwoD,
+        compute: dsevere::compute_ecape_ehi,
+    },
+    VarDef {
         name: "critical_angle",
         aliases: &["crit_angle"],
         description: "Critical angle",

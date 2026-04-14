@@ -367,9 +367,11 @@ SOLAR7_STYLES: Dict[str, Dict[str, Any]] = {
     "stp":           dict(cmap="solar7_stp", levels=np.arange(0, 11, 1), extend="max"),
     "stp_fixed":     dict(cmap="solar7_stp", levels=np.arange(0, 11, 1), extend="max"),
     "stp_effective": dict(cmap="solar7_stp", levels=np.arange(0, 11, 1), extend="max"),
+    "ecape_scp":     dict(cmap="solar7_stp", levels=np.arange(0, 11, 1), extend="max"),
 
     # ---- EHI ----
     "ehi": dict(cmap="solar7_ehi", levels=np.arange(0, 5.5, 0.5), extend="max"),
+    "ecape_ehi": dict(cmap="solar7_ehi", levels=np.arange(0, 5.5, 0.5), extend="max"),
 
     # ---- Shear ----
     "shear_0_1km": dict(cmap="solar7_winds", levels=np.arange(0, 42, 2), extend="max"),
@@ -574,7 +576,13 @@ def solar7_products() -> List[Dict[str, Any]]:
         dict(name="scp", title="Supercell Composite Parameter",
              cmap="solar7_cape", levels=np.arange(0, 11, 1), extend="max",
              units=None, category="severe"),
+        dict(name="ecape_scp", title="Experimental ECAPE SCP",
+             cmap="solar7_cape", levels=np.arange(0, 11, 1), extend="max",
+             units=None, category="severe"),
         dict(name="ehi", title="Energy-Helicity Index",
+             cmap="solar7_ehi", levels=np.arange(0, 5.5, 0.5), extend="max",
+             units=None, category="severe"),
+        dict(name="ecape_ehi", title="Experimental ECAPE EHI",
              cmap="solar7_ehi", levels=np.arange(0, 5.5, 0.5), extend="max",
              units=None, category="severe"),
         dict(name="ship", title="Sig. Hail Parameter",

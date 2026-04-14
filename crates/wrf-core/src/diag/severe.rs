@@ -1,5 +1,5 @@
 //! Severe weather composite diagnostic variables:
-//! stp, scp, ehi, critical_angle, ship, bri
+//! stp, scp, ehi, ecape_scp, ecape_ehi, critical_angle, ship, bri
 
 use crate::compute::{ComputeOpts, StormMotionMethod};
 use crate::diag::cape::{build_surface_augmented_thermo_column, find_effective_inflow_layer};
@@ -12,6 +12,22 @@ const SURFACE_LAYER_HEIGHT_M: f64 = 0.0;
 fn resolved_storm_motion_method(opts: &ComputeOpts) -> StormMotionMethod {
     opts.storm_motion_method
         .unwrap_or(StormMotionMethod::PressureWeighted)
+}
+
+fn opts_with_default_parcel_type(opts: &ComputeOpts, parcel_type: &str) -> ComputeOpts {
+    let mut derived = opts.clone();
+    if derived.parcel_type.is_none() {
+        derived.parcel_type = Some(parcel_type.to_string());
+    }
+    derived
+}
+
+fn ehi_from_components(cape: &[f64], srh: &[f64]) -> Vec<f64> {
+    crate::met::composite::compute_ehi(cape, srh)
+}
+
+fn scp_from_components(cape: &[f64], effective_srh: &[f64], ebwd: &[f64]) -> Vec<f64> {
+    crate::met::composite::compute_scp(cape, effective_srh, ebwd)
 }
 
 fn build_augmented_wind_profile(
@@ -341,7 +357,20 @@ pub fn compute_scp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
     let eff_srh = crate::diag::srh::compute_effective_srh(f, t, opts)?;
     let ebwd = compute_effective_bulk_wind_difference(f, t, opts)?;
 
-    Ok(crate::met::composite::compute_scp(&mucape, &eff_srh, &ebwd))
+    Ok(scp_from_components(&mucape, &eff_srh, &ebwd))
+}
+
+/// Experimental ECAPE-based Supercell Composite Parameter (dimensionless). `[ny, nx]`
+///
+/// Replaces the CAPE term in SCP with ECAPE while preserving effective SRH and EBWD.
+/// Defaults to `parcel_type="mu"` when no explicit parcel type is provided.
+pub fn compute_ecape_scp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    let ecape_opts = opts_with_default_parcel_type(opts, "mu");
+    let ecape = crate::diag::ecape::compute_ecape(f, t, &ecape_opts)?;
+    let eff_srh = crate::diag::srh::compute_effective_srh(f, t, opts)?;
+    let ebwd = compute_effective_bulk_wind_difference(f, t, opts)?;
+
+    Ok(scp_from_components(&ecape, &eff_srh, &ebwd))
 }
 
 /// Energy-Helicity Index (dimensionless). `[ny, nx]`
@@ -379,11 +408,27 @@ pub fn compute_ehi(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
     )?;
 
     // EHI = (CAPE * SRH) / 160000
-    Ok(sbcape
-        .iter()
-        .zip(srh.iter())
-        .map(|(cape, s)| (cape * s) / 160000.0)
-        .collect())
+    Ok(ehi_from_components(&sbcape, &srh))
+}
+
+/// Experimental ECAPE-based Energy-Helicity Index (dimensionless). `[ny, nx]`
+///
+/// Replaces the CAPE term in EHI with ECAPE while preserving the same SRH depth/storm-motion path.
+/// Defaults to `parcel_type="sb"` when no explicit parcel type is provided.
+pub fn compute_ecape_ehi(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    let ecape_opts = opts_with_default_parcel_type(opts, "sb");
+    let ecape = crate::diag::ecape::compute_ecape(f, t, &ecape_opts)?;
+
+    let srh_depth = opts.depth_m.unwrap_or(1000.0);
+    let srh = crate::diag::srh::compute_srh_field(
+        f,
+        t,
+        srh_depth,
+        opts.storm_motion.as_ref(),
+        opts.storm_motion_method,
+    )?;
+
+    Ok(ehi_from_components(&ecape, &srh))
 }
 
 /// Critical angle (degrees). `[ny, nx]`
@@ -745,5 +790,42 @@ mod tests {
         assert_close(stp[0], 0.0);
         assert_close(stp[1], 1.0);
         assert_close(stp[2], 1.5);
+    }
+
+    #[test]
+    fn ehi_helper_matches_operational_formula() {
+        let ehi = ehi_from_components(&[1600.0, 800.0], &[100.0, 50.0]);
+        assert_close(ehi[0], 1.0);
+        assert_close(ehi[1], 0.25);
+    }
+
+    #[test]
+    fn scp_helper_uses_operational_thresholds() {
+        let scp = scp_from_components(&[1000.0, 1000.0, 1000.0], &[50.0, 50.0, 50.0], &[5.0, 15.0, 25.0]);
+        assert_close(scp[0], 0.0);
+        assert_close(scp[1], 0.75);
+        assert_close(scp[2], 1.0);
+    }
+
+    #[test]
+    fn experimental_defaults_match_classic_parcel_choices() {
+        let empty = ComputeOpts::default();
+        assert_eq!(
+            opts_with_default_parcel_type(&empty, "sb").parcel_type.as_deref(),
+            Some("sb")
+        );
+        assert_eq!(
+            opts_with_default_parcel_type(&empty, "mu").parcel_type.as_deref(),
+            Some("mu")
+        );
+
+        let explicit = ComputeOpts {
+            parcel_type: Some("ml".into()),
+            ..ComputeOpts::default()
+        };
+        assert_eq!(
+            opts_with_default_parcel_type(&explicit, "sb").parcel_type.as_deref(),
+            Some("ml")
+        );
     }
 }
