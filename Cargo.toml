@@ -8,7 +8,7 @@ license = "MIT"
 
 [package]
 name = "wrf-py"
-version = "0.1.0"
+version = "0.2.33"
 edition.workspace = true
 description = "Python bindings for wrf-rust — fast WRF post-processing"
 
