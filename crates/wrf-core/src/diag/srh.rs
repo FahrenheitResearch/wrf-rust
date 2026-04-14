@@ -10,10 +10,55 @@ use crate::file::WrfFile;
 use rayon::prelude::*;
 
 const SURFACE_LAYER_HEIGHT_M: f64 = 0.0;
+const BUNKERS_STACK_FIELDS: usize = 6;
 
 fn resolved_storm_motion_method(opts: &ComputeOpts) -> StormMotionMethod {
     opts.storm_motion_method
         .unwrap_or(StormMotionMethod::PressureWeighted)
+}
+
+fn bunkers_cache_key(method: StormMotionMethod) -> &'static str {
+    match method {
+        StormMotionMethod::PressureWeighted => "bunkers_stack_pw",
+        StormMotionMethod::NonPressureWeighted => "bunkers_stack_npw",
+    }
+}
+
+fn pack_bunkers_stack(
+    rm_u: &[f64],
+    rm_v: &[f64],
+    lm_u: &[f64],
+    lm_v: &[f64],
+    mn_u: &[f64],
+    mn_v: &[f64],
+) -> Vec<f64> {
+    let nxy = rm_u.len();
+    let mut stacked = Vec::with_capacity(BUNKERS_STACK_FIELDS * nxy);
+    stacked.extend_from_slice(rm_u);
+    stacked.extend_from_slice(rm_v);
+    stacked.extend_from_slice(lm_u);
+    stacked.extend_from_slice(lm_v);
+    stacked.extend_from_slice(mn_u);
+    stacked.extend_from_slice(mn_v);
+    stacked
+}
+
+fn unpack_bunkers_stack(
+    stacked: &[f64],
+    nxy: usize,
+) -> Option<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)> {
+    if stacked.len() != BUNKERS_STACK_FIELDS * nxy {
+        return None;
+    }
+
+    Some((
+        stacked[0..nxy].to_vec(),
+        stacked[nxy..2 * nxy].to_vec(),
+        stacked[2 * nxy..3 * nxy].to_vec(),
+        stacked[3 * nxy..4 * nxy].to_vec(),
+        stacked[4 * nxy..5 * nxy].to_vec(),
+        stacked[5 * nxy..6 * nxy].to_vec(),
+    ))
 }
 
 /// Canonical SRH entry point for all grid-based SRH computations.
@@ -164,6 +209,15 @@ fn compute_bunkers_columns(
     t: usize,
     opts: &ComputeOpts,
 ) -> WrfResult<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)> {
+    let storm_motion_method = resolved_storm_motion_method(opts);
+    let nxy = f.nx * f.ny;
+    let cache_key = bunkers_cache_key(storm_motion_method);
+    if let Some(stacked) = f.cached_field(cache_key) {
+        if let Some(fields) = unpack_bunkers_stack(&stacked, nxy) {
+            return Ok(fields);
+        }
+    }
+
     let u_grid = f.u_destag(t)?;
     let v_grid = f.v_destag(t)?;
     let sina = f.sinalpha(t)?;
@@ -202,7 +256,6 @@ fn compute_bunkers_columns(
     let mut lm_v = vec![0.0f64; nxy];
     let mut mn_u = vec![0.0f64; nxy];
     let mut mn_v = vec![0.0f64; nxy];
-    let storm_motion_method = resolved_storm_motion_method(opts);
 
     let results: Vec<_> = (0..nxy)
         .into_par_iter()
@@ -248,6 +301,8 @@ fn compute_bunkers_columns(
         mn_v[ij] = mv;
     }
 
+    let stacked = pack_bunkers_stack(&rm_u, &rm_v, &lm_u, &lm_v, &mn_u, &mn_v);
+    f.store_cached_field(cache_key.to_string(), stacked);
     Ok((rm_u, rm_v, lm_u, lm_v, mn_u, mn_v))
 }
 
@@ -507,10 +562,44 @@ pub fn compute_mean_wind(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult
 
 #[cfg(test)]
 mod tests {
-    use super::SURFACE_LAYER_HEIGHT_M;
+    use super::{
+        bunkers_cache_key, pack_bunkers_stack, unpack_bunkers_stack, StormMotionMethod,
+        SURFACE_LAYER_HEIGHT_M,
+    };
 
     #[test]
     fn surface_augmentation_anchors_10m_winds_at_zero_agl() {
         assert_eq!(SURFACE_LAYER_HEIGHT_M, 0.0);
+    }
+
+    #[test]
+    fn bunkers_stack_round_trip_preserves_field_order() {
+        let stacked = pack_bunkers_stack(
+            &[1.0, 2.0],
+            &[3.0, 4.0],
+            &[5.0, 6.0],
+            &[7.0, 8.0],
+            &[9.0, 10.0],
+            &[11.0, 12.0],
+        );
+        let unpacked = unpack_bunkers_stack(&stacked, 2).unwrap();
+        assert_eq!(unpacked.0, vec![1.0, 2.0]);
+        assert_eq!(unpacked.1, vec![3.0, 4.0]);
+        assert_eq!(unpacked.2, vec![5.0, 6.0]);
+        assert_eq!(unpacked.3, vec![7.0, 8.0]);
+        assert_eq!(unpacked.4, vec![9.0, 10.0]);
+        assert_eq!(unpacked.5, vec![11.0, 12.0]);
+    }
+
+    #[test]
+    fn bunkers_cache_key_tracks_method() {
+        assert_eq!(
+            bunkers_cache_key(StormMotionMethod::PressureWeighted),
+            "bunkers_stack_pw"
+        );
+        assert_eq!(
+            bunkers_cache_key(StormMotionMethod::NonPressureWeighted),
+            "bunkers_stack_npw"
+        );
     }
 }

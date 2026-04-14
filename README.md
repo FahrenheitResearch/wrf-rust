@@ -283,6 +283,13 @@ pip install maturin
 maturin develop --release
 ```
 
+## Acknowledgments
+
+Special thanks to Solarpower07 for the underlying Solar7 colormaps and product
+definitions, and for substantial guidance on severe-weather diagnostics, storm
+motion, SRH, and ECAPE. A lot of the recent correctness work in `wrf-rust` is
+better because of that help.
+
 ## License
 
 MIT

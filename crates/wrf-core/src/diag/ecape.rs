@@ -9,7 +9,7 @@ use ecape_rs::{
 };
 use rayon::prelude::*;
 
-use crate::compute::ComputeOpts;
+use crate::compute::{ComputeOpts, StormMotion};
 use crate::error::{WrfError, WrfResult};
 use crate::file::WrfFile;
 
@@ -22,6 +22,8 @@ struct EcapeSummary {
     lfc: f64,
     el: f64,
 }
+
+const ECAPE_STACK_FIELDS: usize = 6;
 
 fn dewpoint_k_from_q(q_kgkg: f64, p_pa: f64, temp_k: f64) -> f64 {
     let td_c = crate::met::composite::dewpoint_from_q(q_kgkg, p_pa / 100.0);
@@ -219,12 +221,98 @@ fn build_surface_augmented_ecape_column(
     (pressure_pa, height_m, temp_k, dewpoint_k, u_ms, v_ms)
 }
 
+fn ecape_cache_key(opts: &ComputeOpts) -> Option<String> {
+    let parcel_type = opts
+        .parcel_type
+        .as_deref()
+        .unwrap_or("sb")
+        .trim()
+        .to_ascii_lowercase();
+    let storm_motion_type = opts
+        .storm_motion_type
+        .as_deref()
+        .unwrap_or("right_moving")
+        .trim()
+        .to_ascii_lowercase()
+        .replace('-', "_");
+    let entrainment = opts
+        .entrainment_rate
+        .map(|v| format!("{:016x}", v.to_bits()))
+        .unwrap_or_else(|| "auto".to_string());
+    let pseudoadiabatic = match opts.pseudoadiabatic {
+        Some(true) => "1",
+        Some(false) => "0",
+        None => "default",
+    };
+    let lake_interp = opts
+        .lake_interp
+        .map(|v| format!("{:016x}", v.to_bits()))
+        .unwrap_or_else(|| "none".to_string());
+    let storm_motion = match opts.storm_motion.as_ref() {
+        None => "default".to_string(),
+        Some(StormMotion::Uniform { u, v }) => {
+            format!("uniform_{:016x}_{:016x}", u.to_bits(), v.to_bits())
+        }
+        Some(StormMotion::Grid { .. }) => return None,
+    };
+
+    Some(format!(
+        "ecape_stack_{parcel_type}_{storm_motion_type}_{entrainment}_{pseudoadiabatic}_{lake_interp}_{storm_motion}"
+    ))
+}
+
+fn pack_ecape_stack(
+    ecape: &[f64],
+    ncape: &[f64],
+    cape: &[f64],
+    cin: &[f64],
+    lfc: &[f64],
+    el: &[f64],
+) -> Vec<f64> {
+    let nxy = ecape.len();
+    let mut stacked = Vec::with_capacity(ECAPE_STACK_FIELDS * nxy);
+    stacked.extend_from_slice(ecape);
+    stacked.extend_from_slice(ncape);
+    stacked.extend_from_slice(cape);
+    stacked.extend_from_slice(cin);
+    stacked.extend_from_slice(lfc);
+    stacked.extend_from_slice(el);
+    stacked
+}
+
+fn unpack_ecape_stack(
+    stacked: &[f64],
+    nxy: usize,
+) -> Option<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)> {
+    if stacked.len() != ECAPE_STACK_FIELDS * nxy {
+        return None;
+    }
+
+    Some((
+        stacked[0..nxy].to_vec(),
+        stacked[nxy..2 * nxy].to_vec(),
+        stacked[2 * nxy..3 * nxy].to_vec(),
+        stacked[3 * nxy..4 * nxy].to_vec(),
+        stacked[4 * nxy..5 * nxy].to_vec(),
+        stacked[5 * nxy..6 * nxy].to_vec(),
+    ))
+}
+
 fn compute_ecape_fields(
     f: &WrfFile,
     t: usize,
     opts: &ComputeOpts,
 ) -> WrfResult<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)> {
     validate_ecape_opts(opts)?;
+
+    let nxy = f.nx * f.ny;
+    if let Some(key) = ecape_cache_key(opts) {
+        if let Some(stacked) = f.cached_field(&key) {
+            if let Some(fields) = unpack_ecape_stack(&stacked, nxy) {
+                return Ok(fields);
+            }
+        }
+    }
 
     let pressure = f.full_pressure(t)?;
     let temperature = f.temperature(t)?;
@@ -327,6 +415,11 @@ fn compute_ecape_fields(
         el.push(result.el);
     }
 
+    if let Some(key) = ecape_cache_key(opts) {
+        let stacked = pack_ecape_stack(&ecape, &ncape, &cape, &cin, &lfc, &el);
+        f.store_cached_field(key, stacked);
+    }
+
     Ok((ecape, ncape, cape, cin, lfc, el))
 }
 
@@ -419,5 +512,36 @@ mod tests {
         ));
         assert_eq!(parcel_opts.storm_motion_u_ms, Some(12.0));
         assert_eq!(parcel_opts.storm_motion_v_ms, Some(8.0));
+    }
+
+    #[test]
+    fn grid_storm_motion_skips_ecape_cache() {
+        let mut opts = base_opts();
+        opts.storm_motion = Some(StormMotion::Grid {
+            u: vec![1.0, 2.0],
+            v: vec![3.0, 4.0],
+        });
+
+        assert!(ecape_cache_key(&opts).is_none());
+    }
+
+    #[test]
+    fn ecape_stack_round_trip_preserves_field_order() {
+        let stacked = pack_ecape_stack(
+            &[1.0, 2.0],
+            &[3.0, 4.0],
+            &[5.0, 6.0],
+            &[7.0, 8.0],
+            &[9.0, 10.0],
+            &[11.0, 12.0],
+        );
+
+        let unpacked = unpack_ecape_stack(&stacked, 2).unwrap();
+        assert_eq!(unpacked.0, vec![1.0, 2.0]);
+        assert_eq!(unpacked.1, vec![3.0, 4.0]);
+        assert_eq!(unpacked.2, vec![5.0, 6.0]);
+        assert_eq!(unpacked.3, vec![7.0, 8.0]);
+        assert_eq!(unpacked.4, vec![9.0, 10.0]);
+        assert_eq!(unpacked.5, vec![11.0, 12.0]);
     }
 }

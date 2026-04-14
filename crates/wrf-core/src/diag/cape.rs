@@ -9,6 +9,46 @@ use crate::compute::ComputeOpts;
 use crate::error::WrfResult;
 use crate::file::WrfFile;
 
+const CAPE_STACK_FIELDS: usize = 4;
+
+fn cape_cache_key(parcel_type: &str, top_m: Option<f64>, lake_interp: Option<f64>) -> String {
+    let parcel_type = parcel_type.trim().to_ascii_lowercase();
+    let top_m = top_m
+        .map(|v| format!("{:016x}", v.to_bits()))
+        .unwrap_or_else(|| "full".to_string());
+    let lake_interp = match lake_interp {
+        Some(v) if v > 0.0 => format!("{:016x}", v.to_bits()),
+        _ => "none".to_string(),
+    };
+    format!("cape_stack_{parcel_type}_{top_m}_{lake_interp}")
+}
+
+fn pack_cape_stack(cape: &[f64], cin: &[f64], lcl: &[f64], lfc: &[f64]) -> Vec<f64> {
+    let nxy = cape.len();
+    let mut stacked = Vec::with_capacity(CAPE_STACK_FIELDS * nxy);
+    stacked.extend_from_slice(cape);
+    stacked.extend_from_slice(cin);
+    stacked.extend_from_slice(lcl);
+    stacked.extend_from_slice(lfc);
+    stacked
+}
+
+fn unpack_cape_stack(
+    stacked: &[f64],
+    nxy: usize,
+) -> Option<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)> {
+    if stacked.len() != CAPE_STACK_FIELDS * nxy {
+        return None;
+    }
+
+    Some((
+        stacked[0..nxy].to_vec(),
+        stacked[nxy..2 * nxy].to_vec(),
+        stacked[2 * nxy..3 * nxy].to_vec(),
+        stacked[3 * nxy..4 * nxy].to_vec(),
+    ))
+}
+
 /// Helper: extract the 3-D + 2-D fields needed for CAPE, call compute_cape_cin.
 /// Returns (cape_2d, cin_2d, lcl_2d, lfc_2d).
 fn compute_cape_fields(
@@ -18,6 +58,14 @@ fn compute_cape_fields(
     top_m: Option<f64>,
     lake_interp: Option<f64>,
 ) -> WrfResult<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)> {
+    let nxy = f.nx * f.ny;
+    let cache_key = cape_cache_key(parcel_type, top_m, lake_interp);
+    if let Some(stacked) = f.cached_field(&cache_key) {
+        if let Some(fields) = unpack_cape_stack(&stacked, nxy) {
+            return Ok(fields);
+        }
+    }
+
     let pres = f.full_pressure(t)?;
     let tc = f.temperature_c(t)?;
     let qv = f.qvapor(t)?;
@@ -54,6 +102,8 @@ fn compute_cape_fields(
             nz,
             parcel_type,
         );
+        let stacked = pack_cape_stack(&cape, &cin, &lcl, &lfc);
+        f.store_cached_field(cache_key, stacked);
         return Ok((cape, cin, lcl, lfc));
     }
 
@@ -113,6 +163,8 @@ fn compute_cape_fields(
             *lfc_v = lf;
         });
 
+    let stacked = pack_cape_stack(&cape, &cin, &lcl, &lfc);
+    f.store_cached_field(cache_key, stacked);
     Ok((cape, cin, lcl, lfc))
 }
 
@@ -844,5 +896,24 @@ mod tests {
         assert!(layer.top_h > layer.base_h);
         assert!(expected_top_idx < h_prof.len() - 1);
         assert_eq!(layer.top_h, h_prof[expected_top_idx]);
+    }
+
+    #[test]
+    fn cape_stack_round_trip_preserves_field_order() {
+        let stacked = pack_cape_stack(&[1.0, 2.0], &[3.0, 4.0], &[5.0, 6.0], &[7.0, 8.0]);
+        let unpacked = unpack_cape_stack(&stacked, 2).unwrap();
+        assert_eq!(unpacked.0, vec![1.0, 2.0]);
+        assert_eq!(unpacked.1, vec![3.0, 4.0]);
+        assert_eq!(unpacked.2, vec![5.0, 6.0]);
+        assert_eq!(unpacked.3, vec![7.0, 8.0]);
+    }
+
+    #[test]
+    fn cape_cache_key_treats_nonpositive_lake_interp_as_disabled() {
+        let none_key = cape_cache_key("sb", None, None);
+        let zero_key = cape_cache_key("SB", None, Some(0.0));
+        let neg_key = cape_cache_key("sb", None, Some(-1.0));
+        assert_eq!(none_key, zero_key);
+        assert_eq!(none_key, neg_key);
     }
 }

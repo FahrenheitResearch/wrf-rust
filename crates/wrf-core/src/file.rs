@@ -437,6 +437,22 @@ impl WrfFile {
         Ok(result)
     }
 
+    /// Return a cached field by key, if present.
+    pub fn cached_field(&self, key: &str) -> Option<SharedField> {
+        self.cache.lock().unwrap().get(key).map(Arc::clone)
+    }
+
+    /// Insert a precomputed field into the memoization cache.
+    pub fn store_cached_field(&self, key: String, data: Vec<f64>) -> SharedField {
+        let result = Arc::<[f64]>::from(data);
+        let mut cache = self.cache.lock().unwrap();
+        if let Some(existing) = cache.get(&key) {
+            return Arc::clone(existing);
+        }
+        cache.insert(key, Arc::clone(&result));
+        result
+    }
+
     /// Full pressure = P + PB (Pa). Shape: `[nz, ny, nx]`.
     pub fn full_pressure(&self, t: usize) -> WrfResult<SharedField> {
         let key = format!("pressure_{t}");
