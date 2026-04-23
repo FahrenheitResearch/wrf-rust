@@ -372,6 +372,9 @@ SOLAR7_STYLES: Dict[str, Dict[str, Any]] = {
     # ---- EHI ----
     "ehi": dict(cmap="solar7_ehi", levels=np.arange(0, 5.5, 0.5), extend="max"),
     "ecape_ehi": dict(cmap="solar7_ehi", levels=np.arange(0, 5.5, 0.5), extend="max"),
+    "tehi": dict(cmap="solar7_ehi", levels=np.arange(0, 10.5, 0.5), extend="max"),
+    "tts": dict(cmap="solar7_ehi", levels=np.arange(0, 10.5, 0.5), extend="max"),
+    "vtp_mod": dict(cmap="solar7_ehi", levels=np.arange(0, 10.5, 0.5), extend="max"),
 
     # ---- Shear ----
     "shear_0_1km": dict(cmap="solar7_winds", levels=np.arange(0, 42, 2), extend="max"),
@@ -584,6 +587,15 @@ def solar7_products() -> List[Dict[str, Any]]:
              units=None, category="severe"),
         dict(name="ecape_ehi", title="Experimental ECAPE EHI",
              cmap="solar7_ehi", levels=np.arange(0, 5.5, 0.5), extend="max",
+             units=None, category="severe"),
+        dict(name="tehi", title="Tornadic 0-1 km EHI",
+             cmap="solar7_ehi", levels=np.arange(0, 10.5, 0.5), extend="max",
+             units=None, category="severe"),
+        dict(name="tts", title="Tornadic Tilting and Stretching",
+             cmap="solar7_ehi", levels=np.arange(0, 10.5, 0.5), extend="max",
+             units=None, category="severe"),
+        dict(name="vtp_mod", title="Modified Violent Tornado Parameter",
+             cmap="solar7_ehi", levels=np.arange(0, 10.5, 0.5), extend="max",
              units=None, category="severe"),
         dict(name="ship", title="Sig. Hail Parameter",
              cmap="solar7_cape", levels=np.arange(0, 5.5, 0.5), extend="max",

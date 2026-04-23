@@ -129,8 +129,8 @@ def _pick_cmap(varname: str):
         return plt.cm.BrBG
 
     # CAPE / instability
-    if any(k in name_lower for k in ("cape", "cin", "stp", "scp", "ehi",
-                                      "ship", "bri")):
+    if any(k in name_lower for k in ("cape", "cin", "stp", "scp", "ehi", "vtp",
+                                      "tts", "ship", "bri")):
         return plt.cm.hot_r
 
     # Wind

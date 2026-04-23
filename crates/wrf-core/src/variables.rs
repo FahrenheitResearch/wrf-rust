@@ -585,6 +585,33 @@ pub static VARS: &[VarDef] = &[
         compute: dsevere::compute_ecape_ehi,
     },
     VarDef {
+        name: "tehi",
+        aliases: &["tornadic_0_1km_ehi"],
+        description: "SPC beta Tornadic 0-1 km EHI",
+        default_units: "dimensionless",
+        dim: VarDim::TwoD,
+        compute: dsevere::compute_tehi,
+    },
+    VarDef {
+        name: "tts",
+        aliases: &[
+            "tornadic_tilting_stretching",
+            "tornadic_tilting_and_stretching",
+        ],
+        description: "SPC beta Tornadic Tilting and Stretching",
+        default_units: "dimensionless",
+        dim: VarDim::TwoD,
+        compute: dsevere::compute_tts,
+    },
+    VarDef {
+        name: "vtp_mod",
+        aliases: &["modified_violent_tornado_parameter"],
+        description: "Modified Violent Tornado Parameter",
+        default_units: "dimensionless",
+        dim: VarDim::TwoD,
+        compute: dsevere::compute_vtp_mod,
+    },
+    VarDef {
         name: "critical_angle",
         aliases: &["crit_angle"],
         description: "Critical angle",

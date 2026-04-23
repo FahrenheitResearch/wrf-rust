@@ -146,7 +146,7 @@ Plus 23 variables wrf-python doesn't have (STP, SCP, EHI, critical angle, ECAPE,
 
 ## Variables
 
-92 diagnostic variables. All support `units=` parameter.
+96 diagnostic variables. All support `units=` parameter.
 
 ### Thermodynamics
 
@@ -182,9 +182,9 @@ SRH/Bunkers diagnostics default to pressure-weighted Bunkers layer means when pr
 
 ### Severe composites
 
-`stp` `stp_fixed` `stp_effective` `scp` `ehi` `critical_angle` `ship` `bri`
+`stp` `stp_fixed` `stp_effective` `scp` `ehi` `tehi` `tts` `vtp_mod` `critical_angle` `ship` `bri`
 
-STP supports `layer_type="effective"` for the 5-term formula with MLCIN. Effective `stp` uses ESRH + EBWD, and `scp` uses MUCAPE + effective SRH + EBWD.
+STP supports `layer_type="effective"` for the 5-term formula with MLCIN. Effective `stp` uses ESRH + EBWD, and `scp` uses MUCAPE + effective SRH + EBWD. `tehi` and `tts` mirror the SPC beta Tornadic 0-1 km EHI and Tornadic Tilting and Stretching products. `vtp_mod` is the modified violent tornado parameter using MLCAPE, ESRH, EBWD, MLLCL, MLCIN, 0-3 km MLCAPE, and 700-500 hPa lapse rate.
 
 ### ECAPE
 

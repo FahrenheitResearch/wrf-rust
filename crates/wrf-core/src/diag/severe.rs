@@ -333,6 +333,186 @@ fn stp_eff_from_components(
         .collect()
 }
 
+fn vtp_mod_from_components(
+    mlcape: &[f64],
+    esrh: &[f64],
+    ebwd: &[f64],
+    mllcl: &[f64],
+    mlcin: &[f64],
+    ml3cape: &[f64],
+    lr700_500: &[f64],
+) -> Vec<f64> {
+    let n = mlcape.len();
+    let mut out = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let ebwd_term = if ebwd[i] <= 20.0 {
+            0.0
+        } else if ebwd[i] >= 45.0 {
+            1.5
+        } else {
+            ebwd[i] / 30.0
+        };
+        let mllcl_term = if mllcl[i] >= 1750.0 {
+            0.0
+        } else if mllcl[i] <= 750.0 {
+            1.0
+        } else {
+            (1750.0 - mllcl[i]) / 750.0
+        };
+        let mlcin_term = if mlcin[i] <= -200.0 {
+            0.0
+        } else if mlcin[i] >= -50.0 {
+            1.0
+        } else {
+            (mlcin[i] + 200.0) / 150.0
+        };
+        let ml3cape_term = if ml3cape[i] >= 100.0 {
+            2.0
+        } else {
+            ml3cape[i] / 50.0
+        };
+        let lr_term = if lr700_500[i] <= 4.5 {
+            0.0
+        } else if lr700_500[i] >= 8.5 {
+            2.0
+        } else {
+            (lr700_500[i] - 4.5) / 2.0
+        };
+
+        let p1 = (mlcape[i] / 1700.0) * (esrh[i] / 250.0) * ebwd_term * mllcl_term;
+        let p2 = mlcin_term * ml3cape_term * lr_term;
+        out.push(p1 * p2);
+    }
+
+    out
+}
+
+fn fixed_layer_shear_term(shear6: f64) -> f64 {
+    if shear6 < 12.5 {
+        0.0
+    } else if shear6 > 30.0 {
+        1.5
+    } else {
+        shear6 / 20.0
+    }
+}
+
+fn tornadic_low_level_limit_exceeded(mllcl: f64, mlcin: f64, sbcin: f64) -> bool {
+    mllcl > 1700.0 || mlcin < -100.0 || sbcin < -200.0
+}
+
+fn tehi_from_components(
+    srh1: &[f64],
+    mlcape: &[f64],
+    ml3cape: &[f64],
+    shear6: &[f64],
+    mllcl: &[f64],
+    mlcin: &[f64],
+    sbcin: &[f64],
+) -> Vec<f64> {
+    let n = srh1.len();
+    let mut out = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let mut ml3cape_term = if ml3cape[i] > 300.0 {
+            1.5
+        } else {
+            ml3cape[i] / 200.0
+        };
+        if mlcape[i] > 1500.0 {
+            ml3cape_term = ml3cape_term.max(1.0);
+        }
+
+        let tehi =
+            ((srh1[i] * mlcape[i]) / 160000.0) * ml3cape_term * fixed_layer_shear_term(shear6[i]);
+
+        if tornadic_low_level_limit_exceeded(mllcl[i], mlcin[i], sbcin[i]) || tehi < 0.0 {
+            out.push(0.0);
+        } else {
+            out.push(tehi);
+        }
+    }
+
+    out
+}
+
+fn tts_from_components(
+    srh1: &[f64],
+    ml3cape: &[f64],
+    mlcape: &[f64],
+    shear6: &[f64],
+    mllcl: &[f64],
+    mlcin: &[f64],
+    sbcin: &[f64],
+) -> Vec<f64> {
+    let n = srh1.len();
+    let mut out = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let ml3cape_capped = ml3cape[i].min(150.0);
+        let mlcape_term = if mlcape[i] < 2000.0 {
+            1.0
+        } else if mlcape[i] > 3000.0 {
+            1.5
+        } else {
+            mlcape[i] / 2000.0
+        };
+
+        let tts =
+            ((srh1[i] * ml3cape_capped) / 6500.0) * mlcape_term * fixed_layer_shear_term(shear6[i]);
+
+        if tornadic_low_level_limit_exceeded(mllcl[i], mlcin[i], sbcin[i]) || tts < 0.0 {
+            out.push(0.0);
+        } else {
+            out.push(tts);
+        }
+    }
+
+    out
+}
+
+fn compute_tornadic_low_level_components(
+    f: &WrfFile,
+    t: usize,
+    opts: &ComputeOpts,
+) -> WrfResult<(
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+)> {
+    let mut ml_opts = opts.clone();
+    ml_opts.parcel_type = Some("ml".into());
+    ml_opts.top_m = None;
+    ml_opts.bottom_m = None;
+    ml_opts.bottom_p = None;
+    ml_opts.top_p = None;
+
+    let mlcape = crate::diag::cape::compute_mlcape(f, t, &ml_opts)?;
+    let mlcin = crate::diag::cape::compute_mlcin(f, t, &ml_opts)?;
+    let mllcl = crate::diag::cape::compute_lcl(f, t, &ml_opts)?;
+
+    let mut ml3cape_opts = ml_opts.clone();
+    ml3cape_opts.top_m = Some(3000.0);
+    let ml3cape = crate::diag::cape::compute_mlcape(f, t, &ml3cape_opts)?;
+
+    let sbcin = crate::diag::cape::compute_sbcin(f, t, opts)?;
+    let srh1 = crate::diag::srh::compute_srh_field(
+        f,
+        t,
+        1000.0,
+        opts.storm_motion.as_ref(),
+        opts.storm_motion_method,
+    )?;
+    let shear6 = crate::diag::srh::compute_shear_0_6km(f, t, opts)?;
+
+    Ok((srh1, mlcape, ml3cape, shear6, mllcl, mlcin, sbcin))
+}
+
 /// Supercell Composite Parameter (dimensionless). `[ny, nx]`
 ///
 /// Uses MUCAPE, effective SRH, and effective bulk wind difference (EBWD).
@@ -429,6 +609,134 @@ pub fn compute_ecape_ehi(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult
     )?;
 
     Ok(ehi_from_components(&ecape, &srh))
+}
+
+/// Tornadic 0-1 km Energy-Helicity Index (dimensionless). `[ny, nx]`
+///
+/// Mirrors the SPC beta `tehi` product:
+///
+/// TEHI = ((SRH1 * mlCAPE)/160000) * ((mlCAPE3/200 J kg^-1)) * (6BWD/20 m s^-1)
+///
+/// where:
+/// - the mlCAPE3 term is set to 1.0 if total mlCAPE > 1500 J/kg
+/// - the mlCAPE3 term is capped at 1.5 if mlCAPE3 > 300 J/kg
+/// - the 6BWD term is capped at 1.5 for 6BWD > 30 m/s
+/// - the 6BWD term is set to 0.0 for 6BWD < 12.5 m/s
+/// - the entire index is set to 0.0 if mlLCL > 1700 m AGL,
+///   mlCIN < -100 J/kg, sbCIN < -200 J/kg, or TEHI < 0
+///
+/// Naming note:
+/// On the SPC mesoanalysis page, `tehi` is Tornadic 0-1 km EHI.
+/// `tts` is Tornadic Tilting and Stretching.
+pub fn compute_tehi(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    let (srh1, mlcape, ml3cape, shear6, mllcl, mlcin, sbcin) =
+        compute_tornadic_low_level_components(f, t, opts)?;
+
+    Ok(tehi_from_components(
+        &srh1, &mlcape, &ml3cape, &shear6, &mllcl, &mlcin, &sbcin,
+    ))
+}
+
+/// Tornadic Tilting and Stretching (dimensionless). `[ny, nx]`
+///
+/// Mirrors the SPC beta `tts` product:
+///
+/// TTS = ((SRH1 * mlCAPE3)/6500) * ((mlCAPE/2000 J kg^-1)) * (6BWD/20 m s^-1)
+///
+/// where:
+/// - the mlCAPE3 term in the first factor is capped at 150 J/kg
+/// - the mlCAPE term is set to 1.0 if total mlCAPE < 2000 J/kg
+/// - the mlCAPE term is capped at 1.5 if total mlCAPE > 3000 J/kg
+/// - the 6BWD term is capped at 1.5 for 6BWD > 30 m/s
+/// - the 6BWD term is set to 0.0 for 6BWD < 12.5 m/s
+/// - the entire index is set to 0.0 if mlLCL > 1700 m AGL,
+///   mlCIN < -100 J/kg, sbCIN < -200 J/kg, or TTS < 0
+///
+/// Naming note:
+/// On the SPC mesoanalysis page, `tts` is Tornadic Tilting and Stretching,
+/// not Total Totals.
+pub fn compute_tts(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    let (srh1, mlcape, ml3cape, shear6, mllcl, mlcin, sbcin) =
+        compute_tornadic_low_level_components(f, t, opts)?;
+
+    Ok(tts_from_components(
+        &srh1, &ml3cape, &mlcape, &shear6, &mllcl, &mlcin, &sbcin,
+    ))
+}
+
+/// Modified Violent Tornado Parameter (dimensionless). `[ny, nx]`
+///
+/// VTP_mod = P1 * P2
+///
+/// P1 =
+///   (MLCAPE / 1700.0) *
+///   (ESRH / 250.0) *
+///   ebwd_term *
+///   mllcl_term
+///
+/// P2 =
+///   mlcin_term *
+///   ml3cape_term *
+///   lr_term
+///
+/// where:
+///
+/// ebwd_term = EBWD / 30.0
+/// - if EBWD <= 20.0, set ebwd_term = 0.0
+/// - if EBWD >= 45.0, set ebwd_term = 1.5
+///
+/// mllcl_term = (1750.0 - MLLCL) / 750.0
+/// - if MLLCL >= 1750.0, set mllcl_term = 0.0
+/// - if MLLCL <= 750.0, set mllcl_term = 1.0
+///
+/// mlcin_term = (MLCIN + 200.0) / 150.0
+/// - if MLCIN <= -200.0, set mlcin_term = 0.0
+/// - if MLCIN >= -50.0, set mlcin_term = 1.0
+///
+/// ml3cape_term = ML3CAPE / 50.0
+/// - if ML3CAPE >= 100.0, set ml3cape_term = 2.0
+///
+/// lr_term = (LR700_500 - 4.5) / 2.0
+/// - if LR700_500 <= 4.5, set lr_term = 0.0
+/// - if LR700_500 >= 8.5, set lr_term = 2.0
+///
+/// Variable meanings:
+/// - MLCAPE: mixed-layer CAPE
+/// - ESRH: effective storm-relative helicity
+/// - EBWD: effective bulk wind difference
+/// - MLLCL: mixed-layer LCL height
+/// - MLCIN: mixed-layer CIN
+/// - ML3CAPE: 0-3 km mixed-layer CAPE
+/// - LR700_500: 700-500 mb lapse rate in degC/km, with positive values
+///   indicating decreasing temperature with height
+///
+/// Source ambiguity note:
+/// The source note mentions `MLLR > 8.5` for the lapse-rate cap, but this
+/// repo has no distinct `MLLR` field. This implementation therefore applies
+/// that cap to the same lapse-rate term used in the formula, `LR700_500`.
+pub fn compute_vtp_mod(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    let mut ml_opts = opts.clone();
+    ml_opts.parcel_type = Some("ml".into());
+    ml_opts.top_m = None;
+    ml_opts.bottom_m = None;
+    ml_opts.bottom_p = None;
+    ml_opts.top_p = None;
+
+    let mlcape = crate::diag::cape::compute_mlcape(f, t, &ml_opts)?;
+    let mlcin = crate::diag::cape::compute_mlcin(f, t, &ml_opts)?;
+    let mllcl = crate::diag::cape::compute_lcl(f, t, &ml_opts)?;
+
+    let mut ml3cape_opts = ml_opts.clone();
+    ml3cape_opts.top_m = Some(3000.0);
+    let ml3cape = crate::diag::cape::compute_mlcape(f, t, &ml3cape_opts)?;
+
+    let esrh = crate::diag::srh::compute_effective_srh(f, t, opts)?;
+    let ebwd = compute_effective_bulk_wind_difference(f, t, opts)?;
+    let lr700_500 = crate::diag::extra::compute_lapse_rate_700_500(f, t, opts)?;
+
+    Ok(vtp_mod_from_components(
+        &mlcape, &esrh, &ebwd, &mllcl, &mlcin, &ml3cape, &lr700_500,
+    ))
 }
 
 /// Critical angle (degrees). `[ny, nx]`
@@ -801,21 +1109,225 @@ mod tests {
 
     #[test]
     fn scp_helper_uses_operational_thresholds() {
-        let scp = scp_from_components(&[1000.0, 1000.0, 1000.0], &[50.0, 50.0, 50.0], &[5.0, 15.0, 25.0]);
+        let scp = scp_from_components(
+            &[1000.0, 1000.0, 1000.0],
+            &[50.0, 50.0, 50.0],
+            &[5.0, 15.0, 25.0],
+        );
         assert_close(scp[0], 0.0);
         assert_close(scp[1], 0.75);
         assert_close(scp[2], 1.0);
     }
 
     #[test]
+    fn tehi_matches_spc_beta_formula() {
+        let tehi = tehi_from_components(
+            &[200.0],
+            &[1000.0],
+            &[100.0],
+            &[20.0],
+            &[1000.0],
+            &[-50.0],
+            &[-50.0],
+        );
+
+        assert_close(tehi[0], 0.625);
+    }
+
+    #[test]
+    fn tehi_uses_mlcape3_floor_when_total_mlcape_is_large() {
+        let tehi = tehi_from_components(
+            &[160.0],
+            &[1600.0],
+            &[50.0],
+            &[20.0],
+            &[1000.0],
+            &[-50.0],
+            &[-50.0],
+        );
+
+        assert_close(tehi[0], 1.6);
+    }
+
+    #[test]
+    fn tehi_applies_limiters_and_shear_gate() {
+        let tehi = tehi_from_components(
+            &[200.0, 200.0, 200.0, 200.0],
+            &[1000.0, 1000.0, 1000.0, 1000.0],
+            &[100.0, 100.0, 100.0, 100.0],
+            &[10.0, 20.0, 20.0, 20.0],
+            &[1000.0, 1800.0, 1000.0, 1000.0],
+            &[-50.0, -50.0, -150.0, -50.0],
+            &[-50.0, -50.0, -50.0, -250.0],
+        );
+
+        assert_close(tehi[0], 0.0);
+        assert_close(tehi[1], 0.0);
+        assert_close(tehi[2], 0.0);
+        assert_close(tehi[3], 0.0);
+    }
+
+    #[test]
+    fn tts_matches_spc_beta_formula() {
+        let tts = tts_from_components(
+            &[100.0],
+            &[100.0],
+            &[2500.0],
+            &[20.0],
+            &[1000.0],
+            &[-50.0],
+            &[-50.0],
+        );
+
+        assert_close(tts[0], 1.9230769230769231);
+    }
+
+    #[test]
+    fn tts_uses_mlcape_floor_and_caps_mlcape3_and_shear() {
+        let tts = tts_from_components(
+            &[100.0],
+            &[200.0],
+            &[1500.0],
+            &[35.0],
+            &[1000.0],
+            &[-50.0],
+            &[-50.0],
+        );
+
+        assert_close(tts[0], 3.4615384615384617);
+    }
+
+    #[test]
+    fn tts_applies_limiters_and_negative_floor() {
+        let tts = tts_from_components(
+            &[-100.0, 100.0, 100.0, 100.0],
+            &[100.0, 100.0, 100.0, 100.0],
+            &[2500.0, 2500.0, 2500.0, 2500.0],
+            &[20.0, 20.0, 20.0, 20.0],
+            &[1000.0, 1800.0, 1000.0, 1000.0],
+            &[-50.0, -50.0, -150.0, -50.0],
+            &[-50.0, -50.0, -50.0, -250.0],
+        );
+
+        assert_close(tts[0], 0.0);
+        assert_close(tts[1], 0.0);
+        assert_close(tts[2], 0.0);
+        assert_close(tts[3], 0.0);
+    }
+
+    #[test]
+    fn vtp_mod_matches_in_range_formula() {
+        let vtp = vtp_mod_from_components(
+            &[1700.0],
+            &[250.0],
+            &[30.0],
+            &[1000.0],
+            &[-100.0],
+            &[50.0],
+            &[6.5],
+        );
+
+        assert_close(vtp[0], 2.0 / 3.0);
+    }
+
+    #[test]
+    fn vtp_mod_applies_ebwd_cutoff_and_cap() {
+        let vtp = vtp_mod_from_components(
+            &[1700.0, 1700.0, 1700.0],
+            &[250.0, 250.0, 250.0],
+            &[19.0, 20.0, 45.0],
+            &[1000.0, 1000.0, 1000.0],
+            &[-50.0, -50.0, -50.0],
+            &[50.0, 50.0, 50.0],
+            &[6.5, 6.5, 6.5],
+        );
+
+        assert_close(vtp[0], 0.0);
+        assert_close(vtp[1], 0.0);
+        assert_close(vtp[2], 1.5);
+    }
+
+    #[test]
+    fn vtp_mod_applies_mllcl_cap_and_cutoff() {
+        let vtp = vtp_mod_from_components(
+            &[1700.0, 1700.0, 1700.0],
+            &[250.0, 250.0, 250.0],
+            &[30.0, 30.0, 30.0],
+            &[750.0, 1000.0, 1750.0],
+            &[-50.0, -50.0, -50.0],
+            &[50.0, 50.0, 50.0],
+            &[6.5, 6.5, 6.5],
+        );
+
+        assert_close(vtp[0], 1.0);
+        assert_close(vtp[1], 1.0);
+        assert_close(vtp[2], 0.0);
+    }
+
+    #[test]
+    fn vtp_mod_applies_mlcin_cutoff_and_cap() {
+        let vtp = vtp_mod_from_components(
+            &[1700.0, 1700.0, 1700.0],
+            &[250.0, 250.0, 250.0],
+            &[30.0, 30.0, 30.0],
+            &[1000.0, 1000.0, 1000.0],
+            &[-200.0, -100.0, -50.0],
+            &[50.0, 50.0, 50.0],
+            &[6.5, 6.5, 6.5],
+        );
+
+        assert_close(vtp[0], 0.0);
+        assert_close(vtp[1], 2.0 / 3.0);
+        assert_close(vtp[2], 1.0);
+    }
+
+    #[test]
+    fn vtp_mod_applies_ml3cape_cap() {
+        let vtp = vtp_mod_from_components(
+            &[1700.0, 1700.0, 1700.0],
+            &[250.0, 250.0, 250.0],
+            &[30.0, 30.0, 30.0],
+            &[1000.0, 1000.0, 1000.0],
+            &[-50.0, -50.0, -50.0],
+            &[25.0, 100.0, 150.0],
+            &[6.5, 6.5, 6.5],
+        );
+
+        assert_close(vtp[0], 0.5);
+        assert_close(vtp[1], 2.0);
+        assert_close(vtp[2], 2.0);
+    }
+
+    #[test]
+    fn vtp_mod_applies_lr700_500_floor_and_cap() {
+        let vtp = vtp_mod_from_components(
+            &[1700.0, 1700.0, 1700.0],
+            &[250.0, 250.0, 250.0],
+            &[30.0, 30.0, 30.0],
+            &[1000.0, 1000.0, 1000.0],
+            &[-50.0, -50.0, -50.0],
+            &[50.0, 50.0, 50.0],
+            &[4.5, 6.5, 8.5],
+        );
+
+        assert_close(vtp[0], 0.0);
+        assert_close(vtp[1], 1.0);
+        assert_close(vtp[2], 2.0);
+    }
+
+    #[test]
     fn experimental_defaults_match_classic_parcel_choices() {
         let empty = ComputeOpts::default();
         assert_eq!(
-            opts_with_default_parcel_type(&empty, "sb").parcel_type.as_deref(),
+            opts_with_default_parcel_type(&empty, "sb")
+                .parcel_type
+                .as_deref(),
             Some("sb")
         );
         assert_eq!(
-            opts_with_default_parcel_type(&empty, "mu").parcel_type.as_deref(),
+            opts_with_default_parcel_type(&empty, "mu")
+                .parcel_type
+                .as_deref(),
             Some("mu")
         );
 
@@ -824,7 +1336,9 @@ mod tests {
             ..ComputeOpts::default()
         };
         assert_eq!(
-            opts_with_default_parcel_type(&explicit, "sb").parcel_type.as_deref(),
+            opts_with_default_parcel_type(&explicit, "sb")
+                .parcel_type
+                .as_deref(),
             Some("ml")
         );
     }

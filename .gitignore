@@ -8,4 +8,5 @@ dist/
 *.dll
 *.pyd
 showcase/
+outputs/
 .cargo/config.toml
