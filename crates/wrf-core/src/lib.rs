@@ -11,7 +11,11 @@ pub mod units;
 pub mod variables;
 
 #[cfg(feature = "pure-rust-reader")]
+pub mod classic_netcdf_reader;
+#[cfg(feature = "pure-rust-reader")]
 pub mod hdf5_reader;
+#[cfg(feature = "pure-rust-reader")]
+pub mod pure_reader;
 
 pub use compute::{
     getvar, getvar_all_times, ComputeOpts, StormMotion, StormMotionMethod, VarOutput,

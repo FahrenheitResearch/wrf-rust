@@ -4,10 +4,11 @@ use crate::compute::ComputeOpts;
 use crate::error::WrfResult;
 use crate::file::WrfFile;
 
-/// Cloud-top temperature (°C). `[ny, nx]`
+/// Cloud-top temperature (degC). `[ny, nx]`
 ///
-/// Finds the highest level with cloud water + ice > threshold
-/// and returns the temperature there.
+/// Finds the highest level with cloud water + ice > threshold and returns the
+/// temperature there. Clear-sky columns fall back to skin/2 m temperature so
+/// simulated IR products render warm clear areas instead of false cold cloud.
 pub fn compute_ctt(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let tc = f.temperature_c(t)?;
     let qc = f
@@ -21,7 +22,7 @@ pub fn compute_ctt(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<
     let nz = f.nz;
     let cloud_thresh = 1e-6; // kg/kg
 
-    let mut ctt = vec![-80.0f64; nxy]; // default cold value if no cloud
+    let mut ctt = clear_sky_brightness_fallback_c(f, t, nxy);
 
     ctt.iter_mut().enumerate().for_each(|(ij, ctt_val)| {
         // Scan from top down, find highest cloud level
@@ -36,6 +37,17 @@ pub fn compute_ctt(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<
     });
 
     Ok(ctt)
+}
+
+fn clear_sky_brightness_fallback_c(f: &WrfFile, t: usize, nxy: usize) -> Vec<f64> {
+    let fallback = f.read_var("TSK", t).or_else(|_| f.read_var("T2", t));
+    match fallback {
+        Ok(values) if values.len() == nxy => values
+            .into_iter()
+            .map(|value| if value > 150.0 { value - 273.15 } else { value })
+            .collect(),
+        _ => vec![40.0; nxy],
+    }
 }
 
 /// Cloud fraction (%). Returns `[low, mid, high]` interleaved (3 * nxy).
