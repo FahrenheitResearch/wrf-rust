@@ -329,6 +329,13 @@ The Python CLI still contains simple matplotlib-based quick-look commands for
 compatibility. Production WRF product rendering belongs in the Rust
 `wrf-products`/`wrf-render` path.
 
+## Acknowledgments
+
+Special thanks to Solarpower07 for the Solar7 color tables, product styling,
+and guidance on severe-weather diagnostics, storm motion, SRH, ECAPE, and WRF
+plot presentation. The native WRF rendering work in this repo is better because
+of that input.
+
 ## License
 
 MIT
