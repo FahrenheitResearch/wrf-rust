@@ -12,12 +12,17 @@ version = "0.2.35"
 edition.workspace = true
 description = "Python bindings for wrf-rust — fast WRF post-processing"
 
+[features]
+default = ["pure-rust-reader"]
+netcdf-backend = ["wrf-core/netcdf-backend"]
+pure-rust-reader = ["wrf-core/pure-rust-reader"]
+
 [lib]
 name = "_wrf"
 crate-type = ["cdylib"]
 
 [dependencies]
-wrf-core = { path = "crates/wrf-core" }
+wrf-core = { path = "crates/wrf-core", default-features = false }
 pyo3 = { version = "0.23", features = ["extension-module"] }
 numpy = "0.23"
 ndarray = "0.16"
