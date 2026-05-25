@@ -1,0 +1,20 @@
+[package]
+name = "wrf-render"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "WRF-native render request and PNG output primitives"
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+rustwx-core = { path = "../rustwx-core" }
+rustwx-contour = { package = "wrf-contour", path = "../wrf-contour" }
+font8x8 = "0.3"
+rusttype = "0.9"
+shapefile = "0.7"
+
+[features]
+default = []
+cuda = []
