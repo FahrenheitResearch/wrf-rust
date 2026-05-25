@@ -1,296 +1,50 @@
 # wrf-rust
 
-Rust-powered WRF post-processing with Python bindings. 85 diagnostic variables, built-in plotting, and parallel computation.
+`wrf-rust` is a WRF post-processing library and Python package backed by Rust.
+It reads WRF output files, computes common meteorological diagnostics, and now
+contains a native Rust rendering/product workflow for operational-style plots.
+
+The project has two user-facing surfaces:
+
+- Python package `wrf-rust`, imported as `wrf`, for `WrfFile`, `getvar()`,
+  NumPy arrays, and compatibility with existing analysis workflows.
+- Rust crates under `crates/` for WRF-native diagnostics, rendering, products,
+  soundings, local run discovery, and ensemble reductions.
+
+The goal is simple: keep WRF science, plotting, and ensemble work focused in
+one WRF-specific repo without pulling in the whole multi-model research stack.
+
+## Status
+
+This repository is active research software. The Python `getvar()` workflow is
+the stable user API. The native Rust renderer, product recipes, soundings,
+store, and ensemble support are under active development on feature branches
+before they are cut into a release.
+
+Current defaults favor the pure Rust reader path, so the core library does not
+need a system NetCDF installation for normal wheel builds. A system NetCDF
+backend is still available as an optional Cargo feature for development and
+comparison.
 
 ## Install
+
+For normal Python use:
 
 ```bash
 pip install wrf-rust
 ```
 
-Pre-built wheels for Python 3.10-3.13 on Linux, macOS, and Windows. No Rust toolchain, no system libraries, no conda required.
-
-## Community Guide
-
-The repo now includes a full WRF community setup guide for Windows, WSL 2, real-data initialization, domain sizing, and troubleshooting:
-
-- Manual-first Pages guide: [docs/index.html](docs/index.html)
-- Starter files: [docs/starter-files/README.md](docs/starter-files/README.md)
-- Optional Codex skill: [skills/wrf-community-onboarding/SKILL.md](skills/wrf-community-onboarding/SKILL.md)
-
-## WRF-Focused Workspace
-
-`wrf-rust` is the canonical WRF product repository. WRF science stays in
-`crates/wrf-core`; native rendering, product recipes, soundings, and local run
-discovery live in separate small crates:
-
-- `crates/wrf-contour` - renderer-agnostic contour topology
-- `crates/wrf-render` - render-ready WRF fields, palettes, overlays, and PNG output
-- `crates/wrf-products` - product-name recipes and `getvar()` to render glue
-- `crates/wrf-sounding` - point and box sounding extraction
-- `crates/wrf-store` - local WRF run and file discovery
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
-[docs/MIGRATION_FROM_RUSTWX.md](docs/MIGRATION_FROM_RUSTWX.md) for the migration
-boundary with `rustwx`.
-
-## Scientific Notes
-
-Recent correctness work tightened the severe-weather diagnostics without changing the basic `getvar()` workflow:
-
-- `effective_inflow` now returns the actual effective inflow base/top heights, not the MU parcel EL.
-- Effective `stp` and `scp` now use effective SRH plus effective bulk wind difference (EBWD).
-- `bri` now uses BRN shear instead of plain 0-6 km bulk shear.
-- Raw staggered fields (`U`, `V`, `W`) keep their native WRF shapes, and `ALL_TIMES` stacking now runs in Rust.
-
-## Usage
+The Python package installs a module named `wrf`:
 
 ```python
-import numpy as np
 from wrf import WrfFile, getvar
 
 f = WrfFile("wrfout_d01_2024-06-01_00:00:00")
-
-# Basic fields
-temp = getvar(f, "temp", units="degC")
-slp  = getvar(f, "slp",  units="hPa")
-wspd = getvar(f, "wspd", units="knots")
-
-# CAPE with parcel selection
+slp = getvar(f, "slp", units="hPa")
 sbcape = getvar(f, "sbcape")
-mlcape = getvar(f, "mlcape")
-mucape = getvar(f, "mucape")
-sb3cap = getvar(f, "sbcape", top_m=3000)           # 0-3 km CAPE
-
-# Custom parcel
-cape = getvar(f, "cape", parcel_pressure=850,
-              parcel_temperature=20, parcel_dewpoint=15)
-
-# ECAPE family
-ecape = getvar(f, "ecape", storm_motion_type="bunkers_rm",
-               entrainment_rate=0.0005, pseudoadiabatic=False)
-ecin  = getvar(f, "ecin", storm_motion_type="mean_wind")
-
-# SRH with Bunkers storm motion
-srh1 = getvar(f, "srh1")                            # 0-1 km
-srh3 = getvar(f, "srh3")                            # 0-3 km
-srh  = getvar(f, "srh", depth_m=1500, storm_motion=(12, 8))
-srh_pw = getvar(f, "srh1", storm_motion_method="pressure_weighted")
-
-# Per-grid custom storm motion
-sm_u = np.full((f.ny, f.nx), 12.0)
-sm_v = np.full((f.ny, f.nx), 8.0)
-srh_custom = getvar(f, "srh", depth_m=1500, storm_motion=(sm_u, sm_v))
-
-# Effective inflow layer
-eff_srh  = getvar(f, "effective_srh")
-eff_cape = getvar(f, "effective_cape")
-
-# Severe composites
-stp     = getvar(f, "stp")                           # fixed-layer
-stp_eff = getvar(f, "stp", layer_type="effective")   # effective-layer
-scp     = getvar(f, "scp")
-ehi     = getvar(f, "ehi", depth_m=3000)             # 0-3 km EHI
-
-# Configurable layers
-shear = getvar(f, "bulk_shear", bottom_m=1000, top_m=6000)
-mw    = getvar(f, "mean_wind",  bottom_m=0, top_m=6000)
-lr    = getvar(f, "lapse_rate", bottom_p=700, top_p=500)
-lr_v  = getvar(f, "lapse_rate", bottom_m=0, top_m=3000, use_virtual=True)
-
-# Lake interpolation (removes 2m artifacts over water bodies)
-cape = getvar(f, "sbcape", lake_interp=1000)         # interp lakes < 1000 km2
-
-# All timesteps
-slp_all = getvar(f, "slp", timeidx=None)             # shape (nt, ny, nx)
 ```
 
-Also accepts `netCDF4.Dataset` directly:
-
-```python
-from netCDF4 import Dataset
-slp = getvar(Dataset("wrfout_d01..."), "slp")
-```
-
-Note: dataset inputs are reopened by filepath under the hood. On Windows,
-do not keep a `netCDF4.Dataset` open while calling wrf-rust on that same
-file, especially in subprocesses. Close the dataset first or pass a file
-path / `WrfFile` instead.
-
-## Plotting
-
-```python
-from wrf import plot_field, plot_wind, plot_skewt, panel
-
-plot_field(f, "sbcape")                               # auto colormap + cartopy
-plot_field(f, "sbcape", style="solar7")               # Solarpower07 colormaps
-plot_wind(f)                                           # wind barbs
-plot_skewt(f, point=(35.0, -97.5))                    # Skew-T with hodograph
-panel(f, ["sbcape", "srh1", "stp", "shear_0_6km"])   # multi-panel
-
-# Multi-timestep with consistent scale + GIF
-from wrf.plot import render_timesteps
-render_timesteps(f, "sbcape", timesteps=[0,1,2,3],
-                 gif=True, fixed_scale=True)
-```
-
-## CLI
-
-```bash
-python -m wrf info  wrfout_d01_2024-06-01_00:00:00
-python -m wrf stats wrfout_d01_2024-06-01_00:00:00 sbcape slp temp
-python -m wrf plot  wrfout_d01_2024-06-01_00:00:00 slp -o slp.png
-python -m wrf panel wrfout_d01_2024-06-01_00:00:00 sbcape srh1 stp -o severe.png
-```
-
-## Benchmark vs wrf-python
-
-Benchmarked on a 199x199x79 WRF grid. The fields below matched wrf-python on that case, but broader scientific equivalence still depends on variable and workflow.
-
-| Variable | wrf-python | wrf-rust | Speedup |
-|---|---|---|---|
-| Temperature | 0.268s | 0.004s | **76x** |
-| Potential temp | 0.088s | 0.003s | **26x** |
-| Abs. vorticity | 0.173s | 0.015s | **11x** |
-| Relative humidity | 0.353s | 0.097s | **4x** |
-| Precipitable water | 0.224s | 0.077s | **3x** |
-| Reflectivity | 0.494s | 0.234s | **2x** |
-| SLP | 0.517s | 0.497s | 1x |
-| Wind destagger | 0.089s | 0.081s | 1x |
-
-Plus 23 variables wrf-python doesn't have (STP, SCP, EHI, critical angle, ECAPE, shear, Bunkers, lapse rates, fire indices, effective inflow layer).
-
-## Variables
-
-96 diagnostic variables. All support `units=` parameter.
-
-### Thermodynamics
-
-`temp` `tc` `theta` `theta_e` `theta_w` `tv` `twb` `td` `rh`
-
-### Pressure & height
-
-`pressure` `slp` `height` `height_agl` `terrain` `geopt` `omega`
-
-`pressure` defaults to hPa for wrf-python compatibility. Use `pres` / `p` or `units="Pa"` when you want Pascals.
-
-### Moisture
-
-`pw` `rh2m` `dp2m` `mixing_ratio` `specific_humidity`
-
-### CAPE & convection
-
-`sbcape` `sbcin` `mlcape` `mlcin` `mucape` `mucin` `cape` `cin` `lcl` `lfc` `el` `effective_cape` `effective_inflow` `cape2d` `cape3d`
-
-All CAPE variables support `top_m` for truncated integration (e.g. `top_m=3000` for 3CAPE). Generic `cape`/`cin` accept `parcel_type` or custom parcel (`parcel_pressure`, `parcel_temperature`, `parcel_dewpoint`). `effective_inflow` returns a two-plane output: effective layer base followed by effective layer top, both in meters AGL.
-
-ECAPE-family variables use the same `getvar()` entry point but also accept `storm_motion_type`, `entrainment_rate`, and `pseudoadiabatic`. They support `parcel_type="sb"`, `"ml"`, or `"mu"`, but they do not currently support the generic custom parcel thermodynamics (`parcel_pressure`, `parcel_temperature`, `parcel_dewpoint`).
-
-### Wind
-
-`ua` `va` `wa` `wspd` `wdir` `wspd10` `wdir10` `uvmet` `uvmet10`
-
-### SRH & shear
-
-`srh1` `srh3` `srh` `effective_srh` `shear_0_1km` `shear_0_6km` `bulk_shear` `mean_wind` `bunkers_rm` `bunkers_lm` `mean_wind_0_6km`
-
-SRH/Bunkers diagnostics default to pressure-weighted Bunkers layer means when pressure is available. Set `storm_motion_method="non_pressure_weighted"` (or `"classic"`) to force the non-pressure-weighted path. `storm_motion=(u, v)` accepts either scalar components or `(ny, nx)` component grids.
-
-### Severe composites
-
-`stp` `stp_fixed` `stp_effective` `scp` `ehi` `tehi` `tts` `vtp_mod` `critical_angle` `ship` `bri`
-
-STP supports `layer_type="effective"` for the 5-term formula with MLCIN. Effective `stp` uses ESRH + EBWD, and `scp` uses MUCAPE + effective SRH + EBWD. `tehi` and `tts` mirror the SPC beta Tornadic 0-1 km EHI and Tornadic Tilting and Stretching products. `vtp_mod` is the modified violent tornado parameter using MLCAPE, ESRH, EBWD, MLLCL, MLCIN, 0-3 km MLCAPE, and 700-500 hPa lapse rate.
-
-### ECAPE
-
-`ecape` `ncape` `ecape_cape` `ecape_cin` `ecape_lfc` `ecape_el`
-
-ECAPE diagnostics accept `parcel_type`, `storm_motion` or `storm_motion_type`, `entrainment_rate`, and `pseudoadiabatic`.
-
-### Radar & cloud
-
-`dbz` `maxdbz` `ctt` `cloudfrac` `uhel`
-
-### Vorticity
-
-`avo` `pvo`
-
-### Lapse rates & levels
-
-`lapse_rate_700_500` `lapse_rate_0_3km` `lapse_rate` `freezing_level` `wet_bulb_0`
-
-Generic `lapse_rate` accepts `bottom_m`/`top_m` or `bottom_p`/`top_p`, plus `use_virtual=True`.
-
-### Fire weather
-
-`fosberg` `haines` `hdw`
-
-## Parameters
-
-| Parameter | Description |
-|---|---|
-| `units` | Output unit conversion (every variable) |
-| `parcel_type` | `"sb"`, `"ml"`, `"mu"` for CAPE |
-| `parcel_pressure/temperature/dewpoint` | Custom parcel (hPa, degC, degC) |
-| `top_m` / `bottom_m` | Layer bounds in m AGL |
-| `top_p` / `bottom_p` | Layer bounds in hPa |
-| `depth_m` | SRH/EHI depth (m AGL) |
-| `storm_motion` | Custom storm motion `(u, v)` in m/s; each component may be a scalar or `(ny, nx)` grid |
-| `storm_motion_method` | Default Bunkers method: `"pressure_weighted"` (default) or `"non_pressure_weighted"` / `"classic"` |
-| `storm_motion_type` | ECAPE storm-motion type: `"bunkers_rm"`, `"bunkers_lm"`, or `"mean_wind"` |
-| `entrainment_rate` | ECAPE entrainment rate passed through to the core implementation |
-| `pseudoadiabatic` | ECAPE pseudoadiabatic toggle |
-| `layer_type` | `"fixed"` or `"effective"` for STP |
-| `use_virtual` | Virtual temperature for lapse rates |
-| `lake_interp` | Interpolate 2m fields over lakes < N km2 |
-
-## Unit strings
-
-Every registered variable supports `units=`. Raw WRF variables (RAINNC, T2, PSFC, etc.) also support conversion when their default unit is known. Case-insensitive.
-
-| Category | Strings | Example |
-|---|---|---|
-| Temperature | `K`, `degC`, `C`, `celsius`, `degF`, `F`, `fahrenheit` | `units="degF"` |
-| Pressure | `Pa`, `hPa`, `mb`, `mbar`, `inHg` | `units="hPa"` |
-| Speed | `m/s`, `knots`, `kt`, `kts`, `mph`, `kph`, `km/h` | `units="knots"` |
-| Length/Height | `m`, `ft`, `km`, `mi`, `dam` | `units="dam"` |
-| Depth | `mm`, `in`, `inches` | `units="in"` |
-| Moisture | `kg/kg`, `g/kg` | `units="g/kg"` |
-
-### Raw WRF variables
-
-Any variable name not in the computed registry is read directly from the file. Common ones:
-
-| Variable | Default unit | Description |
-|---|---|---|
-| `RAINNC` | mm | Grid-scale accumulated precipitation |
-| `RAINC` | mm | Convective accumulated precipitation |
-| `T2` | K | 2-m temperature (also available as `t2`) |
-| `PSFC` | Pa | Surface pressure |
-| `TSK` | K | Skin temperature |
-| `SST` | K | Sea surface temperature |
-| `PBLH` | m | PBL height |
-| `HFX` | W/m2 | Sensible heat flux |
-| `LH` | W/m2 | Latent heat flux |
-| `SWDOWN` | W/m2 | Downwelling shortwave |
-| `GLW` | W/m2 | Downwelling longwave |
-| `OLR` | W/m2 | Outgoing longwave |
-| `UST` | m/s | Friction velocity |
-| `SNOWH` | m | Snow depth |
-| `LU_INDEX` | -- | Land use category |
-| `U10` / `V10` | m/s | 10-m wind components |
-
-```python
-# These all work:
-rain = getvar(f, "RAINNC", units="in")     # accumulated precip in inches
-tsk  = getvar(f, "TSK", units="degF")      # skin temp in Fahrenheit
-pblh = getvar(f, "PBLH", units="ft")       # PBL height in feet
-```
-
-## Building from source
-
-Only needed for development. Users should `pip install wrf-rust`.
+For local development:
 
 ```bash
 git clone https://github.com/FahrenheitResearch/wrf-rust.git
@@ -299,12 +53,281 @@ pip install maturin
 maturin develop --release
 ```
 
-## Acknowledgments
+To build the Python extension through the pure Rust reader path:
 
-Special thanks to Solarpower07 for the underlying Solar7 colormaps and product
-definitions, and for substantial guidance on severe-weather diagnostics, storm
-motion, SRH, and ECAPE. A lot of the recent correctness work in `wrf-rust` is
-better because of that help.
+```bash
+maturin develop --release --cargo-extra-args="--no-default-features --features pure-rust-reader"
+```
+
+## Quick Python Examples
+
+Open a WRF file:
+
+```python
+from wrf import WrfFile, getvar, ALL_TIMES
+
+f = WrfFile("wrfout_d02_1974-04-03_22_00_00")
+
+print(f.nx, f.ny, f.nz, f.nt)
+print(f.times())
+```
+
+Read standard diagnostics:
+
+```python
+temp_c = getvar(f, "temp", units="degC")
+slp_mb = getvar(f, "slp", units="hPa")
+wspd_kt = getvar(f, "wspd", units="kt")
+td2_f = getvar(f, "td2", units="degF")
+```
+
+Compute severe-weather fields:
+
+```python
+sbcape = getvar(f, "sbcape")
+mlcape = getvar(f, "mlcape")
+mucape = getvar(f, "mucape")
+srh1 = getvar(f, "srh1")
+srh3 = getvar(f, "srh3")
+stp = getvar(f, "stp", layer_type="effective")
+scp = getvar(f, "scp")
+```
+
+Work with custom layers and storm motion:
+
+```python
+shear = getvar(f, "bulk_shear", bottom_m=0, top_m=6000)
+lr = getvar(f, "lapse_rate", bottom_p=700, top_p=500)
+srh = getvar(f, "srh", depth_m=1500, storm_motion=(12.0, 8.0))
+```
+
+Read all times from a file:
+
+```python
+slp_all = getvar(f, "slp", timeidx=ALL_TIMES, units="hPa")
+```
+
+Raw WRF variables are also available by name:
+
+```python
+rain = getvar(f, "RAINNC", units="in")
+u10 = getvar(f, "U10", units="kt")
+v10 = getvar(f, "V10", units="kt")
+```
+
+`netCDF4.Dataset` and xarray-like inputs are accepted when a source filepath is
+available, but `wrf-rust` reopens the file natively. On Windows, close an open
+`netCDF4.Dataset` before passing the same file to `wrf-rust`.
+
+## Native Rust Plotting
+
+The new plotting path is Rust-native:
+
+```text
+wrf-core getvar() -> wrf-products recipe -> wrf-render PNG
+```
+
+The renderer does not open WRF files. It renders fields, grids, overlays,
+palettes, colorbars, and basemap layers supplied by callers. `wrf-products` is
+the WRF-specific glue that turns a product name into `getvar()` calls plus a
+render request.
+
+Render one product:
+
+```bash
+cargo run -p wrf-products --example render_product -- \
+  /path/to/wrfout_d02_1974-04-03_22_00_00 \
+  stp_effective \
+  stp_effective.png \
+  0
+```
+
+Render the default product suite:
+
+```bash
+cargo run -p wrf-products --example render_suite -- \
+  /path/to/wrfout_d02_1974-04-03_22_00_00 \
+  output/products \
+  0
+```
+
+Render selected products:
+
+```bash
+cargo run -p wrf-products --example render_suite -- \
+  /path/to/wrfout_d02_1974-04-03_22_00_00 \
+  output/severe \
+  0 \
+  sbcape,mlcape,srh03,stp_effective,scp,reflectivity
+```
+
+Product rendering uses the `OPERATIONAL_FAST` presentation profile from the
+Rust rendering stack: projected data frame, operational-style colorbars,
+discrete weather scales, basemap linework, contours, and wind barbs where the
+product calls for them.
+
+## Native Products
+
+`wrf-products` currently includes product recipes for:
+
+- ECAPE family: `ecape`, `sb_ecape`, `ml_ecape`, `mu_ecape`, `ncape`,
+  `ecape_cape`, `ecape_cin`, `ecape_lfc`, `ecape_el`, `ecape_scp`,
+  `ecape_ehi`
+- CAPE/CIN: `sbcape`, `sbcin`, `mlcape`, `mlcin`, `mucape`, `mucin`
+- Severe parameters: `srh01`, `srh03`, `effective_srh`, `shear01`,
+  `shear06`, `ebwd`, `stp_effective`, `stp_fixed`, `scp`, `ehi`, `tehi`,
+  `tts`, `vtp_mod`, `critical_angle`, `ship`, `bri`
+- Radar/cloud/precip: `reflectivity`, `reflectivity_1km`,
+  `cloud_top_temperature`, `precip_accum`, `updraft_helicity`
+- Surface fields: `slp_wind10m`, `surface_wind10m`, `u10_component`,
+  `v10_component`, `t2`, `td2`, `rh2`, `pwat`, `pblh`, `terrain`
+- Thermodynamic levels: `lcl`, `lfc`, `el`, `lapse_rate_700_500`,
+  `lapse_rate_0_3km`, `freezing_level`, `wet_bulb_zero`
+- Fire weather: `fosberg`, `haines`, `hdw`
+- Upper air: `height200_wind`, `temp200_wind`, `wind200`,
+  `height250_wind`, `temp250_wind`, `wind250`, `height300_wind`,
+  `temp300_wind`, `wind300`, `height500_wind`, `temp500_wind`,
+  `wind500`, `vort500_wind`, `omega500`, `temp700_wind`,
+  `height700_wind`, `rh700_wind`, `height850_wind`, `temp850_wind`,
+  `wind850`
+
+Product names accept several common aliases; the canonical names above are what
+examples and output filenames use.
+
+## Ensemble Workflows
+
+`wrf-ensemble` runs the same product recipes across same-grid WRF members and
+reduces the resulting fields.
+
+Render one ensemble product:
+
+```bash
+cargo run -p wrf-ensemble --example render_ensemble -- \
+  "members/*/wrfout_d02_1974-04-03_22_00_00" \
+  stp_effective \
+  mean \
+  output/ensemble_stp_mean.png \
+  0
+```
+
+Render a suite:
+
+```bash
+cargo run -p wrf-ensemble --example render_ensemble_suite -- \
+  "members/*/wrfout_d02_1974-04-03_22_00_00" \
+  output/ensemble \
+  0 \
+  mean,stddev,p:90,prob_ge:1,prob_ge:3 \
+  stp_effective,scp,sbcape,reflectivity
+```
+
+Supported statistics:
+
+- `mean`
+- `stddev`
+- `min`
+- `max`
+- `p:NN` / `percentile:NN`
+- `prob_gt:VALUE`
+- `prob_ge:VALUE`
+- `prob_lt:VALUE`
+- `prob_le:VALUE`
+
+All members must be on the same WRF grid for a given reduction.
+
+## Crate Layout
+
+- `crates/wrf-core`: WRF file access, raw variables, diagnostics, units,
+  grid/projection metadata, and `getvar()` behavior.
+- `crates/wrf-contour`: contour topology and geometry.
+- `crates/wrf-render`: native rendering primitives, palettes, overlays,
+  projected maps, colorbars, text, wind barbs, and PNG output.
+- `crates/wrf-products`: WRF product recipes that connect `wrf-core` fields to
+  `wrf-render` requests.
+- `crates/wrf-ensemble`: ensemble member discovery, product reductions, and
+  ensemble rendering.
+- `crates/wrf-sounding`: point and box sounding extraction.
+- `crates/wrf-store`: local run/file catalog helpers.
+- `crates/rustwx-core`: small shared support types ported from `rustwx` where
+  WRF rendering needs them.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for ownership boundaries and
+[docs/MIGRATION_FROM_RUSTWX.md](docs/MIGRATION_FROM_RUSTWX.md) for what was
+ported from `rustwx`.
+
+## Diagnostics
+
+The Python `getvar()` API and `wrf-core` support WRF raw variables plus common
+derived diagnostics. Major groups include:
+
+- Temperature, pressure, height, terrain, humidity, moisture, and wind.
+- CAPE/CIN with surface-based, mixed-layer, most-unstable, generic, and custom
+  parcel paths.
+- ECAPE-family diagnostics with parcel selection and storm-motion options.
+- Storm-relative helicity, Bunkers storm motion, bulk shear, mean wind, lapse
+  rates, and severe composite parameters.
+- Reflectivity, cloud-top temperature, updraft helicity, vorticity, and fire
+  weather indices.
+
+Common options:
+
+| Option | Purpose |
+| --- | --- |
+| `units` | Convert output units where supported. |
+| `timeidx` | Select a time index; use `ALL_TIMES` for all times. |
+| `parcel_type` | Select `"sb"`, `"ml"`, or `"mu"` for parcel-aware diagnostics. |
+| `bottom_m`, `top_m` | Layer bounds in meters AGL. |
+| `bottom_p`, `top_p` | Layer bounds in hPa. |
+| `depth_m` | SRH/EHI layer depth in meters AGL. |
+| `storm_motion` | Custom storm motion `(u, v)` in m/s. |
+| `storm_motion_type` | ECAPE storm-motion type such as `"bunkers_rm"`. |
+| `layer_type` | STP layer type, usually `"fixed"` or `"effective"`. |
+| `lake_interp` | Interpolate 2 m fields over small water bodies. |
+
+## Unit Strings
+
+Unit strings are case-insensitive.
+
+| Category | Strings |
+| --- | --- |
+| Temperature | `K`, `degC`, `C`, `celsius`, `degF`, `F`, `fahrenheit` |
+| Pressure | `Pa`, `hPa`, `mb`, `mbar`, `inHg` |
+| Speed | `m/s`, `knots`, `kt`, `kts`, `mph`, `kph`, `km/h` |
+| Length/height | `m`, `ft`, `km`, `mi`, `dam` |
+| Precip/depth | `mm`, `in`, `inches` |
+| Moisture | `kg/kg`, `g/kg` |
+
+## Community WRF Guide
+
+The repository also includes a WRF setup guide for Windows/WSL 2, real-data
+initialization, domain sizing, and troubleshooting:
+
+- [docs/index.html](docs/index.html)
+- [docs/starter-files/README.md](docs/starter-files/README.md)
+- [skills/wrf-community-onboarding/SKILL.md](skills/wrf-community-onboarding/SKILL.md)
+
+## Development Checks
+
+Useful checks before opening a PR:
+
+```bash
+cargo fmt --all
+cargo test -p wrf-products
+cargo test -p wrf-render
+cargo check --workspace
+```
+
+For Python extension development:
+
+```bash
+maturin develop --release
+python -m wrf info /path/to/wrfout
+python -m wrf stats /path/to/wrfout sbcape slp temp
+```
+
+The Python CLI still contains simple matplotlib-based quick-look commands for
+compatibility. Production WRF product rendering belongs in the Rust
+`wrf-products`/`wrf-render` path.
 
 ## License
 
