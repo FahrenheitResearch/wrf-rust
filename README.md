@@ -18,6 +18,22 @@ The repo now includes a full WRF community setup guide for Windows, WSL 2, real-
 - Starter files: [docs/starter-files/README.md](docs/starter-files/README.md)
 - Optional Codex skill: [skills/wrf-community-onboarding/SKILL.md](skills/wrf-community-onboarding/SKILL.md)
 
+## WRF-Focused Workspace
+
+`wrf-rust` is the canonical WRF product repository. WRF science stays in
+`crates/wrf-core`; native rendering, product recipes, soundings, and local run
+discovery live in separate small crates:
+
+- `crates/wrf-contour` - renderer-agnostic contour topology
+- `crates/wrf-render` - render-ready WRF fields, palettes, overlays, and PNG output
+- `crates/wrf-products` - product-name recipes and `getvar()` to render glue
+- `crates/wrf-sounding` - point and box sounding extraction
+- `crates/wrf-store` - local WRF run and file discovery
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
+[docs/MIGRATION_FROM_RUSTWX.md](docs/MIGRATION_FROM_RUSTWX.md) for the migration
+boundary with `rustwx`.
+
 ## Scientific Notes
 
 Recent correctness work tightened the severe-weather diagnostics without changing the basic `getvar()` workflow:

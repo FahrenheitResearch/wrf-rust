@@ -9,4 +9,13 @@ dist/
 *.pyd
 showcase/
 outputs/
+proof-plots/
+data/
+wrfout_*
+wrfrst_*
+met_em.*
+GRIBFILE.*
+*.grib2
+*.idx
+*.nc
 .cargo/config.toml
