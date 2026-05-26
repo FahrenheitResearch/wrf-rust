@@ -568,7 +568,7 @@ impl WeatherPreset {
                 mask_below: None,
             },
             Self::Srh => DiscreteColorScale {
-                levels: range_step(0.0, 1001.0, 10.0),
+                levels: srh_scale_levels(),
                 colors: weather_palette(WeatherPalette::Srh),
                 extend: ExtendMode::Max,
                 mask_below: None,
@@ -733,6 +733,17 @@ pub fn stp_scale_levels() -> Vec<f64> {
         (8.0, 10.2, 0.2),
         (10.0, 15.5, 0.5),
         (15.0, 20.5, 0.5),
+    ])
+}
+
+pub fn srh_scale_levels() -> Vec<f64> {
+    concat_ranges(&[
+        (0.0, 150.0, 10.0),
+        (150.0, 300.0, 10.0),
+        (300.0, 450.0, 10.0),
+        (450.0, 600.0, 10.0),
+        (600.0, 1000.0, 20.0),
+        (1000.0, 1500.1, 50.0),
     ])
 }
 
@@ -976,10 +987,7 @@ mod tests {
             WeatherPreset::ThreeCape.scale().levels,
             concat_ranges(&[(0.0, 300.0, 5.0), (300.0, 501.0, 20.0)])
         );
-        assert_eq!(
-            WeatherPreset::Srh.scale().levels,
-            range_step(0.0, 1001.0, 10.0)
-        );
+        assert_eq!(WeatherPreset::Srh.scale().levels, srh_scale_levels());
         assert_eq!(WeatherPreset::Stp.scale().levels, stp_scale_levels());
         assert_eq!(
             WeatherPreset::Ehi.scale().levels,
@@ -997,6 +1005,19 @@ mod tests {
             WeatherPreset::LapseRate.scale().levels,
             range_step(2.0, 10.1, 0.1)
         );
+    }
+
+    #[test]
+    fn srh_and_ehi_palettes_finish_with_blue_high_end() {
+        let srh = weather_palette(WeatherPalette::Srh);
+        let srh_top = srh.last().unwrap();
+        assert!(srh_top.b > srh_top.r);
+        assert!(srh_top.g > srh_top.r);
+
+        let ehi = weather_palette(WeatherPalette::Ehi);
+        let ehi_top = ehi.last().unwrap();
+        assert!(ehi_top.b > ehi_top.r);
+        assert!(ehi_top.g > ehi_top.r);
     }
 
     #[test]

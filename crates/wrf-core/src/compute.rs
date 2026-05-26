@@ -260,6 +260,7 @@ fn getvar_raw(file: &WrfFile, name: &str, t: usize, opts: &ComputeOpts) -> WrfRe
         "SWDOWN" | "GLW" | "OLR" => "W/m2",
         "UST" => "m/s",
         "U10" | "V10" => "m/s",
+        "UP_HELI_MAX" => "m2/s2",
         _ => "",
     };
 

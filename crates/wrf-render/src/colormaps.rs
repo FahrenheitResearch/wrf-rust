@@ -183,12 +183,26 @@ pub fn three_cape() -> Vec<Rgba> {
 
 /// EHI composite palette.
 pub fn ehi() -> Vec<Rgba> {
-    build_composite(&[10, 10, 20, 20, 20, 40, 40])
+    let mut c = build_composite(&[10, 10, 20, 20, 20, 30, 20]);
+    c.extend(lerp_hex(
+        &[
+            "#806a70", "#535057", "#20242a", "#31535a", "#55a3aa", "#83edf2",
+        ],
+        50,
+    ));
+    c
 }
 
 /// SRH composite palette.
 pub fn srh() -> Vec<Rgba> {
-    build_composite(&[10, 10, 10, 10, 10, 10, 40])
+    let mut c = build_composite(&[10, 10, 10, 10, 10, 25, 20]);
+    c.extend(lerp_hex(
+        &[
+            "#806a70", "#535057", "#20242a", "#31535a", "#55a3aa", "#83edf2",
+        ],
+        45,
+    ));
+    c
 }
 
 /// STP composite palette.

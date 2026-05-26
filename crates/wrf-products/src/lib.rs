@@ -3,7 +3,8 @@
 //! This crate is glue. It maps product names to `wrf-core::getvar` calls and
 //! `wrf-render` requests, but it does not duplicate diagnostic science.
 
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -13,16 +14,19 @@ use wrf_core::{
 use wrf_render::{
     build_projected_map_with_options,
     map_frame_aspect_ratio_for_mode_with_domain_frame_style_and_colorbar_orientation,
-    palette_scale, render_image_with_style, save_rgba_png_profile_with_options, stp_scale_levels,
-    BasemapDetail, Color, ColorScale, ColorbarOrientation, ContourStyle, DiscreteColorScale,
-    DomainFrame, ExtendMode, Field2D, GridShape, LatLonGrid, LegendControls, LegendMode,
-    LevelDensity, MapRenderRequest, PngWriteOptions, ProductKey, ProductVisualMode,
-    ProjectedMapBuildOptions, ProjectionSpec, RasterSampleMode, RenderDensity, RustwxRenderError,
-    WeatherPalette, WindBarbStyle, OPERATIONAL_FAST,
+    palette_scale, render_image_with_style, save_rgba_png_profile_with_options, srh_scale_levels,
+    stp_scale_levels, BasemapDetail, Color, ColorScale, ColorbarOrientation, ContourStyle,
+    DiscreteColorScale, DomainFrame, ExtendMode, Field2D, GridShape, LatLonGrid, LegendControls,
+    LegendMode, LevelDensity, MapRenderRequest, PngWriteOptions, ProductKey, ProductVisualMode,
+    ProjectedMapBuildOptions, ProjectionSpec, RasterSampleMode, RenderDensity, RgbaGridField,
+    RustwxRenderError, WeatherPalette, WindBarbStyle, OPERATIONAL_FAST,
 };
 
 const DEFAULT_PRODUCT_WIDTH: u32 = 1600;
 const DEFAULT_PRODUCT_HEIGHT: u32 = 1200;
+const UH_TRACK_THRESHOLD: f32 = 50.0;
+const NATIVE_UPDRAFT_HELICITY_MAX_VAR: &str = "UP_HELI_MAX";
+const NATIVE_OR_COMPUTED_UH_VAR: &str = "native_or_computed_uhel";
 
 #[derive(Debug, Error)]
 pub enum ProductError {
@@ -57,6 +61,7 @@ pub enum PaletteId {
     Reflectivity,
     SimIr,
     Temperature,
+    SurfaceTemperature,
     Dewpoint,
     SurfaceDewpoint,
     RelativeHumidity,
@@ -70,7 +75,10 @@ impl PaletteId {
     pub fn default_levels(self) -> Vec<f32> {
         match self {
             Self::Cape => range_step(0.0, 8100.0, 100.0),
-            Self::Srh => range_step(0.0, 1000.0, 10.0),
+            Self::Srh => srh_scale_levels()
+                .into_iter()
+                .map(|value| value as f32)
+                .collect(),
             Self::Stp => stp_scale_levels()
                 .into_iter()
                 .map(|value| value as f32)
@@ -82,6 +90,7 @@ impl PaletteId {
             Self::Reflectivity => range_step(5.0, 75.0, 5.0),
             Self::SimIr => range_step(-90.0, 50.0, 1.0),
             Self::Temperature => range_step(-40.0, 50.0, 5.0),
+            Self::SurfaceTemperature => range_step(-60.0, 120.0, 1.0),
             Self::Dewpoint | Self::SurfaceDewpoint => range_step(-40.0, 90.0, 1.0),
             Self::RelativeHumidity => range_step(0.0, 100.0, 10.0),
             Self::Wind => range_step(0.0, 120.0, 10.0),
@@ -106,7 +115,7 @@ impl PaletteId {
                 palette_scale(WeatherPalette::Reflectivity, levels, extend, mask_below)
             }
             Self::SimIr => palette_scale(WeatherPalette::SimIr, levels, extend, mask_below),
-            Self::Temperature => {
+            Self::Temperature | Self::SurfaceTemperature => {
                 palette_scale(WeatherPalette::Temperature, levels, extend, mask_below)
             }
             Self::Dewpoint => palette_scale(WeatherPalette::Dewpoint, levels, extend, mask_below),
@@ -192,6 +201,7 @@ pub enum WrfProduct {
     MeanWind06,
     Reflectivity,
     Reflectivity1km,
+    ReflectivityUh,
     CloudTopTemp,
     SlpWind10m,
     SurfaceWind10m,
@@ -280,6 +290,12 @@ impl WrfProduct {
             | "1km_reflectivity"
             | "1km_agl_reflectivity"
             | "reflectivity_1km_agl" => Some(Self::Reflectivity1km),
+            "reflectivity_uh"
+            | "uh_reflectivity"
+            | "refl_uh"
+            | "dbz_uh"
+            | "reflectivity_updraft_helicity"
+            | "reflectivity_uh_combo" => Some(Self::ReflectivityUh),
             "ctt" | "cloud_top_temperature" => Some(Self::CloudTopTemp),
             "slp_wind10m" | "slp_wind" | "mslp_wind10m" => Some(Self::SlpWind10m),
             "surface_wind" | "surface_wind10m" | "wspd10" | "wind10m" => Some(Self::SurfaceWind10m),
@@ -383,6 +399,7 @@ impl WrfProduct {
             Self::MeanWind06 => "mean_wind06",
             Self::Reflectivity => "reflectivity",
             Self::Reflectivity1km => "reflectivity_1km",
+            Self::ReflectivityUh => "reflectivity_uh",
             Self::CloudTopTemp => "cloud_top_temperature",
             Self::SlpWind10m => "slp_wind10m",
             Self::SurfaceWind10m => "surface_wind10m",
@@ -485,6 +502,7 @@ impl WrfProduct {
             | Self::Ship
             | Self::Bri
             | Self::UpdraftHelicity
+            | Self::ReflectivityUh
             | Self::Lcl
             | Self::Lfc
             | Self::El
@@ -554,13 +572,23 @@ impl WrfProduct {
             Self::Mlcin => cin_recipe("mlcin", "MLCIN"),
             Self::Mucape => severe_recipe("mucape", "J/kg", PaletteId::Cape, "MUCAPE"),
             Self::Mucin => cin_recipe("mucin", "MUCIN"),
-            Self::Srh01 => severe_recipe("srh1", "m2/s2", PaletteId::Srh, "0-1 km SRH"),
-            Self::Srh03 => severe_recipe("srh3", "m2/s2", PaletteId::Srh, "0-3 km SRH"),
+            Self::Srh01 => severe_recipe(
+                "srh1",
+                "m2/s2",
+                PaletteId::Srh,
+                "0-1km Storm Relative Helicity (m²/s²)",
+            ),
+            Self::Srh03 => severe_recipe(
+                "srh3",
+                "m2/s2",
+                PaletteId::Srh,
+                "0-3km Storm Relative Helicity (m²/s²)",
+            ),
             Self::EffectiveSrh => severe_recipe(
                 "effective_srh",
                 "m2/s2",
                 PaletteId::Srh,
-                "Effective-Layer SRH",
+                "Effective-Layer SRH (m²/s²)",
             ),
             Self::Shear01 => wind_layer_recipe("bulk_shear", 0.0, 1000.0, "0-1 km Bulk Shear"),
             Self::StpEffective => ProductRecipe {
@@ -669,6 +697,16 @@ impl WrfProduct {
                 title_template: "1km AGL Reflectivity",
                 opts: ComputeOptsPatch::default(),
             },
+            Self::ReflectivityUh => ProductRecipe {
+                fill_var: "dbz_1000m_agl",
+                fill_units: "dBZ",
+                palette: PaletteId::Reflectivity,
+                levels: PaletteId::Reflectivity.default_levels(),
+                contour_overlays: Vec::new(),
+                barb_overlay: None,
+                title_template: "1km AGL Reflectivity (dBZ), 1h Max Updraft Helicity > 50 (m²/s²)",
+                opts: ComputeOptsPatch::default(),
+            },
             Self::CloudTopTemp => ProductRecipe {
                 fill_var: "ctt",
                 fill_units: "degC",
@@ -680,14 +718,14 @@ impl WrfProduct {
                 opts: ComputeOptsPatch::default(),
             },
             Self::SlpWind10m => ProductRecipe {
-                fill_var: "slp",
-                fill_units: "hPa",
-                palette: PaletteId::Grayscale,
-                levels: (960..=1040).step_by(4).map(|value| value as f32).collect(),
+                fill_var: "wspd10",
+                fill_units: "knots",
+                palette: PaletteId::Wind,
+                levels: wind_10m_levels(),
                 contour_overlays: vec![ContourRecipe {
                     var: "slp",
                     units: "hPa",
-                    levels: (960..=1040).step_by(4).map(|value| value as f32).collect(),
+                    levels: slp_contour_levels(),
                     color: Color::BLACK,
                     width_px: 1,
                     opts: ComputeOptsPatch::default(),
@@ -696,28 +734,35 @@ impl WrfProduct {
                     u_var: "U10",
                     v_var: "V10",
                     units: "m/s",
-                    stride_x: 8,
-                    stride_y: 8,
+                    stride_x: 16,
+                    stride_y: 16,
                     color: Color::BLACK,
                 }),
-                title_template: "SLP and 10 m Wind",
+                title_template: "Surface MSLP (mb), 10m AGL Wind (kt)",
                 opts: ComputeOptsPatch::default(),
             },
             Self::SurfaceWind10m => ProductRecipe {
                 fill_var: "wspd10",
                 fill_units: "knots",
                 palette: PaletteId::Wind,
-                levels: PaletteId::Wind.default_levels(),
-                contour_overlays: Vec::new(),
+                levels: wind_10m_levels(),
+                contour_overlays: vec![ContourRecipe {
+                    var: "slp",
+                    units: "hPa",
+                    levels: slp_contour_levels(),
+                    color: Color::BLACK,
+                    width_px: 1,
+                    opts: ComputeOptsPatch::default(),
+                }],
                 barb_overlay: Some(WindBarbRecipe {
                     u_var: "U10",
                     v_var: "V10",
                     units: "knots",
-                    stride_x: 8,
-                    stride_y: 8,
+                    stride_x: 16,
+                    stride_y: 16,
                     color: Color::BLACK,
                 }),
-                title_template: "10 m Wind",
+                title_template: "Surface MSLP (mb), 10m AGL Wind (kt)",
                 opts: ComputeOptsPatch::default(),
             },
             Self::U10Component => ProductRecipe {
@@ -743,11 +788,25 @@ impl WrfProduct {
             Self::T2 => ProductRecipe {
                 fill_var: "T2",
                 fill_units: "degF",
-                palette: PaletteId::Temperature,
-                levels: range_i32(20, 120, 5),
-                contour_overlays: Vec::new(),
-                barb_overlay: None,
-                title_template: "2 m Temperature",
+                palette: PaletteId::SurfaceTemperature,
+                levels: PaletteId::SurfaceTemperature.default_levels(),
+                contour_overlays: vec![ContourRecipe {
+                    var: "slp",
+                    units: "hPa",
+                    levels: slp_contour_levels(),
+                    color: Color::BLACK,
+                    width_px: 1,
+                    opts: ComputeOptsPatch::default(),
+                }],
+                barb_overlay: Some(WindBarbRecipe {
+                    u_var: "U10",
+                    v_var: "V10",
+                    units: "knots",
+                    stride_x: 16,
+                    stride_y: 16,
+                    color: Color::BLACK,
+                }),
+                title_template: "Surface Temperature (°F), MSLP (mb), 10m AGL Wind (kt)",
                 opts: ComputeOptsPatch::default(),
             },
             Self::Td2 => ProductRecipe {
@@ -767,11 +826,11 @@ impl WrfProduct {
                     u_var: "U10",
                     v_var: "V10",
                     units: "knots",
-                    stride_x: 10,
-                    stride_y: 10,
+                    stride_x: 16,
+                    stride_y: 16,
                     color: Color::BLACK,
                 }),
-                title_template: "Surface Dewpoint (degF), MSLP (mb), 10m AGL Wind",
+                title_template: "Surface Dewpoint (°F), MSLP (mb), 10m AGL Wind (kt)",
                 opts: ComputeOptsPatch::default(),
             },
             Self::Rh2 => ProductRecipe {
@@ -805,13 +864,13 @@ impl WrfProduct {
                 opts: ComputeOptsPatch::default(),
             },
             Self::UpdraftHelicity => ProductRecipe {
-                fill_var: "uhel",
+                fill_var: NATIVE_OR_COMPUTED_UH_VAR,
                 fill_units: "m2/s2",
                 palette: PaletteId::Uh,
                 levels: vec![25.0, 50.0, 75.0, 100.0, 150.0, 200.0, 250.0, 300.0],
                 contour_overlays: Vec::new(),
                 barb_overlay: None,
-                title_template: "Updraft Helicity",
+                title_template: "Updraft Helicity (m²/s²)",
                 opts: ComputeOptsPatch::default(),
             },
             Self::Pblh => height_recipe("PBLH", "m", range_i32(0, 5000, 250), "PBL Height"),
@@ -1002,6 +1061,7 @@ pub const DEFAULT_PRODUCT_SUITE: &[WrfProduct] = &[
     WrfProduct::Bri,
     WrfProduct::Reflectivity,
     WrfProduct::Reflectivity1km,
+    WrfProduct::ReflectivityUh,
     WrfProduct::UpdraftHelicity,
     WrfProduct::SlpWind10m,
     WrfProduct::SurfaceWind10m,
@@ -1148,6 +1208,18 @@ pub fn build_product_request(
     };
     apply_projected_map(file, t, &mut request)?;
 
+    if product == WrfProduct::ReflectivityUh {
+        let uh = build_recipe_field(
+            file,
+            "uhel_0_3km_1h_max",
+            "m2/s2",
+            &ComputeOptsPatch::default(),
+            t,
+        )?;
+        let uh_track = build_uh_track_overlay_field(&uh)?;
+        apply_reflectivity_uh_rgba(&recipe, &uh_track, &mut request)?;
+    }
+
     for contour in recipe.contour_overlays {
         let field = build_recipe_field(file, contour.var, contour.units, &contour.opts, t)?;
         request = request.with_contour_field(
@@ -1205,6 +1277,183 @@ fn model_data_domain_frame() -> DomainFrame {
     }
 }
 
+fn apply_reflectivity_uh_rgba(
+    recipe: &ProductRecipe,
+    uh_track: &Field2D,
+    request: &mut MapRenderRequest,
+) -> ProductResult<()> {
+    let scale = match recipe
+        .palette
+        .scale(recipe.levels.clone(), ExtendMode::Both)
+    {
+        ColorScale::Discrete(scale) => scale,
+        _ => unreachable!("product palette scales are discrete"),
+    };
+    let pixels = request
+        .field
+        .values
+        .iter()
+        .zip(uh_track.values.iter())
+        .map(|(&refl, &uh)| reflectivity_uh_pixel(&scale, refl, uh))
+        .collect();
+    request.set_rgba_grid(RgbaGridField::new(request.field.grid.clone(), pixels)?);
+    Ok(())
+}
+
+fn build_uh_track_overlay_field(uh: &Field2D) -> ProductResult<Field2D> {
+    let nx = uh.grid.shape.nx;
+    let ny = uh.grid.shape.ny;
+    let values = smoothed_uh_track_values(&uh.values, nx, ny);
+    Ok(Field2D::new(
+        ProductKey::named("uhel_0_3km_1h_max_track"),
+        uh.units.clone(),
+        uh.grid.clone(),
+        values,
+    )?)
+}
+
+fn reflectivity_uh_pixel(scale: &DiscreteColorScale, refl: f32, uh: f32) -> Color {
+    let track = uh_track_color(uh);
+    let refl = reflectivity_pixel(scale, refl);
+    if track.a == 0 {
+        refl
+    } else if refl.a == 0 {
+        track
+    } else {
+        blend_over(track, refl)
+    }
+}
+
+fn reflectivity_pixel(scale: &DiscreteColorScale, refl: f32) -> Color {
+    if !refl.is_finite() || refl < 5.0 {
+        Color::TRANSPARENT
+    } else {
+        sample_product_scale(scale, refl)
+    }
+}
+
+fn sample_product_scale(scale: &DiscreteColorScale, value: f32) -> Color {
+    let value = value as f64;
+    if !value.is_finite() {
+        return Color::TRANSPARENT;
+    }
+    if let Some(mask) = scale.mask_below {
+        if value < mask {
+            return Color::TRANSPARENT;
+        }
+    }
+    if scale.levels.len() < 2 || scale.colors.is_empty() {
+        return Color::TRANSPARENT;
+    }
+    let lo = scale.levels[0];
+    let hi = *scale.levels.last().unwrap_or(&lo);
+    if value < lo {
+        return if matches!(scale.extend, ExtendMode::Min | ExtendMode::Both) {
+            scale.colors[0]
+        } else {
+            Color::TRANSPARENT
+        };
+    }
+    if value >= hi {
+        return if matches!(scale.extend, ExtendMode::Max | ExtendMode::Both) {
+            *scale.colors.last().unwrap_or(&Color::TRANSPARENT)
+        } else {
+            Color::TRANSPARENT
+        };
+    }
+    let t = ((value - lo) / (hi - lo)).clamp(0.0, 1.0);
+    let idx = (t * scale.colors.len() as f64).floor() as usize;
+    scale.colors[idx.min(scale.colors.len() - 1)]
+}
+
+fn uh_track_color(uh: f32) -> Color {
+    if !uh.is_finite() || uh < UH_TRACK_THRESHOLD {
+        return Color::TRANSPARENT;
+    }
+    let ramp = ((uh - UH_TRACK_THRESHOLD) / 250.0).clamp(0.0, 1.0);
+    let shade = (175.0 - ramp * 90.0).round().clamp(85.0, 175.0) as u8;
+    let alpha = (165.0 + ramp * 70.0).round().clamp(165.0, 235.0) as u8;
+    Color::rgba(shade, shade, shade, alpha)
+}
+
+fn blend_over(base: Color, overlay: Color) -> Color {
+    let oa = overlay.a as f32 / 255.0;
+    let ba = base.a as f32 / 255.0;
+    let out_a = oa + ba * (1.0 - oa);
+    if out_a <= f32::EPSILON {
+        return Color::TRANSPARENT;
+    }
+    let blend = |o: u8, b: u8| {
+        (((o as f32 * oa) + (b as f32 * ba * (1.0 - oa))) / out_a)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    Color::rgba(
+        blend(overlay.r, base.r),
+        blend(overlay.g, base.g),
+        blend(overlay.b, base.b),
+        (out_a * 255.0).round().clamp(0.0, 255.0) as u8,
+    )
+}
+
+fn smoothed_uh_track_values(values: &[f32], nx: usize, ny: usize) -> Vec<f32> {
+    if values.len() != nx * ny || nx == 0 || ny == 0 {
+        return values.to_vec();
+    }
+    let expanded = max_filter_2d(values, nx, ny, 4);
+    box_blur_2d(&expanded, nx, ny, 3)
+}
+
+fn max_filter_2d(values: &[f32], nx: usize, ny: usize, radius: usize) -> Vec<f32> {
+    let mut out = vec![f32::NAN; values.len()];
+    for j in 0..ny {
+        let j0 = j.saturating_sub(radius);
+        let j1 = (j + radius).min(ny - 1);
+        for i in 0..nx {
+            let i0 = i.saturating_sub(radius);
+            let i1 = (i + radius).min(nx - 1);
+            let mut max_value = f32::NAN;
+            for jj in j0..=j1 {
+                for ii in i0..=i1 {
+                    let value = values[jj * nx + ii];
+                    if value.is_finite() && (!max_value.is_finite() || value > max_value) {
+                        max_value = value;
+                    }
+                }
+            }
+            out[j * nx + i] = max_value;
+        }
+    }
+    out
+}
+
+fn box_blur_2d(values: &[f32], nx: usize, ny: usize, radius: usize) -> Vec<f32> {
+    let mut out = vec![f32::NAN; values.len()];
+    for j in 0..ny {
+        let j0 = j.saturating_sub(radius);
+        let j1 = (j + radius).min(ny - 1);
+        for i in 0..nx {
+            let i0 = i.saturating_sub(radius);
+            let i1 = (i + radius).min(nx - 1);
+            let mut sum = 0.0f32;
+            let mut count = 0usize;
+            for jj in j0..=j1 {
+                for ii in i0..=i1 {
+                    let value = values[jj * nx + ii];
+                    if value.is_finite() {
+                        sum += value;
+                        count += 1;
+                    }
+                }
+            }
+            if count > 0 {
+                out[j * nx + i] = sum / count as f32;
+            }
+        }
+    }
+    out
+}
+
 fn product_render_size() -> (u32, u32) {
     let width = read_dimension_env("WRF_RUST_PLOT_WIDTH").unwrap_or(DEFAULT_PRODUCT_WIDTH);
     let height = read_dimension_env("WRF_RUST_PLOT_HEIGHT").unwrap_or(DEFAULT_PRODUCT_HEIGHT);
@@ -1230,6 +1479,7 @@ fn product_tick_step(product: WrfProduct) -> Option<f64> {
         | WrfProduct::Mucape => Some(500.0),
         WrfProduct::Ncape => Some(250.0),
         WrfProduct::Srh01 | WrfProduct::Srh03 | WrfProduct::EffectiveSrh => Some(100.0),
+        WrfProduct::SlpWind10m | WrfProduct::SurfaceWind10m => Some(5.0),
         WrfProduct::Shear01
         | WrfProduct::Shear06
         | WrfProduct::Ebwd
@@ -1252,8 +1502,10 @@ fn product_tick_step(product: WrfProduct) -> Option<f64> {
         | WrfProduct::Temp700Wind
         | WrfProduct::Temp850Wind
         | WrfProduct::Reflectivity
-        | WrfProduct::Reflectivity1km => Some(5.0),
+        | WrfProduct::Reflectivity1km
+        | WrfProduct::ReflectivityUh => Some(5.0),
         WrfProduct::Td2 => Some(10.0),
+        WrfProduct::T2 => Some(10.0),
         WrfProduct::LapseRate700500 | WrfProduct::LapseRate03 => Some(1.0),
         _ => None,
     }
@@ -1271,8 +1523,19 @@ fn product_tick_values(product: WrfProduct) -> Option<Vec<f64>> {
             0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0,
             24.0,
         ]),
+        WrfProduct::Srh01 | WrfProduct::Srh03 | WrfProduct::EffectiveSrh => Some(vec![
+            0.0, 50.0, 100.0, 150.0, 200.0, 250.0, 300.0, 350.0, 400.0, 450.0, 500.0, 550.0, 600.0,
+            700.0, 800.0, 900.0, 1000.0, 1250.0, 1500.0,
+        ]),
         WrfProduct::CloudTopTemp => Some(vec![
             -90.0, -80.0, -70.0, -60.0, -50.0, -40.0, -30.0, -20.0, 0.0, 20.0, 40.0,
+        ]),
+        WrfProduct::SlpWind10m | WrfProduct::SurfaceWind10m => Some(vec![
+            10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0,
+        ]),
+        WrfProduct::T2 => Some(vec![
+            -60.0, -50.0, -40.0, -30.0, -20.0, -10.0, 0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0,
+            70.0, 80.0, 90.0, 100.0, 110.0, 120.0,
         ]),
         WrfProduct::U10Component | WrfProduct::V10Component => Some(vec![
             -75.0, -50.0, -40.0, -30.0, -20.0, -10.0, 0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 75.0,
@@ -1417,6 +1680,12 @@ fn build_recipe_field(
 ) -> ProductResult<Field2D> {
     if var == "precip_accum" {
         return build_precip_accum_field(file, timeidx);
+    }
+    if var == "uhel_0_3km_1h_max" {
+        return build_uhel_0_3km_1h_max_field(file, timeidx);
+    }
+    if var == NATIVE_OR_COMPUTED_UH_VAR {
+        return build_native_or_computed_uhel_field(file, timeidx);
     }
     if let Some((base_var, height_m)) = parse_height_level_var(var) {
         return build_height_level_field(file, var, base_var, height_m, units, patch, timeidx);
@@ -1603,6 +1872,207 @@ fn build_precip_accum_field(file: &WrfFile, timeidx: usize) -> ProductResult<Fie
         },
         timeidx,
     )
+}
+
+fn build_uhel_0_3km_1h_max_field(file: &WrfFile, timeidx: usize) -> ProductResult<Field2D> {
+    let mut max_values: Option<Vec<f64>> = None;
+
+    for idx in one_hour_window_indices(file, timeidx) {
+        accumulate_uhel_max(&mut max_values, file, idx)?;
+    }
+
+    if let Some(current) = valid_time_for_index(file, timeidx) {
+        for (path, indices) in sibling_one_hour_window_paths(file, current) {
+            let Ok(sibling) = WrfFile::open(&path) else {
+                continue;
+            };
+            if sibling.nx != file.nx || sibling.ny != file.ny || sibling.nz != file.nz {
+                continue;
+            }
+            for idx in indices {
+                accumulate_uhel_max(&mut max_values, &sibling, idx)?;
+            }
+        }
+    }
+
+    output_to_field(
+        file,
+        "uhel_0_3km_1h_max",
+        VarOutput {
+            data: max_values.unwrap_or_else(|| vec![f64::NAN; file.ny * file.nx]),
+            shape: vec![file.ny, file.nx],
+            units: "m2/s2".to_string(),
+            description: "One-hour max native or computed updraft helicity".to_string(),
+        },
+        timeidx,
+    )
+}
+
+fn build_native_or_computed_uhel_field(file: &WrfFile, timeidx: usize) -> ProductResult<Field2D> {
+    let output = native_or_computed_uhel_output(file, timeidx)?;
+    output_to_field(file, "updraft_helicity", output, timeidx)
+}
+
+fn accumulate_uhel_max(
+    max_values: &mut Option<Vec<f64>>,
+    file: &WrfFile,
+    timeidx: usize,
+) -> ProductResult<()> {
+    let output = native_or_computed_uhel_output(file, timeidx)?;
+    if output.shape != [file.ny, file.nx] {
+        return Err(ProductError::NotTwoDimensional {
+            product: "uhel_0_3km_1h_max".to_string(),
+            shape: output.shape,
+        });
+    }
+
+    match max_values {
+        Some(max_values) => {
+            for (max_value, value) in max_values.iter_mut().zip(output.data) {
+                if value.is_finite() && (!max_value.is_finite() || value > *max_value) {
+                    *max_value = value;
+                }
+            }
+        }
+        None => *max_values = Some(output.data),
+    }
+    Ok(())
+}
+
+fn native_or_computed_uhel_output(file: &WrfFile, timeidx: usize) -> ProductResult<VarOutput> {
+    if file.has_var(NATIVE_UPDRAFT_HELICITY_MAX_VAR) {
+        return getvar(
+            file,
+            NATIVE_UPDRAFT_HELICITY_MAX_VAR,
+            Some(timeidx),
+            &ComputeOpts {
+                units: Some("m2/s2".to_string()),
+                ..Default::default()
+            },
+        )
+        .map(|mut output| {
+            output.description = "Native WRF maximum updraft helicity (UP_HELI_MAX)".to_string();
+            output
+        })
+        .map_err(Into::into);
+    }
+
+    getvar(
+        file,
+        "uhel",
+        Some(timeidx),
+        &ComputeOpts {
+            units: Some("m2/s2".to_string()),
+            bottom_m: Some(0.0),
+            top_m: Some(3000.0),
+            ..Default::default()
+        },
+    )
+    .map(|mut output| {
+        output.description =
+            "Computed 0-3 km updraft helicity fallback; native UP_HELI_MAX not present".to_string();
+        output
+    })
+    .map_err(Into::into)
+}
+
+fn sibling_one_hour_window_paths(
+    file: &WrfFile,
+    current: WrfTimestamp,
+) -> Vec<(PathBuf, Vec<usize>)> {
+    let Some(parent) = file.path.parent() else {
+        return Vec::new();
+    };
+    let current_minutes = timestamp_minutes(current);
+    let current_path = normalize_path_for_compare(&file.path);
+    let current_prefix = wrfout_filename_prefix(&file.path);
+    let Ok(entries) = fs::read_dir(parent) else {
+        return Vec::new();
+    };
+
+    let mut paths = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !entry
+            .file_type()
+            .map(|kind| kind.is_file())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        if normalize_path_for_compare(&path) == current_path {
+            continue;
+        }
+        if wrfout_filename_prefix(&path) != current_prefix {
+            continue;
+        }
+        let Ok(candidate) = WrfFile::open(&path) else {
+            continue;
+        };
+        let indices: Vec<usize> = candidate
+            .times()
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, value)| {
+                let time = parse_wrf_timestamp(value.trim())?;
+                let minutes = timestamp_minutes(time);
+                (minutes <= current_minutes && minutes >= current_minutes - 60).then_some(idx)
+            })
+            .collect();
+        if !indices.is_empty() {
+            paths.push((path, indices));
+        }
+    }
+    paths.sort_by(|(left, _), (right, _)| left.cmp(right));
+    paths
+}
+
+fn one_hour_window_indices(file: &WrfFile, timeidx: usize) -> Vec<usize> {
+    let end = timeidx.min(file.nt.saturating_sub(1));
+    let fallback = || vec![end];
+    let Some(current) = valid_time_for_index(file, end) else {
+        return fallback();
+    };
+    let Ok(times) = file.times() else {
+        return fallback();
+    };
+    let current_minutes = timestamp_minutes(current);
+    let mut indices = Vec::new();
+    for idx in 0..=end {
+        let Some(time) = times.get(idx).and_then(|value| parse_wrf_timestamp(value)) else {
+            continue;
+        };
+        let minutes = timestamp_minutes(time);
+        if minutes <= current_minutes && minutes >= current_minutes - 60 {
+            indices.push(idx);
+        }
+    }
+    if indices.is_empty() {
+        fallback()
+    } else {
+        indices
+    }
+}
+
+fn valid_time_for_index(file: &WrfFile, timeidx: usize) -> Option<WrfTimestamp> {
+    file.times()
+        .ok()?
+        .get(timeidx)
+        .and_then(|value| parse_wrf_timestamp(value.trim()))
+}
+
+fn normalize_path_for_compare(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn wrfout_filename_prefix(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    wrf_timestamp_offset(name).map(|offset| name[..offset].to_string())
+}
+
+fn wrf_timestamp_offset(name: &str) -> Option<usize> {
+    (0..name.len()).find(|&offset| name.get(offset..).and_then(parse_wrf_timestamp).is_some())
 }
 
 fn output_to_field(
@@ -2043,6 +2513,14 @@ fn wind_component_levels() -> Vec<f32> {
     range_i32(-75, 75, 5)
 }
 
+fn wind_10m_levels() -> Vec<f32> {
+    range_i32(10, 70, 1)
+}
+
+fn slp_contour_levels() -> Vec<f32> {
+    (960..=1040).step_by(2).map(|value| value as f32).collect()
+}
+
 fn scp_levels() -> Vec<f32> {
     range_i32(0, 70, 1)
 }
@@ -2118,6 +2596,10 @@ mod tests {
             WrfProduct::SlpWind10m
         );
         assert_eq!(
+            parse_product("reflectivity-uh-combo").unwrap(),
+            WrfProduct::ReflectivityUh
+        );
+        assert_eq!(
             parse_product("u10-component").unwrap(),
             WrfProduct::U10Component
         );
@@ -2130,6 +2612,10 @@ mod tests {
         assert_eq!(recipe.fill_var, "bulk_shear");
         assert_eq!(recipe.opts.bottom_m, Some(0.0));
         assert_eq!(recipe.opts.top_m, Some(6000.0));
+
+        let uh = WrfProduct::UpdraftHelicity.recipe();
+        assert_eq!(uh.fill_var, NATIVE_OR_COMPUTED_UH_VAR);
+        assert_eq!(uh.fill_units, "m2/s2");
     }
 
     #[test]
@@ -2141,6 +2627,18 @@ mod tests {
         assert_eq!(
             format_wrf_time("1974-04-03_22:06:00").as_deref(),
             Some("Valid 1974-04-03 22:06Z")
+        );
+    }
+
+    #[test]
+    fn wrfout_filename_prefix_supports_colon_and_underscore_times() {
+        assert_eq!(
+            wrfout_filename_prefix(Path::new("wrfout_d02_1974-04-03_22:00:00")).as_deref(),
+            Some("wrfout_d02_")
+        );
+        assert_eq!(
+            wrfout_filename_prefix(Path::new("wrfout_d02_1974-04-03_22_00_00")).as_deref(),
+            Some("wrfout_d02_")
         );
     }
 
@@ -2208,6 +2706,77 @@ mod tests {
         let shifted = surface_dewpoint_colors();
         assert_eq!(shifted.len(), base.len());
         assert_eq!(shifted[0], base[1]);
+    }
+
+    #[test]
+    fn surface_temperature_uses_full_fahrenheit_table_and_overlays() {
+        let t2 = WrfProduct::T2.recipe();
+        assert_eq!(t2.fill_var, "T2");
+        assert_eq!(t2.fill_units, "degF");
+        assert_eq!(t2.palette, PaletteId::SurfaceTemperature);
+        assert_eq!(t2.levels.first().copied(), Some(-60.0));
+        assert_eq!(t2.levels.last().copied(), Some(120.0));
+        assert_eq!(t2.contour_overlays[0].var, "slp");
+        assert!(t2.barb_overlay.is_some());
+        assert!(t2.title_template.contains("°F"));
+    }
+
+    #[test]
+    fn surface_wind_products_use_10m_operational_scale() {
+        for product in [WrfProduct::SurfaceWind10m, WrfProduct::SlpWind10m] {
+            let recipe = product.recipe();
+            assert_eq!(recipe.fill_var, "wspd10");
+            assert_eq!(recipe.fill_units, "knots");
+            assert_eq!(recipe.levels.first().copied(), Some(10.0));
+            assert_eq!(recipe.levels.last().copied(), Some(70.0));
+            assert_eq!(recipe.contour_overlays[0].var, "slp");
+            assert!(recipe.barb_overlay.is_some());
+        }
+    }
+
+    #[test]
+    fn srh_products_use_1500_scale() {
+        for product in [
+            WrfProduct::Srh01,
+            WrfProduct::Srh03,
+            WrfProduct::EffectiveSrh,
+        ] {
+            let recipe = product.recipe();
+            assert_eq!(recipe.palette, PaletteId::Srh);
+            assert_eq!(recipe.fill_units, "m2/s2");
+            assert_eq!(recipe.levels.first().copied(), Some(0.0));
+            assert_eq!(recipe.levels.last().copied(), Some(1500.0));
+        }
+    }
+
+    #[test]
+    fn reflectivity_uh_combo_uses_1km_reflectivity_and_windowed_uh() {
+        let recipe = WrfProduct::ReflectivityUh.recipe();
+        assert_eq!(recipe.fill_var, "dbz_1000m_agl");
+        assert_eq!(recipe.fill_units, "dBZ");
+        assert_eq!(recipe.palette, PaletteId::Reflectivity);
+        assert!(recipe.title_template.contains("1h Max Updraft Helicity"));
+    }
+
+    #[test]
+    fn reflectivity_uh_combo_draws_uh_as_track_overlay() {
+        let recipe = WrfProduct::ReflectivityUh.recipe();
+        let ColorScale::Discrete(scale) = recipe.palette.scale(recipe.levels, ExtendMode::Both)
+        else {
+            panic!("expected discrete scale")
+        };
+
+        let clear_air = reflectivity_uh_pixel(&scale, 0.0, 10.0);
+        assert_eq!(clear_air, Color::TRANSPARENT);
+
+        let clear_air_track = reflectivity_uh_pixel(&scale, 0.0, 150.0);
+        assert_ne!(clear_air_track, Color::TRANSPARENT);
+        assert_eq!(clear_air_track.r, clear_air_track.g);
+        assert_eq!(clear_air_track.g, clear_air_track.b);
+
+        let storm_reflectivity = reflectivity_uh_pixel(&scale, 45.0, 150.0);
+        let storm_reflectivity_base = sample_product_scale(&scale, 45.0);
+        assert_eq!(storm_reflectivity, storm_reflectivity_base);
     }
 
     #[test]

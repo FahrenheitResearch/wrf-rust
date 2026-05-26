@@ -77,8 +77,9 @@ pub use rustwx_core::{
     LatLonGrid as CoreLatLonGrid, ProductKey as CoreProductKey,
 };
 pub use weather::{
-    palette_scale, stp_scale_levels, DerivedProductStyle, DerivedScalePreset, WeatherPalette,
-    WeatherPreset, WeatherProduct, ECAPE_SEVERE_PANEL_PRODUCTS, SEVERE_CLASSIC_PANEL_PRODUCTS,
+    palette_scale, srh_scale_levels, stp_scale_levels, DerivedProductStyle, DerivedScalePreset,
+    WeatherPalette, WeatherPreset, WeatherProduct, ECAPE_SEVERE_PANEL_PRODUCTS,
+    SEVERE_CLASSIC_PANEL_PRODUCTS,
 };
 
 use crate::color::Rgba;
