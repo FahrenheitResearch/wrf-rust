@@ -1320,7 +1320,7 @@ fn reflectivity_uh_pixel(scale: &DiscreteColorScale, refl: f32, uh: f32) -> Colo
     } else if refl.a == 0 {
         track
     } else {
-        blend_over(track, refl)
+        blend_over(refl, track)
     }
 }
 
@@ -1370,9 +1370,9 @@ fn uh_track_color(uh: f32) -> Color {
     if !uh.is_finite() || uh < UH_TRACK_THRESHOLD {
         return Color::TRANSPARENT;
     }
-    let ramp = ((uh - UH_TRACK_THRESHOLD) / 250.0).clamp(0.0, 1.0);
-    let shade = (175.0 - ramp * 90.0).round().clamp(85.0, 175.0) as u8;
-    let alpha = (165.0 + ramp * 70.0).round().clamp(165.0, 235.0) as u8;
+    let ramp = ((uh - UH_TRACK_THRESHOLD) / 150.0).clamp(0.0, 1.0);
+    let shade = (48.0 - ramp * 48.0).round().clamp(0.0, 48.0) as u8;
+    let alpha = (228.0 + ramp * 27.0).round().clamp(228.0, 255.0) as u8;
     Color::rgba(shade, shade, shade, alpha)
 }
 
@@ -2773,10 +2773,15 @@ mod tests {
         assert_ne!(clear_air_track, Color::TRANSPARENT);
         assert_eq!(clear_air_track.r, clear_air_track.g);
         assert_eq!(clear_air_track.g, clear_air_track.b);
+        assert!(clear_air_track.r <= 16);
+        assert!(clear_air_track.a >= 240);
 
         let storm_reflectivity = reflectivity_uh_pixel(&scale, 45.0, 150.0);
         let storm_reflectivity_base = sample_product_scale(&scale, 45.0);
-        assert_eq!(storm_reflectivity, storm_reflectivity_base);
+        assert_ne!(storm_reflectivity, storm_reflectivity_base);
+        assert!(storm_reflectivity.r < storm_reflectivity_base.r);
+        assert!(storm_reflectivity.g < storm_reflectivity_base.g);
+        assert!(storm_reflectivity.b < storm_reflectivity_base.b);
     }
 
     #[test]
