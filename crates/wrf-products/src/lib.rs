@@ -1761,8 +1761,34 @@ fn build_recipe_field(
     if let Some((base_var, level_hpa)) = parse_pressure_level_var(var) {
         return build_pressure_level_field(file, var, base_var, level_hpa, units, patch, timeidx);
     }
-    let output = getvar(file, var, Some(timeidx), &patch.apply(units))?;
+    let mut output = getvar(file, var, Some(timeidx), &patch.apply(units))?;
+    if is_mean_wind_vector_var(var) {
+        output = collapse_vector_output_to_speed(output, file.ny, file.nx);
+    }
     output_to_field(file, var, output, timeidx)
+}
+
+fn is_mean_wind_vector_var(var: &str) -> bool {
+    matches!(var, "mean_wind" | "mean_wind_0_6km")
+}
+
+fn collapse_vector_output_to_speed(output: VarOutput, ny: usize, nx: usize) -> VarOutput {
+    let nxy = ny * nx;
+    if output.shape != [2, ny, nx] || output.data.len() != 2 * nxy {
+        return output;
+    }
+
+    let (u, v) = output.data.split_at(nxy);
+    let data = u.iter().zip(v.iter()).map(|(&u, &v)| u.hypot(v)).collect();
+
+    VarOutput {
+        data,
+        shape: vec![ny, nx],
+        units: output.units,
+        description: format!("{} speed magnitude", output.description)
+            .trim()
+            .to_string(),
+    }
 }
 
 fn build_pressure_level_field(
@@ -2852,6 +2878,23 @@ mod tests {
         let stp = product_input_contract(WrfProduct::StpEffective);
         assert!(stp.current_wrfout_required);
         assert!(stp.optional_history.is_none());
+    }
+
+    #[test]
+    fn mean_wind_vector_output_collapses_to_speed_for_products() {
+        let output = VarOutput {
+            data: vec![3.0, 4.0, 0.0, 5.0, 4.0, 3.0, 12.0, 12.0],
+            shape: vec![2, 2, 2],
+            units: "knots".to_string(),
+            description: "Mean wind".to_string(),
+        };
+
+        let speed = collapse_vector_output_to_speed(output, 2, 2);
+
+        assert_eq!(speed.shape, vec![2, 2]);
+        assert_eq!(speed.units, "knots");
+        assert_eq!(speed.data, vec![5.0, 5.0, 12.0, 13.0]);
+        assert!(speed.description.contains("speed magnitude"));
     }
 
     #[test]
