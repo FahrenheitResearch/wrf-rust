@@ -25,6 +25,7 @@ use wrf_render::{
 const DEFAULT_PRODUCT_WIDTH: u32 = 1600;
 const DEFAULT_PRODUCT_HEIGHT: u32 = 1200;
 const UH_TRACK_THRESHOLD: f32 = 50.0;
+const UH_TRACK_FILL_ALPHA: u8 = 38;
 const NATIVE_UPDRAFT_HELICITY_MAX_VAR: &str = "UP_HELI_MAX";
 const NATIVE_OR_COMPUTED_UH_VAR: &str = "native_or_computed_uhel";
 
@@ -1289,31 +1290,39 @@ fn apply_reflectivity_uh_rgba(
         ColorScale::Discrete(scale) => scale,
         _ => unreachable!("product palette scales are discrete"),
     };
+    let nx = uh_track.grid.shape.nx;
+    let ny = uh_track.grid.shape.ny;
     let pixels = request
         .field
         .values
         .iter()
         .zip(uh_track.values.iter())
-        .map(|(&refl, &uh)| reflectivity_uh_pixel(&scale, refl, uh))
+        .enumerate()
+        .map(|(idx, (&refl, &uh))| {
+            let is_edge = is_uh_track_edge(&uh_track.values, nx, ny, idx);
+            reflectivity_uh_pixel(&scale, refl, uh, is_edge)
+        })
         .collect();
     request.set_rgba_grid(RgbaGridField::new(request.field.grid.clone(), pixels)?);
     Ok(())
 }
 
 fn build_uh_track_overlay_field(uh: &Field2D) -> ProductResult<Field2D> {
-    let nx = uh.grid.shape.nx;
-    let ny = uh.grid.shape.ny;
-    let values = smoothed_uh_track_values(&uh.values, nx, ny);
     Ok(Field2D::new(
         ProductKey::named("uhel_0_3km_1h_max_track"),
         uh.units.clone(),
         uh.grid.clone(),
-        values,
+        uh.values.clone(),
     )?)
 }
 
-fn reflectivity_uh_pixel(scale: &DiscreteColorScale, refl: f32, uh: f32) -> Color {
-    let track = uh_track_color(uh);
+fn reflectivity_uh_pixel(
+    scale: &DiscreteColorScale,
+    refl: f32,
+    uh: f32,
+    is_track_edge: bool,
+) -> Color {
+    let track = uh_track_color(uh, is_track_edge);
     let refl = reflectivity_pixel(scale, refl);
     if track.a == 0 {
         refl
@@ -1366,14 +1375,15 @@ fn sample_product_scale(scale: &DiscreteColorScale, value: f32) -> Color {
     scale.colors[idx.min(scale.colors.len() - 1)]
 }
 
-fn uh_track_color(uh: f32) -> Color {
+fn uh_track_color(uh: f32, is_track_edge: bool) -> Color {
     if !uh.is_finite() || uh < UH_TRACK_THRESHOLD {
         return Color::TRANSPARENT;
     }
-    let ramp = ((uh - UH_TRACK_THRESHOLD) / 150.0).clamp(0.0, 1.0);
-    let shade = (48.0 - ramp * 48.0).round().clamp(0.0, 48.0) as u8;
-    let alpha = (228.0 + ramp * 27.0).round().clamp(228.0, 255.0) as u8;
-    Color::rgba(shade, shade, shade, alpha)
+    if is_track_edge {
+        Color::rgba(0, 0, 0, 255)
+    } else {
+        Color::rgba(0, 0, 0, UH_TRACK_FILL_ALPHA)
+    }
 }
 
 fn blend_over(base: Color, overlay: Color) -> Color {
@@ -1396,62 +1406,33 @@ fn blend_over(base: Color, overlay: Color) -> Color {
     )
 }
 
-fn smoothed_uh_track_values(values: &[f32], nx: usize, ny: usize) -> Vec<f32> {
-    if values.len() != nx * ny || nx == 0 || ny == 0 {
-        return values.to_vec();
+fn is_uh_track_edge(values: &[f32], nx: usize, ny: usize, idx: usize) -> bool {
+    if nx == 0 || ny == 0 || idx >= values.len() || !is_active_uh_track(values[idx]) {
+        return false;
     }
-    let expanded = max_filter_2d(values, nx, ny, 4);
-    box_blur_2d(&expanded, nx, ny, 3)
-}
-
-fn max_filter_2d(values: &[f32], nx: usize, ny: usize, radius: usize) -> Vec<f32> {
-    let mut out = vec![f32::NAN; values.len()];
-    for j in 0..ny {
-        let j0 = j.saturating_sub(radius);
-        let j1 = (j + radius).min(ny - 1);
-        for i in 0..nx {
-            let i0 = i.saturating_sub(radius);
-            let i1 = (i + radius).min(nx - 1);
-            let mut max_value = f32::NAN;
-            for jj in j0..=j1 {
-                for ii in i0..=i1 {
-                    let value = values[jj * nx + ii];
-                    if value.is_finite() && (!max_value.is_finite() || value > max_value) {
-                        max_value = value;
-                    }
-                }
+    let x = idx % nx;
+    let y = idx / nx;
+    for dy in -1isize..=1 {
+        for dx in -1isize..=1 {
+            if dx == 0 && dy == 0 {
+                continue;
             }
-            out[j * nx + i] = max_value;
-        }
-    }
-    out
-}
-
-fn box_blur_2d(values: &[f32], nx: usize, ny: usize, radius: usize) -> Vec<f32> {
-    let mut out = vec![f32::NAN; values.len()];
-    for j in 0..ny {
-        let j0 = j.saturating_sub(radius);
-        let j1 = (j + radius).min(ny - 1);
-        for i in 0..nx {
-            let i0 = i.saturating_sub(radius);
-            let i1 = (i + radius).min(nx - 1);
-            let mut sum = 0.0f32;
-            let mut count = 0usize;
-            for jj in j0..=j1 {
-                for ii in i0..=i1 {
-                    let value = values[jj * nx + ii];
-                    if value.is_finite() {
-                        sum += value;
-                        count += 1;
-                    }
-                }
+            let xx = x as isize + dx;
+            let yy = y as isize + dy;
+            if xx < 0 || yy < 0 || xx >= nx as isize || yy >= ny as isize {
+                return true;
             }
-            if count > 0 {
-                out[j * nx + i] = sum / count as f32;
+            let neighbor_idx = yy as usize * nx + xx as usize;
+            if neighbor_idx >= values.len() || !is_active_uh_track(values[neighbor_idx]) {
+                return true;
             }
         }
     }
-    out
+    false
+}
+
+fn is_active_uh_track(value: f32) -> bool {
+    value.is_finite() && value >= UH_TRACK_THRESHOLD
 }
 
 fn product_render_size() -> (u32, u32) {
@@ -2766,22 +2747,29 @@ mod tests {
             panic!("expected discrete scale")
         };
 
-        let clear_air = reflectivity_uh_pixel(&scale, 0.0, 10.0);
+        let clear_air = reflectivity_uh_pixel(&scale, 0.0, 10.0, false);
         assert_eq!(clear_air, Color::TRANSPARENT);
 
-        let clear_air_track = reflectivity_uh_pixel(&scale, 0.0, 150.0);
+        let clear_air_track = reflectivity_uh_pixel(&scale, 0.0, 150.0, true);
         assert_ne!(clear_air_track, Color::TRANSPARENT);
-        assert_eq!(clear_air_track.r, clear_air_track.g);
-        assert_eq!(clear_air_track.g, clear_air_track.b);
-        assert!(clear_air_track.r <= 16);
-        assert!(clear_air_track.a >= 240);
+        assert_eq!(clear_air_track, Color::rgba(0, 0, 0, 255));
 
-        let storm_reflectivity = reflectivity_uh_pixel(&scale, 45.0, 150.0);
+        let clear_air_track_fill = reflectivity_uh_pixel(&scale, 0.0, 150.0, false);
+        assert_ne!(clear_air_track_fill, Color::TRANSPARENT);
+        assert_eq!(clear_air_track_fill.r, 0);
+        assert_eq!(clear_air_track_fill.g, 0);
+        assert_eq!(clear_air_track_fill.b, 0);
+        assert_eq!(clear_air_track_fill.a, UH_TRACK_FILL_ALPHA);
+
+        let storm_reflectivity = reflectivity_uh_pixel(&scale, 45.0, 150.0, false);
         let storm_reflectivity_base = sample_product_scale(&scale, 45.0);
         assert_ne!(storm_reflectivity, storm_reflectivity_base);
         assert!(storm_reflectivity.r < storm_reflectivity_base.r);
         assert!(storm_reflectivity.g < storm_reflectivity_base.g);
         assert!(storm_reflectivity.b < storm_reflectivity_base.b);
+
+        let storm_track_edge = reflectivity_uh_pixel(&scale, 45.0, 150.0, true);
+        assert_eq!(storm_track_edge, Color::rgba(0, 0, 0, 255));
     }
 
     #[test]
