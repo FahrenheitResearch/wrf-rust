@@ -161,10 +161,42 @@ cargo run -p wrf-products --example render_suite -- \
   sbcape,mlcape,srh03,stp_effective,scp,reflectivity
 ```
 
+Render with an explicit history directory for products that can use neighboring
+WRF output files:
+
+```bash
+cargo run -p wrf-products --example render_suite -- \
+  --history-dir /path/to/wrfout/history \
+  /path/to/wrfout_d02_1974-04-03_22_00_00 \
+  output/severe \
+  0 \
+  reflectivity_uh
+```
+
+Ask the renderer what a product list needs before staging files:
+
+```bash
+cargo run -p wrf-products --example render_suite -- \
+  --print-required-inputs reflectivity_uh,stp_effective,precip_accum
+```
+
 Product rendering uses the `OPERATIONAL_FAST` presentation profile from the
 Rust rendering stack: projected data frame, operational-style colorbars,
 discrete weather scales, basemap linework, contours, and wind barbs where the
 product calls for them.
+
+### Rendering Input Contract
+
+Single-file rendering is the default and supported mode. `render_suite` and
+`render_product` open only the wrfout file passed on the command line unless an
+explicit input option is provided. They do not implicitly scan the current file's
+directory for sibling wrfout files.
+
+`reflectivity_uh` renders from the current wrfout by default. If the file
+contains multiple `Time` records, those records may be used to build the 1-hour
+UH max track within that single file. To include neighboring wrfout files in the
+track, pass `--history-dir DIR`; only same-domain wrfout files in that explicit
+directory with valid times in the previous 60 minutes are considered.
 
 ## Native Products
 
@@ -178,7 +210,8 @@ product calls for them.
   `shear06`, `ebwd`, `stp_effective`, `stp_fixed`, `scp`, `ehi`, `tehi`,
   `tts`, `vtp_mod`, `critical_angle`, `ship`, `bri`
 - Radar/cloud/precip: `reflectivity`, `reflectivity_1km`,
-  `cloud_top_temperature`, `precip_accum`, `updraft_helicity`
+  `reflectivity_uh`, `cloud_top_temperature`, `precip_accum`,
+  `updraft_helicity`
 - Surface fields: `slp_wind10m`, `surface_wind10m`, `u10_component`,
   `v10_component`, `t2`, `td2`, `rh2`, `pwat`, `pblh`, `terrain`
 - Thermodynamic levels: `lcl`, `lfc`, `el`, `lapse_rate_700_500`,

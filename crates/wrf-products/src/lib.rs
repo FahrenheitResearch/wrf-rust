@@ -41,6 +41,8 @@ pub enum ProductError {
     EmptyPressureLevel { product: String, level_hpa: f64 },
     #[error("projected map build failed: {0}")]
     Projection(String),
+    #[error("history directory `{path}` could not be read: {message}")]
+    HistoryDirRead { path: PathBuf, message: String },
     #[error(transparent)]
     Wrf(#[from] wrf_core::WrfError),
     #[error(transparent)]
@@ -96,7 +98,7 @@ impl PaletteId {
             Self::RelativeHumidity => range_step(0.0, 100.0, 10.0),
             Self::Wind => range_step(0.0, 120.0, 10.0),
             Self::WindComponent => wind_component_levels(),
-            Self::Precipitation => vec![0.01, 0.05, 0.10, 0.25, 0.50, 1.0, 2.0, 4.0],
+            Self::Precipitation => precip_accum_levels(),
             Self::Grayscale => range_step(0.0, 1.0, 0.1),
         }
     }
@@ -856,12 +858,12 @@ impl WrfProduct {
             },
             Self::PrecipAccum => ProductRecipe {
                 fill_var: "precip_accum",
-                fill_units: "mm",
+                fill_units: "in",
                 palette: PaletteId::Precipitation,
                 levels: PaletteId::Precipitation.default_levels(),
                 contour_overlays: Vec::new(),
                 barb_overlay: None,
-                title_template: "Accumulated Precipitation",
+                title_template: "Accumulated Precipitation (in)",
                 opts: ComputeOptsPatch::default(),
             },
             Self::UpdraftHelicity => ProductRecipe {
@@ -1143,6 +1145,51 @@ pub struct WindBarbRecipe {
     pub color: Color,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProductRenderOptions {
+    pub history_dir: Option<PathBuf>,
+}
+
+impl ProductRenderOptions {
+    pub fn single_file() -> Self {
+        Self::default()
+    }
+
+    pub fn with_history_dir<P: Into<PathBuf>>(mut self, path: P) -> Self {
+        self.history_dir = Some(path.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductInputContract {
+    pub product: WrfProduct,
+    pub current_wrfout_required: bool,
+    pub optional_history: Option<HistoryInputContract>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryInputContract {
+    pub cli_flag: &'static str,
+    pub lookback_minutes: u32,
+    pub description: &'static str,
+}
+
+pub fn product_input_contract(product: WrfProduct) -> ProductInputContract {
+    ProductInputContract {
+        product,
+        current_wrfout_required: true,
+        optional_history: match product {
+            WrfProduct::ReflectivityUh => Some(HistoryInputContract {
+                cli_flag: "--history-dir",
+                lookback_minutes: 60,
+                description: "same-domain wrfout files with valid times in the previous 60 minutes; used only for the 1h UH track",
+            }),
+            _ => None,
+        },
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ComputeOptsPatch {
     pub units: Option<&'static str>,
@@ -1180,9 +1227,25 @@ pub fn build_product_request(
     product: WrfProduct,
     timeidx: Option<usize>,
 ) -> ProductResult<MapRenderRequest> {
+    build_product_request_with_options(file, product, timeidx, &ProductRenderOptions::default())
+}
+
+pub fn build_product_request_with_options(
+    file: &WrfFile,
+    product: WrfProduct,
+    timeidx: Option<usize>,
+    options: &ProductRenderOptions,
+) -> ProductResult<MapRenderRequest> {
     let t = timeidx.unwrap_or(0);
     let recipe = product.recipe();
-    let fill = build_recipe_field(file, recipe.fill_var, recipe.fill_units, &recipe.opts, t)?;
+    let fill = build_recipe_field(
+        file,
+        recipe.fill_var,
+        recipe.fill_units,
+        &recipe.opts,
+        t,
+        options,
+    )?;
     let scale = recipe
         .palette
         .scale(recipe.levels.clone(), ExtendMode::Both);
@@ -1216,13 +1279,15 @@ pub fn build_product_request(
             "m2/s2",
             &ComputeOptsPatch::default(),
             t,
+            options,
         )?;
         let uh_track = build_uh_track_overlay_field(&uh)?;
         apply_reflectivity_uh_rgba(&recipe, &uh_track, &mut request)?;
     }
 
     for contour in recipe.contour_overlays {
-        let field = build_recipe_field(file, contour.var, contour.units, &contour.opts, t)?;
+        let field =
+            build_recipe_field(file, contour.var, contour.units, &contour.opts, t, options)?;
         request = request.with_contour_field(
             &field,
             contour
@@ -1246,6 +1311,7 @@ pub fn build_product_request(
             barbs.units,
             &ComputeOptsPatch::default(),
             t,
+            options,
         )?;
         let v = build_recipe_field(
             file,
@@ -1253,6 +1319,7 @@ pub fn build_product_request(
             barbs.units,
             &ComputeOptsPatch::default(),
             t,
+            options,
         )?;
         request = request.with_wind_barbs(
             &u,
@@ -1521,6 +1588,9 @@ fn product_tick_values(product: WrfProduct) -> Option<Vec<f64>> {
         WrfProduct::U10Component | WrfProduct::V10Component => Some(vec![
             -75.0, -50.0, -40.0, -30.0, -20.0, -10.0, 0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 75.0,
         ]),
+        WrfProduct::PrecipAccum => Some(vec![
+            0.01, 0.05, 0.10, 0.30, 0.50, 0.75, 1.00, 1.50, 2.00, 3.00, 4.00, 6.00, 9.00, 15.00,
+        ]),
         _ => None,
     }
 }
@@ -1646,7 +1716,23 @@ pub fn render_product_png<P: AsRef<Path>>(
     timeidx: Option<usize>,
     path: P,
 ) -> ProductResult<()> {
-    let request = build_product_request(file, product, timeidx)?;
+    render_product_png_with_options(
+        file,
+        product,
+        timeidx,
+        path,
+        &ProductRenderOptions::default(),
+    )
+}
+
+pub fn render_product_png_with_options<P: AsRef<Path>>(
+    file: &WrfFile,
+    product: WrfProduct,
+    timeidx: Option<usize>,
+    path: P,
+    options: &ProductRenderOptions,
+) -> ProductResult<()> {
+    let request = build_product_request_with_options(file, product, timeidx, options)?;
     let image = render_image_with_style(&request, OPERATIONAL_FAST)?;
     save_rgba_png_profile_with_options(&image, path, &PngWriteOptions::default())?;
     Ok(())
@@ -1658,12 +1744,13 @@ fn build_recipe_field(
     units: &'static str,
     patch: &ComputeOptsPatch,
     timeidx: usize,
+    options: &ProductRenderOptions,
 ) -> ProductResult<Field2D> {
     if var == "precip_accum" {
         return build_precip_accum_field(file, timeidx);
     }
     if var == "uhel_0_3km_1h_max" {
-        return build_uhel_0_3km_1h_max_field(file, timeidx);
+        return build_uhel_0_3km_1h_max_field(file, timeidx, options);
     }
     if var == NATIVE_OR_COMPUTED_UH_VAR {
         return build_native_or_computed_uhel_field(file, timeidx);
@@ -1840,7 +1927,7 @@ fn build_precip_accum_field(file: &WrfFile, timeidx: usize) -> ProductResult<Fie
         .data
         .into_iter()
         .zip(rainnc.data)
-        .map(|(convective, grid_scale)| convective + grid_scale)
+        .map(|(convective, grid_scale)| (convective + grid_scale) / 25.4)
         .collect();
     output_to_field(
         file,
@@ -1848,22 +1935,30 @@ fn build_precip_accum_field(file: &WrfFile, timeidx: usize) -> ProductResult<Fie
         VarOutput {
             data,
             shape: vec![file.ny, file.nx],
-            units: "mm".to_string(),
-            description: "Accumulated precipitation (RAINC + RAINNC)".to_string(),
+            units: "in".to_string(),
+            description: "Accumulated precipitation in inches ((RAINC + RAINNC) / 25.4)"
+                .to_string(),
         },
         timeidx,
     )
 }
 
-fn build_uhel_0_3km_1h_max_field(file: &WrfFile, timeidx: usize) -> ProductResult<Field2D> {
+fn build_uhel_0_3km_1h_max_field(
+    file: &WrfFile,
+    timeidx: usize,
+    options: &ProductRenderOptions,
+) -> ProductResult<Field2D> {
     let mut max_values: Option<Vec<f64>> = None;
 
     for idx in one_hour_window_indices(file, timeidx) {
         accumulate_uhel_max(&mut max_values, file, idx)?;
     }
 
-    if let Some(current) = valid_time_for_index(file, timeidx) {
-        for (path, indices) in sibling_one_hour_window_paths(file, current) {
+    if let (Some(history_dir), Some(current)) = (
+        options.history_dir.as_deref(),
+        valid_time_for_index(file, timeidx),
+    ) {
+        for (path, indices) in history_dir_one_hour_window_paths(file, current, history_dir)? {
             let Ok(sibling) = WrfFile::open(&path) else {
                 continue;
             };
@@ -1957,19 +2052,18 @@ fn native_or_computed_uhel_output(file: &WrfFile, timeidx: usize) -> ProductResu
     .map_err(Into::into)
 }
 
-fn sibling_one_hour_window_paths(
+fn history_dir_one_hour_window_paths(
     file: &WrfFile,
     current: WrfTimestamp,
-) -> Vec<(PathBuf, Vec<usize>)> {
-    let Some(parent) = file.path.parent() else {
-        return Vec::new();
-    };
+    history_dir: &Path,
+) -> ProductResult<Vec<(PathBuf, Vec<usize>)>> {
     let current_minutes = timestamp_minutes(current);
     let current_path = normalize_path_for_compare(&file.path);
     let current_prefix = wrfout_filename_prefix(&file.path);
-    let Ok(entries) = fs::read_dir(parent) else {
-        return Vec::new();
-    };
+    let entries = fs::read_dir(history_dir).map_err(|err| ProductError::HistoryDirRead {
+        path: history_dir.to_path_buf(),
+        message: err.to_string(),
+    })?;
 
     let mut paths = Vec::new();
     for entry in entries.flatten() {
@@ -2006,7 +2100,7 @@ fn sibling_one_hour_window_paths(
         }
     }
     paths.sort_by(|(left, _), (right, _)| left.cmp(right));
-    paths
+    Ok(paths)
 }
 
 fn one_hour_window_indices(file: &WrfFile, timeidx: usize) -> Vec<usize> {
@@ -2498,6 +2592,14 @@ fn wind_10m_levels() -> Vec<f32> {
     range_i32(10, 70, 1)
 }
 
+fn precip_accum_levels() -> Vec<f32> {
+    vec![
+        0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35,
+        0.40, 0.45, 0.50, 0.60, 0.70, 0.75, 0.85, 0.95, 1.00, 1.25, 1.50, 1.75, 2.00, 2.50, 3.00,
+        3.50, 4.00, 5.00, 6.00, 7.00, 8.00, 9.00, 12.00, 15.00,
+    ]
+}
+
 fn slp_contour_levels() -> Vec<f32> {
     (960..=1040).step_by(2).map(|value| value as f32).collect()
 }
@@ -2740,6 +2842,19 @@ mod tests {
     }
 
     #[test]
+    fn reflectivity_uh_history_inputs_are_explicitly_optional() {
+        let contract = product_input_contract(WrfProduct::ReflectivityUh);
+        assert!(contract.current_wrfout_required);
+        let history = contract.optional_history.expect("history contract");
+        assert_eq!(history.cli_flag, "--history-dir");
+        assert_eq!(history.lookback_minutes, 60);
+
+        let stp = product_input_contract(WrfProduct::StpEffective);
+        assert!(stp.current_wrfout_required);
+        assert!(stp.optional_history.is_none());
+    }
+
+    #[test]
     fn reflectivity_uh_combo_draws_uh_as_track_overlay() {
         let recipe = WrfProduct::ReflectivityUh.recipe();
         let ColorScale::Discrete(scale) = recipe.palette.scale(recipe.levels, ExtendMode::Both)
@@ -2770,6 +2885,30 @@ mod tests {
 
         let storm_track_edge = reflectivity_uh_pixel(&scale, 45.0, 150.0, true);
         assert_eq!(storm_track_edge, Color::rgba(0, 0, 0, 255));
+    }
+
+    #[test]
+    fn precip_accum_uses_inch_operational_scale() {
+        let recipe = WrfProduct::PrecipAccum.recipe();
+        assert_eq!(recipe.fill_units, "in");
+        assert!(recipe.title_template.contains("(in)"));
+        assert_eq!(recipe.levels.first().copied(), Some(0.01));
+        assert_eq!(recipe.levels.last().copied(), Some(15.0));
+        for tick in [
+            0.01, 0.05, 0.10, 0.30, 0.50, 0.75, 1.00, 1.50, 2.00, 3.00, 4.00, 6.00, 9.00, 15.00,
+        ] {
+            assert!(recipe
+                .levels
+                .iter()
+                .any(|level| (*level - tick).abs() < f32::EPSILON));
+        }
+        assert_eq!(
+            product_tick_values(WrfProduct::PrecipAccum).unwrap(),
+            vec![
+                0.01, 0.05, 0.10, 0.30, 0.50, 0.75, 1.00, 1.50, 2.00, 3.00, 4.00, 6.00, 9.00,
+                15.00,
+            ]
+        );
     }
 
     #[test]

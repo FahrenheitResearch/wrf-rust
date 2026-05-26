@@ -894,7 +894,7 @@ fn filter_tick_labels_to_fit(
             continue;
         }
         let px = cbar_x as f64 + frac * cbar_w as f64;
-        let label = text::format_tick(*tick_val);
+        let label = format_colorbar_tick(*tick_val, ticks);
         let lw = text::text_width(&label, text_scale) as i32;
         if lw >= max_x.saturating_sub(min_x) {
             continue;
@@ -936,7 +936,7 @@ fn filter_vertical_tick_labels_to_fit(
             continue;
         }
         let py = cbar_y as f64 + (1.0 - frac) * cbar_h as f64;
-        let label = text::format_tick(tick_val);
+        let label = format_colorbar_tick(tick_val, ticks);
         let max_y = (img_h as i32).saturating_sub(line_h).max(0);
         let y = (py.round() as i32 - line_h / 2).clamp(0, max_y);
         if y < last_bottom.saturating_add(min_gap_px) {
@@ -947,6 +947,20 @@ fn filter_vertical_tick_labels_to_fit(
     }
 
     labels
+}
+
+fn format_colorbar_tick(value: f64, ticks: &[f64]) -> String {
+    if ticks_need_fixed_two_decimals(ticks) {
+        format!("{value:.2}")
+    } else {
+        text::format_tick(value)
+    }
+}
+
+fn ticks_need_fixed_two_decimals(ticks: &[f64]) -> bool {
+    ticks
+        .iter()
+        .any(|tick| tick.is_finite() && tick.abs() > 0.0 && tick.abs() < 0.1)
 }
 
 fn grid_to_pixel(i: f64, j: f64, nx: usize, ny: usize, layout: &Layout) -> (f64, f64) {
@@ -4837,6 +4851,19 @@ mod tests {
             assert!(lx >= 80);
             assert!(lx + width <= 200);
         }
+    }
+
+    #[test]
+    fn small_decimal_colorbar_ticks_keep_two_decimal_labels() {
+        let precip_ticks = [0.01, 0.05, 0.10, 0.30, 1.00, 15.00];
+        assert_eq!(format_colorbar_tick(0.01, &precip_ticks), "0.01");
+        assert_eq!(format_colorbar_tick(0.05, &precip_ticks), "0.05");
+        assert_eq!(format_colorbar_tick(0.10, &precip_ticks), "0.10");
+        assert_eq!(format_colorbar_tick(1.00, &precip_ticks), "1.00");
+        assert_eq!(format_colorbar_tick(15.00, &precip_ticks), "15.00");
+
+        let stp_ticks = [0.0, 1.0, 2.0, 3.0, 4.0];
+        assert_eq!(format_colorbar_tick(1.0, &stp_ticks), "1");
     }
 
     #[test]
