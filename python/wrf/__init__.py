@@ -505,6 +505,11 @@ def available_variables():
         print(f"{name:<{nw}} {desc:<{dw}} {units}")
 
 
+from wrf.soundings import render_sounding
+
+__all__ += ["render_sounding"]
+
+
 # =========================================================================
 # interplevel -- vertical interpolation of 3D fields
 # =========================================================================

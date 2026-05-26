@@ -25,7 +25,7 @@ use wrf_render::{
 const DEFAULT_PRODUCT_WIDTH: u32 = 1600;
 const DEFAULT_PRODUCT_HEIGHT: u32 = 1200;
 const UH_TRACK_THRESHOLD: f32 = 50.0;
-const UH_TRACK_FILL_ALPHA: u8 = 38;
+const UH_TRACK_FILL_ALPHA: u8 = 64;
 const NATIVE_UPDRAFT_HELICITY_MAX_VAR: &str = "UP_HELI_MAX";
 const NATIVE_OR_COMPUTED_UH_VAR: &str = "native_or_computed_uhel";
 
@@ -55,6 +55,7 @@ pub type ProductResult<T> = Result<T, ProductError>;
 #[serde(rename_all = "snake_case")]
 pub enum PaletteId {
     Cape,
+    ThreeCape,
     Srh,
     Stp,
     Ehi,
@@ -78,6 +79,7 @@ impl PaletteId {
     pub fn default_levels(self) -> Vec<f32> {
         match self {
             Self::Cape => range_step(0.0, 8100.0, 100.0),
+            Self::ThreeCape => three_cape_levels(),
             Self::Srh => srh_scale_levels()
                 .into_iter()
                 .map(|value| value as f32)
@@ -108,6 +110,7 @@ impl PaletteId {
         let mask_below = self.mask_below();
         let discrete = match self {
             Self::Cape => palette_scale(WeatherPalette::Cape, levels, extend, mask_below),
+            Self::ThreeCape => palette_scale(WeatherPalette::ThreeCape, levels, extend, mask_below),
             Self::Srh => palette_scale(WeatherPalette::Srh, levels, extend, mask_below),
             Self::Stp => palette_scale(WeatherPalette::Stp, levels, extend, mask_below),
             Self::Ehi => palette_scale(WeatherPalette::Ehi, levels, extend, mask_below),
@@ -157,7 +160,7 @@ impl PaletteId {
 
     fn mask_below(self) -> Option<f64> {
         match self {
-            Self::Cape => Some(1.0),
+            Self::Cape | Self::ThreeCape => Some(1.0),
             Self::Srh | Self::Stp | Self::Ehi | Self::Uh | Self::Reflectivity => Some(0.01),
             Self::Precipitation => Some(0.001),
             _ => None,
@@ -185,6 +188,15 @@ pub enum WrfProduct {
     Mlcin,
     Mucape,
     Mucin,
+    Sb3Cape,
+    Ml3Cape,
+    Mu3Cape,
+    Sb6Cape,
+    Ml6Cape,
+    Mu6Cape,
+    EffectiveCape,
+    EffectiveInflowBase,
+    EffectiveInflowTop,
     Srh01,
     Srh03,
     EffectiveSrh,
@@ -199,6 +211,11 @@ pub enum WrfProduct {
     CriticalAngle,
     Ship,
     Bri,
+    Dcape,
+    Dcp,
+    Wndg,
+    Esp,
+    Mmp,
     Shear06,
     Ebwd,
     MeanWind06,
@@ -206,6 +223,9 @@ pub enum WrfProduct {
     Reflectivity1km,
     ReflectivityUh,
     CloudTopTemp,
+    CloudFracLow,
+    CloudFracMid,
+    CloudFracHigh,
     SlpWind10m,
     SurfaceWind10m,
     U10Component,
@@ -221,6 +241,15 @@ pub enum WrfProduct {
     Lcl,
     Lfc,
     El,
+    LclTemp,
+    KIndex,
+    TotalTotals,
+    MeanMixr,
+    LowRh,
+    MidRh,
+    DgzRh,
+    ConvTemp,
+    MaxTemp,
     LapseRate700500,
     LapseRate03,
     FreezingLevel,
@@ -241,7 +270,9 @@ pub enum WrfProduct {
     Temp500Wind,
     Wind500,
     Vort500Wind,
+    Pvo500,
     Omega500,
+    ThetaW850,
     Temp700Wind,
     Height700Wind,
     Rh700Wind,
@@ -270,6 +301,23 @@ impl WrfProduct {
             "mlcin" | "mixed_layer_cin" => Some(Self::Mlcin),
             "mucape" | "most_unstable_cape" => Some(Self::Mucape),
             "mucin" | "most_unstable_cin" => Some(Self::Mucin),
+            "sb3cape" | "surface_based_3cape" | "surface_based_0_3km_cape" => Some(Self::Sb3Cape),
+            "ml3cape" | "3cape" | "mixed_layer_3cape" | "mixed_layer_0_3km_cape" => {
+                Some(Self::Ml3Cape)
+            }
+            "mu3cape" | "most_unstable_3cape" | "most_unstable_0_3km_cape" => Some(Self::Mu3Cape),
+            "sb6cape" | "surface_based_6cape" | "surface_based_0_6km_cape" => Some(Self::Sb6Cape),
+            "ml6cape" | "6cape" | "mixed_layer_6cape" | "mixed_layer_0_6km_cape" => {
+                Some(Self::Ml6Cape)
+            }
+            "mu6cape" | "most_unstable_6cape" | "most_unstable_0_6km_cape" => Some(Self::Mu6Cape),
+            "effective_cape" | "eff_cape" | "effective_inflow_cape" => Some(Self::EffectiveCape),
+            "effective_inflow_base" | "eff_inflow_base" | "effective_layer_base" => {
+                Some(Self::EffectiveInflowBase)
+            }
+            "effective_inflow_top" | "eff_inflow_top" | "effective_layer_top" => {
+                Some(Self::EffectiveInflowTop)
+            }
             "srh1" | "srh01" | "srh_0_1km" | "srh01km" => Some(Self::Srh01),
             "srh3" | "srh03" | "srh_0_3km" | "srh03km" => Some(Self::Srh03),
             "effective_srh" | "eff_srh" | "srh_eff" => Some(Self::EffectiveSrh),
@@ -284,6 +332,11 @@ impl WrfProduct {
             "critical_angle" | "crit_angle" => Some(Self::CriticalAngle),
             "ship" | "significant_hail_parameter" => Some(Self::Ship),
             "bri" | "bulk_richardson_number" => Some(Self::Bri),
+            "dcape" | "downdraft_cape" => Some(Self::Dcape),
+            "dcp" | "derecho_composite_parameter" => Some(Self::Dcp),
+            "wndg" | "wind_damage_parameter" => Some(Self::Wndg),
+            "esp" | "enhanced_stretching_potential" => Some(Self::Esp),
+            "mmp" | "mcs_maintenance_probability" => Some(Self::Mmp),
             "shear06" | "shear_0_6km" | "bulk_shear_0_6km" => Some(Self::Shear06),
             "ebwd" | "effective_bulk_shear" | "effective_bulk_wind_difference" => Some(Self::Ebwd),
             "mean_wind06" | "mean_wind_0_6km" | "mean_wind_6km" => Some(Self::MeanWind06),
@@ -300,6 +353,11 @@ impl WrfProduct {
             | "reflectivity_updraft_helicity"
             | "reflectivity_uh_combo" => Some(Self::ReflectivityUh),
             "ctt" | "cloud_top_temperature" => Some(Self::CloudTopTemp),
+            "cloudfrac_low" | "low_cloud_fraction" | "low_cloudfrac" => Some(Self::CloudFracLow),
+            "cloudfrac_mid" | "mid_cloud_fraction" | "mid_cloudfrac" => Some(Self::CloudFracMid),
+            "cloudfrac_high" | "high_cloud_fraction" | "high_cloudfrac" => {
+                Some(Self::CloudFracHigh)
+            }
             "slp_wind10m" | "slp_wind" | "mslp_wind10m" => Some(Self::SlpWind10m),
             "surface_wind" | "surface_wind10m" | "wspd10" | "wind10m" => Some(Self::SurfaceWind10m),
             "u10" | "u10_component" | "u_10m" | "u_wind10m" | "u_component_10m" => {
@@ -319,6 +377,15 @@ impl WrfProduct {
             "lcl" | "lcl_height" => Some(Self::Lcl),
             "lfc" | "lfc_height" => Some(Self::Lfc),
             "el" | "el_height" | "equilibrium_level" => Some(Self::El),
+            "lcl_temp" | "lcl_temperature" => Some(Self::LclTemp),
+            "k_index" | "kindex" => Some(Self::KIndex),
+            "total_totals" | "t_totals" | "tot_tots" => Some(Self::TotalTotals),
+            "mean_mixr" | "mean_mixing_ratio" => Some(Self::MeanMixr),
+            "low_rh" | "low_level_rh" | "mean_low_rh" => Some(Self::LowRh),
+            "mid_rh" | "mid_level_rh" | "mean_mid_rh" => Some(Self::MidRh),
+            "dgz_rh" | "dendritic_growth_zone_rh" => Some(Self::DgzRh),
+            "convective_temp" | "conv_t" | "convt" => Some(Self::ConvTemp),
+            "max_temp" | "forecast_max_temp" | "maxt" => Some(Self::MaxTemp),
             "lapse_rate_700_500" | "lr75" | "700_500_lapse_rate" => Some(Self::LapseRate700500),
             "lapse_rate_0_3km" | "lr03" | "0_3km_lapse_rate" => Some(Self::LapseRate03),
             "freezing_level" | "fzlev" => Some(Self::FreezingLevel),
@@ -349,7 +416,12 @@ impl WrfProduct {
             "vort500" | "vort500_wind" | "500mb_vort" | "500mb_vorticity" | "vorticity500_wind" => {
                 Some(Self::Vort500Wind)
             }
+            "pvo500" | "pv500" | "500mb_pv" | "500mb_potential_vorticity" => Some(Self::Pvo500),
             "omega500" | "500mb_omega" | "vertical_velocity500" => Some(Self::Omega500),
+            "theta_w850"
+            | "theta_w_850mb"
+            | "850mb_theta_w"
+            | "850mb_wet_bulb_potential_temperature" => Some(Self::ThetaW850),
             "temp700" | "700mb_temp" | "700_temp_wind" | "temp700_wind" => Some(Self::Temp700Wind),
             "height700" | "700mb_height" | "700_height_wind" | "height700_wind" => {
                 Some(Self::Height700Wind)
@@ -383,6 +455,15 @@ impl WrfProduct {
             Self::Mlcin => "mlcin",
             Self::Mucape => "mucape",
             Self::Mucin => "mucin",
+            Self::Sb3Cape => "sb3cape",
+            Self::Ml3Cape => "ml3cape",
+            Self::Mu3Cape => "mu3cape",
+            Self::Sb6Cape => "sb6cape",
+            Self::Ml6Cape => "ml6cape",
+            Self::Mu6Cape => "mu6cape",
+            Self::EffectiveCape => "effective_cape",
+            Self::EffectiveInflowBase => "effective_inflow_base",
+            Self::EffectiveInflowTop => "effective_inflow_top",
             Self::Srh01 => "srh01",
             Self::Srh03 => "srh03",
             Self::EffectiveSrh => "effective_srh",
@@ -397,6 +478,11 @@ impl WrfProduct {
             Self::CriticalAngle => "critical_angle",
             Self::Ship => "ship",
             Self::Bri => "bri",
+            Self::Dcape => "dcape",
+            Self::Dcp => "dcp",
+            Self::Wndg => "wndg",
+            Self::Esp => "esp",
+            Self::Mmp => "mmp",
             Self::Shear06 => "shear06",
             Self::Ebwd => "ebwd",
             Self::MeanWind06 => "mean_wind06",
@@ -404,6 +490,9 @@ impl WrfProduct {
             Self::Reflectivity1km => "reflectivity_1km",
             Self::ReflectivityUh => "reflectivity_uh",
             Self::CloudTopTemp => "cloud_top_temperature",
+            Self::CloudFracLow => "cloudfrac_low",
+            Self::CloudFracMid => "cloudfrac_mid",
+            Self::CloudFracHigh => "cloudfrac_high",
             Self::SlpWind10m => "slp_wind10m",
             Self::SurfaceWind10m => "surface_wind10m",
             Self::U10Component => "u10_component",
@@ -419,6 +508,15 @@ impl WrfProduct {
             Self::Lcl => "lcl",
             Self::Lfc => "lfc",
             Self::El => "el",
+            Self::LclTemp => "lcl_temp",
+            Self::KIndex => "k_index",
+            Self::TotalTotals => "total_totals",
+            Self::MeanMixr => "mean_mixr",
+            Self::LowRh => "low_rh",
+            Self::MidRh => "mid_rh",
+            Self::DgzRh => "dgz_rh",
+            Self::ConvTemp => "convective_temp",
+            Self::MaxTemp => "max_temp",
             Self::LapseRate700500 => "lapse_rate_700_500",
             Self::LapseRate03 => "lapse_rate_0_3km",
             Self::FreezingLevel => "freezing_level",
@@ -439,7 +537,9 @@ impl WrfProduct {
             Self::Temp500Wind => "temp500_wind",
             Self::Wind500 => "wind500",
             Self::Vort500Wind => "vort500_wind",
+            Self::Pvo500 => "pvo500",
             Self::Omega500 => "omega500",
+            Self::ThetaW850 => "theta_w850",
             Self::Temp700Wind => "temp700_wind",
             Self::Height700Wind => "height700_wind",
             Self::Rh700Wind => "rh700_wind",
@@ -464,7 +564,9 @@ impl WrfProduct {
             | Self::Temp500Wind
             | Self::Wind500
             | Self::Vort500Wind
+            | Self::Pvo500
             | Self::Omega500
+            | Self::ThetaW850
             | Self::Temp700Wind
             | Self::Height700Wind
             | Self::Rh700Wind
@@ -488,6 +590,15 @@ impl WrfProduct {
             | Self::Mlcin
             | Self::Mucape
             | Self::Mucin
+            | Self::Sb3Cape
+            | Self::Ml3Cape
+            | Self::Mu3Cape
+            | Self::Sb6Cape
+            | Self::Ml6Cape
+            | Self::Mu6Cape
+            | Self::EffectiveCape
+            | Self::EffectiveInflowBase
+            | Self::EffectiveInflowTop
             | Self::Srh01
             | Self::Srh03
             | Self::EffectiveSrh
@@ -504,11 +615,25 @@ impl WrfProduct {
             | Self::CriticalAngle
             | Self::Ship
             | Self::Bri
+            | Self::Dcape
+            | Self::Dcp
+            | Self::Wndg
+            | Self::Esp
+            | Self::Mmp
             | Self::UpdraftHelicity
             | Self::ReflectivityUh
             | Self::Lcl
             | Self::Lfc
             | Self::El
+            | Self::LclTemp
+            | Self::KIndex
+            | Self::TotalTotals
+            | Self::MeanMixr
+            | Self::LowRh
+            | Self::MidRh
+            | Self::DgzRh
+            | Self::ConvTemp
+            | Self::MaxTemp
             | Self::LapseRate700500
             | Self::LapseRate03 => ProductVisualMode::SevereDiagnostic,
             _ => ProductVisualMode::FilledMeteorology,
@@ -575,6 +700,66 @@ impl WrfProduct {
             Self::Mlcin => cin_recipe("mlcin", "MLCIN"),
             Self::Mucape => severe_recipe("mucape", "J/kg", PaletteId::Cape, "MUCAPE"),
             Self::Mucin => cin_recipe("mucin", "MUCIN"),
+            Self::Sb3Cape => severe_recipe_with_levels(
+                "sb3cape",
+                "J/kg",
+                PaletteId::ThreeCape,
+                PaletteId::ThreeCape.default_levels(),
+                "SB 0-3 km CAPE",
+            ),
+            Self::Ml3Cape => severe_recipe_with_levels(
+                "ml3cape",
+                "J/kg",
+                PaletteId::ThreeCape,
+                PaletteId::ThreeCape.default_levels(),
+                "ML 0-3 km CAPE",
+            ),
+            Self::Mu3Cape => severe_recipe_with_levels(
+                "mu3cape",
+                "J/kg",
+                PaletteId::ThreeCape,
+                PaletteId::ThreeCape.default_levels(),
+                "MU 0-3 km CAPE",
+            ),
+            Self::Sb6Cape => severe_recipe_with_levels(
+                "sb6cape",
+                "J/kg",
+                PaletteId::Cape,
+                six_cape_levels(),
+                "SB 0-6 km CAPE",
+            ),
+            Self::Ml6Cape => severe_recipe_with_levels(
+                "ml6cape",
+                "J/kg",
+                PaletteId::Cape,
+                six_cape_levels(),
+                "ML 0-6 km CAPE",
+            ),
+            Self::Mu6Cape => severe_recipe_with_levels(
+                "mu6cape",
+                "J/kg",
+                PaletteId::Cape,
+                six_cape_levels(),
+                "MU 0-6 km CAPE",
+            ),
+            Self::EffectiveCape => severe_recipe(
+                "effective_cape",
+                "J/kg",
+                PaletteId::Cape,
+                "Effective-Layer CAPE",
+            ),
+            Self::EffectiveInflowBase => height_recipe(
+                "effective_inflow_base",
+                "m",
+                range_i32(0, 5000, 250),
+                "Effective Inflow Base Height AGL",
+            ),
+            Self::EffectiveInflowTop => height_recipe(
+                "effective_inflow_top",
+                "m",
+                range_i32(0, 8000, 250),
+                "Effective Inflow Top Height AGL",
+            ),
             Self::Srh01 => severe_recipe(
                 "srh1",
                 "m2/s2",
@@ -659,6 +844,41 @@ impl WrfProduct {
                 title_template: "Bulk Richardson Number",
                 opts: ComputeOptsPatch::default(),
             },
+            Self::Dcape => severe_recipe_with_levels(
+                "dcape",
+                "J/kg",
+                PaletteId::Cape,
+                range_i32(0, 2500, 100),
+                "Downdraft CAPE (J/kg)",
+            ),
+            Self::Dcp => severe_recipe_with_levels(
+                "dcp",
+                "",
+                PaletteId::Stp,
+                range_i32(0, 10, 1),
+                "Derecho Composite Parameter",
+            ),
+            Self::Wndg => severe_recipe_with_levels(
+                "wndg",
+                "",
+                PaletteId::Stp,
+                range_i32(0, 10, 1),
+                "Wind Damage Parameter",
+            ),
+            Self::Esp => severe_recipe_with_levels(
+                "esp",
+                "",
+                PaletteId::Stp,
+                range_i32(0, 20, 1),
+                "Enhanced Stretching Potential",
+            ),
+            Self::Mmp => severe_recipe_with_levels(
+                "mmp",
+                "",
+                PaletteId::Stp,
+                (0..=20).map(|value| value as f32 * 0.05).collect(),
+                "MCS Maintenance Probability",
+            ),
             Self::Shear06 => ProductRecipe {
                 fill_var: "bulk_shear",
                 fill_units: "knots",
@@ -718,6 +938,36 @@ impl WrfProduct {
                 contour_overlays: Vec::new(),
                 barb_overlay: None,
                 title_template: "Simulated IR Satellite (Brightness Temp degC)",
+                opts: ComputeOptsPatch::default(),
+            },
+            Self::CloudFracLow => ProductRecipe {
+                fill_var: "cloudfrac_low",
+                fill_units: "%",
+                palette: PaletteId::RelativeHumidity,
+                levels: range_i32(0, 100, 5),
+                contour_overlays: Vec::new(),
+                barb_overlay: None,
+                title_template: "Low Cloud Fraction (%)",
+                opts: ComputeOptsPatch::default(),
+            },
+            Self::CloudFracMid => ProductRecipe {
+                fill_var: "cloudfrac_mid",
+                fill_units: "%",
+                palette: PaletteId::RelativeHumidity,
+                levels: range_i32(0, 100, 5),
+                contour_overlays: Vec::new(),
+                barb_overlay: None,
+                title_template: "Mid Cloud Fraction (%)",
+                opts: ComputeOptsPatch::default(),
+            },
+            Self::CloudFracHigh => ProductRecipe {
+                fill_var: "cloudfrac_high",
+                fill_units: "%",
+                palette: PaletteId::RelativeHumidity,
+                levels: range_i32(0, 100, 5),
+                contour_overlays: Vec::new(),
+                barb_overlay: None,
+                title_template: "High Cloud Fraction (%)",
                 opts: ComputeOptsPatch::default(),
             },
             Self::SlpWind10m => ProductRecipe {
@@ -888,6 +1138,75 @@ impl WrfProduct {
                 range_i32(4000, 18000, 1000),
                 "Equilibrium Level Height AGL",
             ),
+            Self::LclTemp => severe_recipe_with_levels(
+                "lcl_temp",
+                "degC",
+                PaletteId::Temperature,
+                range_i32(-30, 30, 2),
+                "LCL Temperature (degC)",
+            ),
+            Self::KIndex => severe_recipe_with_levels(
+                "k_index",
+                "",
+                PaletteId::Stp,
+                range_i32(0, 50, 2),
+                "K Index",
+            ),
+            Self::TotalTotals => severe_recipe_with_levels(
+                "total_totals",
+                "",
+                PaletteId::Stp,
+                range_i32(30, 70, 2),
+                "Total Totals Index",
+            ),
+            Self::MeanMixr => severe_recipe_with_levels(
+                "mean_mixr",
+                "g/kg",
+                PaletteId::Dewpoint,
+                range_i32(0, 25, 1),
+                "Mean Mixing Ratio (lowest 100 hPa)",
+            ),
+            Self::LowRh => severe_recipe_with_levels(
+                "low_rh",
+                "%",
+                PaletteId::RelativeHumidity,
+                range_i32(0, 100, 5),
+                "Low-Level Mean RH (%)",
+            ),
+            Self::MidRh => severe_recipe_with_levels(
+                "mid_rh",
+                "%",
+                PaletteId::RelativeHumidity,
+                range_i32(0, 100, 5),
+                "Mid-Level Mean RH (%)",
+            ),
+            Self::DgzRh => severe_recipe_with_levels(
+                "dgz_rh",
+                "%",
+                PaletteId::RelativeHumidity,
+                range_i32(0, 100, 5),
+                "Dendritic Growth Zone Mean RH (%)",
+            ),
+            Self::ConvTemp => ProductRecipe {
+                fill_var: "convective_temp",
+                fill_units: "degF",
+                palette: PaletteId::SurfaceTemperature,
+                levels: PaletteId::SurfaceTemperature.default_levels(),
+                contour_overlays: Vec::new(),
+                barb_overlay: None,
+                title_template: "Convective Temperature (degF)",
+                opts: ComputeOptsPatch::default(),
+            },
+            Self::MaxTemp => ProductRecipe {
+                fill_var: "max_temp",
+                fill_units: "degF",
+                palette: PaletteId::SurfaceTemperature,
+                levels: PaletteId::SurfaceTemperature.default_levels(),
+                contour_overlays: Vec::new(),
+                barb_overlay: None,
+                title_template: "Forecast Maximum Temperature (degF)",
+                opts: ComputeOptsPatch::default(),
+            },
             Self::LapseRate700500 => ProductRecipe {
                 fill_var: "lapse_rate_700_500",
                 fill_units: "",
@@ -990,6 +1309,16 @@ impl WrfProduct {
                 title_template: "500 hPa Absolute Vorticity, Height, and Wind",
                 opts: ComputeOptsPatch::default(),
             },
+            Self::Pvo500 => ProductRecipe {
+                fill_var: "pvo_500mb",
+                fill_units: "",
+                palette: PaletteId::Stp,
+                levels: range_i32(-2, 10, 1),
+                contour_overlays: vec![height_contours("height_500mb", range_i32(480, 600, 6))],
+                barb_overlay: Some(pressure_barbs(500)),
+                title_template: "500 hPa Potential Vorticity, Height, and Wind",
+                opts: ComputeOptsPatch::default(),
+            },
             Self::Omega500 => ProductRecipe {
                 fill_var: "omega_500mb",
                 fill_units: "Pa/s",
@@ -1000,6 +1329,16 @@ impl WrfProduct {
                 contour_overlays: vec![height_contours("height_500mb", range_i32(480, 600, 6))],
                 barb_overlay: Some(pressure_barbs(500)),
                 title_template: "500 hPa Omega, Height, and Wind",
+                opts: ComputeOptsPatch::default(),
+            },
+            Self::ThetaW850 => ProductRecipe {
+                fill_var: "theta_w_850mb",
+                fill_units: "degC",
+                palette: PaletteId::Temperature,
+                levels: range_i32(-10, 45, 1),
+                contour_overlays: vec![height_contours("height_850mb", range_i32(120, 180, 3))],
+                barb_overlay: Some(pressure_barbs(850)),
+                title_template: "850 hPa Wet-Bulb Potential Temperature (degC), Height, and Wind",
                 opts: ComputeOptsPatch::default(),
             },
             Self::Temp700Wind => {
@@ -1046,6 +1385,15 @@ pub const DEFAULT_PRODUCT_SUITE: &[WrfProduct] = &[
     WrfProduct::Mlcin,
     WrfProduct::Mucape,
     WrfProduct::Mucin,
+    WrfProduct::Sb3Cape,
+    WrfProduct::Ml3Cape,
+    WrfProduct::Mu3Cape,
+    WrfProduct::Sb6Cape,
+    WrfProduct::Ml6Cape,
+    WrfProduct::Mu6Cape,
+    WrfProduct::EffectiveCape,
+    WrfProduct::EffectiveInflowBase,
+    WrfProduct::EffectiveInflowTop,
     WrfProduct::Srh01,
     WrfProduct::Srh03,
     WrfProduct::EffectiveSrh,
@@ -1062,10 +1410,18 @@ pub const DEFAULT_PRODUCT_SUITE: &[WrfProduct] = &[
     WrfProduct::CriticalAngle,
     WrfProduct::Ship,
     WrfProduct::Bri,
+    WrfProduct::Dcape,
+    WrfProduct::Dcp,
+    WrfProduct::Wndg,
+    WrfProduct::Esp,
+    WrfProduct::Mmp,
     WrfProduct::Reflectivity,
     WrfProduct::Reflectivity1km,
     WrfProduct::ReflectivityUh,
     WrfProduct::UpdraftHelicity,
+    WrfProduct::CloudFracLow,
+    WrfProduct::CloudFracMid,
+    WrfProduct::CloudFracHigh,
     WrfProduct::SlpWind10m,
     WrfProduct::SurfaceWind10m,
     WrfProduct::U10Component,
@@ -1079,6 +1435,15 @@ pub const DEFAULT_PRODUCT_SUITE: &[WrfProduct] = &[
     WrfProduct::Lcl,
     WrfProduct::Lfc,
     WrfProduct::El,
+    WrfProduct::LclTemp,
+    WrfProduct::KIndex,
+    WrfProduct::TotalTotals,
+    WrfProduct::MeanMixr,
+    WrfProduct::LowRh,
+    WrfProduct::MidRh,
+    WrfProduct::DgzRh,
+    WrfProduct::ConvTemp,
+    WrfProduct::MaxTemp,
     WrfProduct::LapseRate700500,
     WrfProduct::LapseRate03,
     WrfProduct::FreezingLevel,
@@ -1099,7 +1464,9 @@ pub const DEFAULT_PRODUCT_SUITE: &[WrfProduct] = &[
     WrfProduct::Temp500Wind,
     WrfProduct::Wind500,
     WrfProduct::Vort500Wind,
+    WrfProduct::Pvo500,
     WrfProduct::Omega500,
+    WrfProduct::ThetaW850,
     WrfProduct::Temp700Wind,
     WrfProduct::Height700Wind,
     WrfProduct::Rh700Wind,
@@ -1524,9 +1891,16 @@ fn product_tick_step(product: WrfProduct) -> Option<f64> {
         | WrfProduct::EcapeCape
         | WrfProduct::Sbcape
         | WrfProduct::Mlcape
-        | WrfProduct::Mucape => Some(500.0),
+        | WrfProduct::Mucape
+        | WrfProduct::Sb6Cape
+        | WrfProduct::Ml6Cape
+        | WrfProduct::Mu6Cape
+        | WrfProduct::Dcape
+        | WrfProduct::EffectiveCape => Some(500.0),
+        WrfProduct::Sb3Cape | WrfProduct::Ml3Cape | WrfProduct::Mu3Cape => Some(50.0),
         WrfProduct::Ncape => Some(250.0),
         WrfProduct::Srh01 | WrfProduct::Srh03 | WrfProduct::EffectiveSrh => Some(100.0),
+        WrfProduct::EffectiveInflowBase | WrfProduct::EffectiveInflowTop => Some(500.0),
         WrfProduct::SlpWind10m | WrfProduct::SurfaceWind10m => Some(5.0),
         WrfProduct::Shear01
         | WrfProduct::Shear06
@@ -1547,13 +1921,23 @@ fn product_tick_step(product: WrfProduct) -> Option<f64> {
         | WrfProduct::Temp250Wind
         | WrfProduct::Temp300Wind
         | WrfProduct::Temp500Wind
+        | WrfProduct::ThetaW850
         | WrfProduct::Temp700Wind
         | WrfProduct::Temp850Wind
         | WrfProduct::Reflectivity
         | WrfProduct::Reflectivity1km
         | WrfProduct::ReflectivityUh => Some(5.0),
+        WrfProduct::Pvo500 => Some(1.0),
+        WrfProduct::CloudFracLow | WrfProduct::CloudFracMid | WrfProduct::CloudFracHigh => {
+            Some(10.0)
+        }
         WrfProduct::Td2 => Some(10.0),
         WrfProduct::T2 => Some(10.0),
+        WrfProduct::LowRh | WrfProduct::MidRh | WrfProduct::DgzRh => Some(10.0),
+        WrfProduct::MeanMixr => Some(2.0),
+        WrfProduct::Mmp => Some(0.1),
+        WrfProduct::Dcp | WrfProduct::Wndg | WrfProduct::Esp => Some(2.0),
+        WrfProduct::KIndex | WrfProduct::TotalTotals => Some(5.0),
         WrfProduct::LapseRate700500 | WrfProduct::LapseRate03 => Some(1.0),
         _ => None,
     }
@@ -1567,6 +1951,13 @@ fn product_tick_values(product: WrfProduct) -> Option<Vec<f64>> {
         WrfProduct::Scp | WrfProduct::EcapeScp => Some(vec![
             0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0,
         ]),
+        WrfProduct::Dcp | WrfProduct::Wndg => {
+            Some(vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0])
+        }
+        WrfProduct::Esp => Some(vec![
+            0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0,
+        ]),
+        WrfProduct::Mmp => Some(vec![0.0, 0.25, 0.5, 0.75, 1.0]),
         WrfProduct::Ehi | WrfProduct::EcapeEhi | WrfProduct::Tehi | WrfProduct::Tts => Some(vec![
             0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0,
             24.0,
@@ -1578,6 +1969,12 @@ fn product_tick_values(product: WrfProduct) -> Option<Vec<f64>> {
         WrfProduct::CloudTopTemp => Some(vec![
             -90.0, -80.0, -70.0, -60.0, -50.0, -40.0, -30.0, -20.0, 0.0, 20.0, 40.0,
         ]),
+        WrfProduct::CloudFracLow | WrfProduct::CloudFracMid | WrfProduct::CloudFracHigh => {
+            Some(vec![0.0, 25.0, 50.0, 75.0, 100.0])
+        }
+        WrfProduct::LowRh | WrfProduct::MidRh | WrfProduct::DgzRh => {
+            Some(vec![0.0, 25.0, 50.0, 75.0, 100.0])
+        }
         WrfProduct::SlpWind10m | WrfProduct::SurfaceWind10m => Some(vec![
             10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0,
         ]),
@@ -1755,6 +2152,17 @@ fn build_recipe_field(
     if var == NATIVE_OR_COMPUTED_UH_VAR {
         return build_native_or_computed_uhel_field(file, timeidx);
     }
+    if let Some((source_var, plane_index)) = parse_multiplane_2d_var(var) {
+        return build_multiplane_2d_field(
+            file,
+            var,
+            source_var,
+            plane_index,
+            units,
+            patch,
+            timeidx,
+        );
+    }
     if let Some((base_var, height_m)) = parse_height_level_var(var) {
         return build_height_level_field(file, var, base_var, height_m, units, patch, timeidx);
     }
@@ -1789,6 +2197,43 @@ fn collapse_vector_output_to_speed(output: VarOutput, ny: usize, nx: usize) -> V
             .trim()
             .to_string(),
     }
+}
+
+fn build_multiplane_2d_field(
+    file: &WrfFile,
+    product_name: &str,
+    source_var: &str,
+    plane_index: usize,
+    units: &'static str,
+    patch: &ComputeOptsPatch,
+    timeidx: usize,
+) -> ProductResult<Field2D> {
+    let output = getvar(file, source_var, Some(timeidx), &patch.apply(units))?;
+    let nxy = file.ny * file.nx;
+    if output.shape.len() != 3
+        || output.shape[1] != file.ny
+        || output.shape[2] != file.nx
+        || output.data.len() < (plane_index + 1) * nxy
+    {
+        return Err(ProductError::NotTwoDimensional {
+            product: product_name.to_string(),
+            shape: output.shape,
+        });
+    }
+
+    let start = plane_index * nxy;
+    let end = start + nxy;
+    output_to_field(
+        file,
+        product_name,
+        VarOutput {
+            data: output.data[start..end].to_vec(),
+            shape: vec![file.ny, file.nx],
+            units: output.units,
+            description: format!("{} plane {}", output.description, plane_index),
+        },
+        timeidx,
+    )
 }
 
 fn build_pressure_level_field(
@@ -2572,8 +3017,21 @@ fn pressure_field_name(field: &str, level_hpa: u16) -> &'static str {
         ("va", 850) => "va_850mb",
         ("rh", 700) => "rh_700mb",
         ("avo", 500) => "avo_500mb",
+        ("pvo", 500) => "pvo_500mb",
         ("omega", 500) => "omega_500mb",
+        ("theta_w", 850) => "theta_w_850mb",
         _ => panic!("unsupported pressure product field {field}_{level_hpa}mb"),
+    }
+}
+
+fn parse_multiplane_2d_var(var: &str) -> Option<(&'static str, usize)> {
+    match var {
+        "effective_inflow_base" => Some(("effective_inflow", 0)),
+        "effective_inflow_top" => Some(("effective_inflow", 1)),
+        "cloudfrac_low" => Some(("cloudfrac", 0)),
+        "cloudfrac_mid" => Some(("cloudfrac", 1)),
+        "cloudfrac_high" => Some(("cloudfrac", 2)),
+        _ => None,
     }
 }
 
@@ -2612,6 +3070,16 @@ fn range_step(start: f32, end: f32, step: f32) -> Vec<f32> {
 
 fn wind_component_levels() -> Vec<f32> {
     range_i32(-75, 75, 5)
+}
+
+fn three_cape_levels() -> Vec<f32> {
+    let mut levels = range_step(0.0, 300.0, 5.0);
+    levels.extend(range_step(320.0, 500.0, 20.0));
+    levels
+}
+
+fn six_cape_levels() -> Vec<f32> {
+    range_i32(0, 6000, 100)
 }
 
 fn wind_10m_levels() -> Vec<f32> {
@@ -2713,6 +3181,26 @@ mod tests {
             WrfProduct::U10Component
         );
         assert_eq!(parse_product("v_10m").unwrap(), WrfProduct::V10Component);
+        assert_eq!(
+            parse_product("effective-inflow-cape").unwrap(),
+            WrfProduct::EffectiveCape
+        );
+        assert_eq!(
+            parse_product("low-cloud-fraction").unwrap(),
+            WrfProduct::CloudFracLow
+        );
+        assert_eq!(
+            parse_product("theta_w_850mb").unwrap(),
+            WrfProduct::ThetaW850
+        );
+        assert_eq!(parse_product("3cape").unwrap(), WrfProduct::Ml3Cape);
+        assert_eq!(parse_product("mu6cape").unwrap(), WrfProduct::Mu6Cape);
+        assert_eq!(parse_product("dcape").unwrap(), WrfProduct::Dcape);
+        assert_eq!(parse_product("dcp").unwrap(), WrfProduct::Dcp);
+        assert_eq!(parse_product("wndg").unwrap(), WrfProduct::Wndg);
+        assert_eq!(parse_product("mmp").unwrap(), WrfProduct::Mmp);
+        assert_eq!(parse_product("tot_tots").unwrap(), WrfProduct::TotalTotals);
+        assert_eq!(parse_product("dgz-rh").unwrap(), WrfProduct::DgzRh);
     }
 
     #[test]
@@ -2725,6 +3213,32 @@ mod tests {
         let uh = WrfProduct::UpdraftHelicity.recipe();
         assert_eq!(uh.fill_var, NATIVE_OR_COMPUTED_UH_VAR);
         assert_eq!(uh.fill_units, "m2/s2");
+
+        let ml3cape = WrfProduct::Ml3Cape.recipe();
+        assert_eq!(ml3cape.fill_var, "ml3cape");
+        assert_eq!(ml3cape.fill_units, "J/kg");
+        assert_eq!(ml3cape.palette, PaletteId::ThreeCape);
+        assert_eq!(ml3cape.levels.first().copied(), Some(0.0));
+        assert_eq!(ml3cape.levels.last().copied(), Some(500.0));
+
+        let ml6cape = WrfProduct::Ml6Cape.recipe();
+        assert_eq!(ml6cape.fill_var, "ml6cape");
+        assert_eq!(ml6cape.fill_units, "J/kg");
+        assert_eq!(ml6cape.palette, PaletteId::Cape);
+        assert_eq!(ml6cape.levels.last().copied(), Some(6000.0));
+
+        let dcape = WrfProduct::Dcape.recipe();
+        assert_eq!(dcape.fill_var, "dcape");
+        assert_eq!(dcape.fill_units, "J/kg");
+
+        let dcp = WrfProduct::Dcp.recipe();
+        assert_eq!(dcp.fill_var, "dcp");
+        assert_eq!(dcp.levels.last().copied(), Some(10.0));
+
+        let mmp = WrfProduct::Mmp.recipe();
+        assert_eq!(mmp.fill_var, "mmp");
+        assert_eq!(mmp.levels.first().copied(), Some(0.0));
+        assert_eq!(mmp.levels.last().copied(), Some(1.0));
     }
 
     #[test]
@@ -2856,6 +3370,35 @@ mod tests {
             assert_eq!(recipe.levels.first().copied(), Some(0.0));
             assert_eq!(recipe.levels.last().copied(), Some(1500.0));
         }
+    }
+
+    #[test]
+    fn custom_diagnostics_are_first_class_products() {
+        let effective = WrfProduct::EffectiveCape.recipe();
+        assert_eq!(effective.fill_var, "effective_cape");
+        assert_eq!(effective.fill_units, "J/kg");
+        assert_eq!(effective.palette, PaletteId::Cape);
+
+        let base = WrfProduct::EffectiveInflowBase.recipe();
+        assert_eq!(base.fill_var, "effective_inflow_base");
+        assert_eq!(base.fill_units, "m");
+
+        let low_cloud = WrfProduct::CloudFracLow.recipe();
+        assert_eq!(low_cloud.fill_var, "cloudfrac_low");
+        assert_eq!(low_cloud.fill_units, "%");
+        assert_eq!(low_cloud.levels.first().copied(), Some(0.0));
+        assert_eq!(low_cloud.levels.last().copied(), Some(100.0));
+
+        let theta_w = WrfProduct::ThetaW850.recipe();
+        assert_eq!(theta_w.fill_var, "theta_w_850mb");
+        assert_eq!(theta_w.fill_units, "degC");
+
+        let pvo = WrfProduct::Pvo500.recipe();
+        assert_eq!(pvo.fill_var, "pvo_500mb");
+        assert_eq!(
+            pvo.title_template,
+            "500 hPa Potential Vorticity, Height, and Wind"
+        );
     }
 
     #[test]

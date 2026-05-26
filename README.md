@@ -198,6 +198,60 @@ UH max track within that single file. To include neighboring wrfout files in the
 track, pass `--history-dir DIR`; only same-domain wrfout files in that explicit
 directory with valid times in the previous 60 minutes are considered.
 
+## Native Soundings
+
+`wrf-sounding` extracts point and box soundings from a WRF file and renders them
+through the vendored `sharprs` native Rust sounding renderer. This path does not
+use Matplotlib, MetPy, or Python plotting.
+
+Render a point sounding:
+
+```bash
+cargo run -p wrf-sounding --example render_sounding -- \
+  /path/to/wrfout_d02_1974-04-03_22_00_00 \
+  output/sounding.png \
+  0 \
+  --latlon 32.98,-88.59
+```
+
+Render by grid point:
+
+```bash
+cargo run -p wrf-sounding --example render_sounding -- \
+  /path/to/wrfout_d02_1974-04-03_22_00_00 \
+  output/sounding.png \
+  0 \
+  --ij 120,95
+```
+
+Render a box sounding:
+
+```bash
+cargo run -p wrf-sounding --example render_sounding -- \
+  /path/to/wrfout_d02_1974-04-03_22_00_00 \
+  output/box_sounding.png \
+  0 \
+  --box 32.5,-89.2,33.5,-88.0 --method most_unstable
+```
+
+Box methods are `mean`, `median`, and `most_unstable`.
+
+Python users can call the same Rust renderer:
+
+```python
+from wrf import WrfFile, render_sounding
+
+f = WrfFile("wrfout_d02_1974-04-03_22_00_00")
+render_sounding(f, "sounding.png", timeidx=0, latlon=(32.98, -88.59))
+render_sounding(
+    f,
+    "box_sounding.png",
+    timeidx=0,
+    box=(32.5, -89.2, 33.5, -88.0),
+    method="most_unstable",
+)
+```
+
 ## Native Products
 
 `wrf-products` currently includes product recipes for:
@@ -205,13 +259,14 @@ directory with valid times in the previous 60 minutes are considered.
 - ECAPE family: `ecape`, `sb_ecape`, `ml_ecape`, `mu_ecape`, `ncape`,
   `ecape_cape`, `ecape_cin`, `ecape_lfc`, `ecape_el`, `ecape_scp`,
   `ecape_ehi`
-- CAPE/CIN: `sbcape`, `sbcin`, `mlcape`, `mlcin`, `mucape`, `mucin`
+- CAPE/CIN: `sbcape`, `sbcin`, `mlcape`, `mlcin`, `mucape`, `mucin`,
+  `effective_cape`, `effective_inflow_base`, `effective_inflow_top`
 - Severe parameters: `srh01`, `srh03`, `effective_srh`, `shear01`,
   `shear06`, `ebwd`, `stp_effective`, `stp_fixed`, `scp`, `ehi`, `tehi`,
   `tts`, `vtp_mod`, `critical_angle`, `ship`, `bri`
 - Radar/cloud/precip: `reflectivity`, `reflectivity_1km`,
   `reflectivity_uh`, `cloud_top_temperature`, `precip_accum`,
-  `updraft_helicity`
+  `updraft_helicity`, `cloudfrac_low`, `cloudfrac_mid`, `cloudfrac_high`
 - Surface fields: `slp_wind10m`, `surface_wind10m`, `u10_component`,
   `v10_component`, `t2`, `td2`, `rh2`, `pwat`, `pblh`, `terrain`
 - Thermodynamic levels: `lcl`, `lfc`, `el`, `lapse_rate_700_500`,
@@ -220,9 +275,9 @@ directory with valid times in the previous 60 minutes are considered.
 - Upper air: `height200_wind`, `temp200_wind`, `wind200`,
   `height250_wind`, `temp250_wind`, `wind250`, `height300_wind`,
   `temp300_wind`, `wind300`, `height500_wind`, `temp500_wind`,
-  `wind500`, `vort500_wind`, `omega500`, `temp700_wind`,
-  `height700_wind`, `rh700_wind`, `height850_wind`, `temp850_wind`,
-  `wind850`
+  `wind500`, `vort500_wind`, `pvo500`, `omega500`, `temp700_wind`,
+  `height700_wind`, `rh700_wind`, `height850_wind`, `theta_w850`,
+  `temp850_wind`, `wind850`
 
 Product names accept several common aliases; the canonical names above are what
 examples and output filenames use.

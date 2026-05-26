@@ -1,7 +1,9 @@
 //! Extra diagnostic variables:
-//! lapse rates, freezing level, wet-bulb zero, theta_w, fire indices
+//! lapse rates, freezing level, wet-bulb zero, theta_w, fire indices,
+//! and sounding-derived scalar diagnostics.
 
 use crate::compute::ComputeOpts;
+use crate::diag::cape::build_surface_augmented_thermo_column;
 use crate::error::WrfResult;
 use crate::file::WrfFile;
 use rayon::prelude::*;
@@ -364,4 +366,326 @@ pub fn compute_lapse_rate(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResul
     });
 
     Ok(lr)
+}
+
+fn compute_thermo_profile_scalar<F>(
+    f: &WrfFile,
+    t: usize,
+    opts: &ComputeOpts,
+    func: F,
+) -> WrfResult<Vec<f64>>
+where
+    F: Fn(&[f64], &[f64], &[f64], &[f64]) -> f64 + Sync,
+{
+    let pres_hpa = f.pressure_hpa(t)?;
+    let tc = f.temperature_c(t)?;
+    let qv = f.qvapor(t)?;
+    let h_agl = f.height_agl(t)?;
+    let psfc = f.psfc(t)?;
+    let t2 = f.t2_for_opts(t, opts)?;
+    let q2 = f.q2_for_opts(t, opts)?;
+
+    let nz = f.nz;
+    let nxy = f.nxy();
+    Ok((0..nxy)
+        .into_par_iter()
+        .map(|ij| {
+            let (p, t, td, h) = build_surface_augmented_thermo_column(
+                &pres_hpa, &tc, &qv, &h_agl, psfc[ij], t2[ij], q2[ij], nz, nxy, ij,
+            );
+            func(&p, &t, &td, &h)
+        })
+        .collect())
+}
+
+/// K Index. `[ny, nx]`
+pub fn compute_k_index(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    compute_thermo_profile_scalar(f, t, opts, |p, temp, td, _| {
+        let t850 = interp_at_pressure(p, temp, 850.0);
+        let t700 = interp_at_pressure(p, temp, 700.0);
+        let t500 = interp_at_pressure(p, temp, 500.0);
+        let td850 = interp_at_pressure(p, td, 850.0);
+        let td700 = interp_at_pressure(p, td, 700.0);
+        crate::met::composite::k_index(t850, t700, t500, td850, td700)
+    })
+}
+
+/// Total Totals Index. `[ny, nx]`
+pub fn compute_total_totals(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    compute_thermo_profile_scalar(f, t, opts, |p, temp, td, _| {
+        let t850 = interp_at_pressure(p, temp, 850.0);
+        let t500 = interp_at_pressure(p, temp, 500.0);
+        let td850 = interp_at_pressure(p, td, 850.0);
+        crate::met::composite::total_totals(t850, t500, td850)
+    })
+}
+
+/// Mean mixing ratio in the lowest 100 hPa (g/kg). `[ny, nx]`
+pub fn compute_mean_mixr(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    compute_thermo_profile_scalar(f, t, opts, |p, _temp, td, _| {
+        mean_mixratio(p, td, p[0], p[0] - 100.0).unwrap_or(f64::NAN)
+    })
+}
+
+/// Mean relative humidity in the lowest 100 hPa (%). `[ny, nx]`
+pub fn compute_low_rh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    compute_thermo_profile_scalar(f, t, opts, |p, temp, td, _| {
+        mean_rh_pressure(p, temp, td, p[0], p[0] - 100.0).unwrap_or(f64::NAN)
+    })
+}
+
+/// Mean relative humidity from 700-500 hPa (%). `[ny, nx]`
+pub fn compute_mid_rh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    compute_thermo_profile_scalar(f, t, opts, |p, temp, td, _| {
+        mean_rh_pressure(p, temp, td, 700.0, 500.0).unwrap_or(f64::NAN)
+    })
+}
+
+/// Mean relative humidity through the dendritic growth zone (%). `[ny, nx]`
+pub fn compute_dgz_rh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    compute_thermo_profile_scalar(f, t, opts, |p, temp, td, _| {
+        let p_minus_12 = pressure_at_temperature(p, temp, -12.0);
+        let p_minus_17 = pressure_at_temperature(p, temp, -17.0);
+        if p_minus_12.is_finite() && p_minus_17.is_finite() {
+            mean_rh_pressure(
+                p,
+                temp,
+                td,
+                p_minus_12.max(p_minus_17),
+                p_minus_12.min(p_minus_17),
+            )
+            .unwrap_or(f64::NAN)
+        } else {
+            f64::NAN
+        }
+    })
+}
+
+/// LCL temperature (C). `[ny, nx]`
+pub fn compute_lcl_temp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    compute_thermo_profile_scalar(f, t, opts, |p, temp, td, _| {
+        let (_, lcl_t) = crate::met::thermo::drylift(p[0], temp[0], td[0]);
+        lcl_t
+    })
+}
+
+/// Convective temperature (C), CCL-based SHARPpy-style estimate. `[ny, nx]`
+pub fn compute_convective_temp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    compute_thermo_profile_scalar(f, t, opts, |p, temp, td, _| {
+        convective_temp_profile(p, temp, td).unwrap_or(f64::NAN)
+    })
+}
+
+/// Forecast maximum surface temperature (C). `[ny, nx]`
+pub fn compute_max_temp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    compute_thermo_profile_scalar(f, t, opts, |p, temp, _td, _| {
+        let ptop = p[0] - 100.0;
+        let t_top = interp_at_pressure(p, temp, ptop);
+        if !t_top.is_finite() || ptop <= 0.0 {
+            return f64::NAN;
+        }
+        ((t_top + crate::met::thermo::ZEROCNK + 2.0) * (p[0] / ptop).powf(crate::met::thermo::ROCP))
+            - crate::met::thermo::ZEROCNK
+    })
+}
+
+/// Downdraft CAPE (J/kg). `[ny, nx]`
+pub fn compute_dcape(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    compute_thermo_profile_scalar(f, t, opts, |p, temp, td, h| {
+        dcape_profile(p, temp, td, h).unwrap_or(0.0)
+    })
+}
+
+fn interp_at_pressure(p: &[f64], values: &[f64], target_p: f64) -> f64 {
+    if p.is_empty() || values.len() != p.len() || !target_p.is_finite() {
+        return f64::NAN;
+    }
+    for i in 0..p.len().saturating_sub(1) {
+        let p0 = p[i];
+        let p1 = p[i + 1];
+        if !p0.is_finite()
+            || !p1.is_finite()
+            || !values[i].is_finite()
+            || !values[i + 1].is_finite()
+        {
+            continue;
+        }
+        if (target_p <= p0 && target_p >= p1) || (target_p >= p0 && target_p <= p1) {
+            if (p1 - p0).abs() < 1.0e-9 {
+                return values[i];
+            }
+            let frac = (target_p - p0) / (p1 - p0);
+            return values[i] + frac * (values[i + 1] - values[i]);
+        }
+    }
+    f64::NAN
+}
+
+fn pressure_at_temperature(p: &[f64], temp: &[f64], target_t: f64) -> f64 {
+    if p.is_empty() || temp.len() != p.len() || !target_t.is_finite() {
+        return f64::NAN;
+    }
+    for i in 0..temp.len().saturating_sub(1) {
+        let t0 = temp[i];
+        let t1 = temp[i + 1];
+        if !t0.is_finite() || !t1.is_finite() || !p[i].is_finite() || !p[i + 1].is_finite() {
+            continue;
+        }
+        if (target_t <= t0 && target_t >= t1) || (target_t >= t0 && target_t <= t1) {
+            if (t1 - t0).abs() < 1.0e-9 {
+                return p[i];
+            }
+            let frac = (target_t - t0) / (t1 - t0);
+            return p[i] + frac * (p[i + 1] - p[i]);
+        }
+    }
+    f64::NAN
+}
+
+fn mean_mixratio(p: &[f64], td: &[f64], pbot: f64, ptop: f64) -> Option<f64> {
+    if !pbot.is_finite() || !ptop.is_finite() || pbot <= ptop {
+        return None;
+    }
+    let mut sum = 0.0;
+    let mut count = 0usize;
+    let steps = (pbot - ptop).ceil() as usize + 1;
+    for step in 0..steps {
+        let sample_p = (pbot - step as f64).max(ptop);
+        let sample_td = interp_at_pressure(p, td, sample_p);
+        let mixr = crate::met::thermo::mixratio(sample_p, sample_td);
+        if mixr.is_finite() {
+            sum += mixr;
+            count += 1;
+        }
+    }
+    (count > 0).then_some(sum / count as f64)
+}
+
+fn mean_rh_pressure(p: &[f64], temp: &[f64], td: &[f64], pbot: f64, ptop: f64) -> Option<f64> {
+    if !pbot.is_finite() || !ptop.is_finite() || pbot <= ptop {
+        return None;
+    }
+    let mut weighted = 0.0;
+    let mut total = 0.0;
+    let steps = (pbot - ptop).ceil() as usize + 1;
+    for step in 0..steps {
+        let sample_p = (pbot - step as f64).max(ptop);
+        let sample_t = interp_at_pressure(p, temp, sample_p);
+        let sample_td = interp_at_pressure(p, td, sample_p);
+        let rh = relative_humidity(sample_t, sample_td);
+        if rh.is_finite() {
+            weighted += rh * sample_p;
+            total += sample_p;
+        }
+    }
+    (total > 0.0).then_some(weighted / total)
+}
+
+fn relative_humidity(temp_c: f64, td_c: f64) -> f64 {
+    if !temp_c.is_finite() || !td_c.is_finite() {
+        return f64::NAN;
+    }
+    let e = 6.112 * (17.67 * td_c / (td_c + 243.5)).exp();
+    let es = 6.112 * (17.67 * temp_c / (temp_c + 243.5)).exp();
+    (e / es * 100.0).clamp(0.0, 100.0)
+}
+
+fn convective_temp_profile(p: &[f64], temp: &[f64], td: &[f64]) -> Option<f64> {
+    let sfc_p = *p.first()?;
+    let mmr = mean_mixratio(p, td, sfc_p, sfc_p - 100.0)?;
+    let steps = (sfc_p - 100.0).max(0.0).ceil() as usize;
+    for step in 0..steps {
+        let sample_p = sfc_p - step as f64;
+        let sample_t = interp_at_pressure(p, temp, sample_p);
+        let sat_mixr = crate::met::thermo::mixratio(sample_p, sample_t);
+        if sat_mixr.is_finite() && sat_mixr <= mmr {
+            let theta_ccl = (sample_t + crate::met::thermo::ZEROCNK)
+                * (1000.0 / sample_p).powf(crate::met::thermo::ROCP);
+            return Some(
+                theta_ccl * (sfc_p / 1000.0).powf(crate::met::thermo::ROCP)
+                    - crate::met::thermo::ZEROCNK,
+            );
+        }
+    }
+    None
+}
+
+fn dcape_profile(p: &[f64], temp: &[f64], td: &[f64], h: &[f64]) -> Option<f64> {
+    if p.len() < 2 || temp.len() != p.len() || td.len() != p.len() || h.len() != p.len() {
+        return None;
+    }
+    let sfc_p = p[0];
+    let mut min_thetae = f64::INFINITY;
+    let mut min_p = f64::NAN;
+    for &level_p in p {
+        if !level_p.is_finite() || level_p < sfc_p - 400.0 {
+            continue;
+        }
+        if let Some(thetae) = mean_thetae(p, temp, td, level_p, level_p - 100.0) {
+            if thetae < min_thetae {
+                min_thetae = thetae;
+                min_p = level_p - 50.0;
+            }
+        }
+    }
+    if !min_p.is_finite() {
+        return None;
+    }
+    let mut i = (0..p.len()).rev().find(|&idx| p[idx] >= min_p)?;
+    let mut parcel_t = crate::met::thermo::wet_bulb_temperature(
+        min_p,
+        interp_at_pressure(p, temp, min_p),
+        interp_at_pressure(p, td, min_p),
+    );
+    let mut parcel_p = min_p;
+    let mut env_t = interp_at_pressure(p, temp, parcel_p);
+    let mut height = interp_at_pressure(p, h, parcel_p);
+    let mut energy = 0.0;
+
+    while i > 0 {
+        i -= 1;
+        let next_p = p[i];
+        let next_env_t = temp[i];
+        let next_h = h[i];
+        let next_parcel_t = wet_lift(parcel_p, parcel_t, next_p);
+        if env_t.is_finite() && next_env_t.is_finite() && height.is_finite() && next_h.is_finite() {
+            let deficit_1 = (parcel_t - env_t) / (env_t + crate::met::thermo::ZEROCNK);
+            let deficit_2 =
+                (next_parcel_t - next_env_t) / (next_env_t + crate::met::thermo::ZEROCNK);
+            energy += crate::met::thermo::G * (deficit_1 + deficit_2) * 0.5 * (next_h - height);
+        }
+        parcel_p = next_p;
+        parcel_t = next_parcel_t;
+        env_t = next_env_t;
+        height = next_h;
+    }
+    Some(energy.max(0.0))
+}
+
+fn mean_thetae(p: &[f64], temp: &[f64], td: &[f64], pbot: f64, ptop: f64) -> Option<f64> {
+    if !pbot.is_finite() || !ptop.is_finite() || pbot <= ptop {
+        return None;
+    }
+    let steps = (pbot - ptop).ceil() as usize + 1;
+    let mut sum = 0.0;
+    let mut count = 0usize;
+    for step in 0..steps {
+        let sample_p = (pbot - step as f64).max(ptop);
+        let sample_t = interp_at_pressure(p, temp, sample_p);
+        let sample_td = interp_at_pressure(p, td, sample_p);
+        let thetae = crate::met::thermo::thetae(sample_p, sample_t, sample_td);
+        if thetae.is_finite() {
+            sum += thetae;
+            count += 1;
+        }
+    }
+    (count > 0).then_some(sum / count as f64)
+}
+
+fn wet_lift(p: f64, temp_c: f64, target_p: f64) -> f64 {
+    let theta_c = (temp_c + crate::met::thermo::ZEROCNK)
+        * (1000.0 / p).powf(crate::met::thermo::ROCP)
+        - crate::met::thermo::ZEROCNK;
+    let theta_m = theta_c - crate::met::thermo::wobf(theta_c) + crate::met::thermo::wobf(temp_c);
+    crate::met::thermo::satlift(target_p, theta_m)
 }

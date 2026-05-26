@@ -6,6 +6,10 @@ license.workspace = true
 description = "WRF point and box sounding extraction"
 
 [dependencies]
+ecape-rs = { git = "https://github.com/FahrenheitResearch/ecape-rs", rev = "414cac67ce1ce4bff64c7c74449ed4ccddb3ebc0" }
+image = { version = "0.25", default-features = false, features = ["png"] }
 serde = { version = "1", features = ["derive"] }
+sharprs = { path = "../../vendor/sharprs" }
 thiserror = "2"
 wrf-core = { path = "../wrf-core" }
+wrf-render = { path = "../wrf-render" }

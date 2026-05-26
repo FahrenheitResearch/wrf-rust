@@ -326,6 +326,44 @@ pub fn compute_mucape(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Ve
     Ok(cape)
 }
 
+fn compute_limited_cape(
+    f: &WrfFile,
+    t: usize,
+    opts: &ComputeOpts,
+    parcel_type: &str,
+    top_m: f64,
+) -> WrfResult<Vec<f64>> {
+    let mut limited = opts.clone();
+    limited.top_m = Some(top_m);
+    let (cape, _, _, _) =
+        compute_cape_fields(f, t, parcel_type, limited.top_m, limited.lake_interp)?;
+    Ok(cape)
+}
+
+pub fn compute_sb3cape(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    compute_limited_cape(f, t, opts, "sb", 3000.0)
+}
+
+pub fn compute_ml3cape(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    compute_limited_cape(f, t, opts, "ml", 3000.0)
+}
+
+pub fn compute_mu3cape(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    compute_limited_cape(f, t, opts, "mu", 3000.0)
+}
+
+pub fn compute_sb6cape(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    compute_limited_cape(f, t, opts, "sb", 6000.0)
+}
+
+pub fn compute_ml6cape(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    compute_limited_cape(f, t, opts, "ml", 6000.0)
+}
+
+pub fn compute_mu6cape(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    compute_limited_cape(f, t, opts, "mu", 6000.0)
+}
+
 pub fn compute_mucin(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let (_, cin, _, _) = compute_cape_fields(f, t, "mu", opts.top_m, opts.lake_interp)?;
     Ok(cin)

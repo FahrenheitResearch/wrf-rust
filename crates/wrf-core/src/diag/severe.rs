@@ -887,6 +887,120 @@ pub fn compute_ship(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<
         .collect())
 }
 
+/// Derecho Composite Parameter (dimensionless). `[ny, nx]`
+pub fn compute_dcp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    let dcape = crate::diag::extra::compute_dcape(f, t, opts)?;
+    let mucape = crate::diag::cape::compute_mucape(f, t, opts)?;
+    let shear06_ms = crate::diag::srh::compute_shear_0_6km(f, t, opts)?;
+    let mean06 = crate::diag::srh::compute_mean_wind_0_6km(f, t, opts)?;
+    let nxy = f.nxy();
+    let mean06_ms = vector_speed(&mean06, nxy);
+
+    Ok((0..nxy)
+        .map(|i| {
+            let shear06_kt = shear06_ms[i] / 0.514_444;
+            let mean06_kt = mean06_ms[i] / 0.514_444;
+            if !dcape[i].is_finite()
+                || !mucape[i].is_finite()
+                || !shear06_kt.is_finite()
+                || !mean06_kt.is_finite()
+            {
+                return 0.0;
+            }
+            (dcape[i] / 980.0).max(0.0)
+                * (mucape[i] / 2000.0).max(0.0)
+                * (shear06_kt / 20.0).max(0.0)
+                * (mean06_kt / 16.0).max(0.0)
+        })
+        .collect())
+}
+
+/// Wind Damage Parameter (dimensionless). `[ny, nx]`
+pub fn compute_wndg(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    let mlcape = crate::diag::cape::compute_mlcape(f, t, opts)?;
+    let mlcin = crate::diag::cape::compute_mlcin(f, t, opts)?;
+    let lr03 = crate::diag::extra::compute_lapse_rate_0_3km(f, t, opts)?;
+    let mut wind_opts = opts.clone();
+    wind_opts.bottom_m = Some(1000.0);
+    wind_opts.top_m = Some(3500.0);
+    let mean_wind = crate::diag::srh::compute_mean_wind(f, t, &wind_opts)?;
+    let mean_wind_ms = vector_speed(&mean_wind, f.nxy());
+
+    Ok((0..f.nxy())
+        .map(|i| {
+            if !mlcape[i].is_finite()
+                || !mlcin[i].is_finite()
+                || !lr03[i].is_finite()
+                || !mean_wind_ms[i].is_finite()
+            {
+                return 0.0;
+            }
+            let lr_term = if lr03[i] < 7.0 { 0.0 } else { lr03[i] };
+            let cin = mlcin[i].max(-50.0);
+            (mlcape[i] / 2000.0)
+                * (lr_term / 9.0)
+                * (mean_wind_ms[i] / 15.0)
+                * ((50.0 + cin) / 40.0)
+        })
+        .collect())
+}
+
+/// Enhanced Stretching Potential (dimensionless). `[ny, nx]`
+pub fn compute_esp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    let ml3cape = crate::diag::cape::compute_ml3cape(f, t, opts)?;
+    let mlcape = crate::diag::cape::compute_mlcape(f, t, opts)?;
+    let lr03 = crate::diag::extra::compute_lapse_rate_0_3km(f, t, opts)?;
+
+    Ok((0..f.nxy())
+        .map(|i| {
+            if !ml3cape[i].is_finite() || !mlcape[i].is_finite() || !lr03[i].is_finite() {
+                return 0.0;
+            }
+            if lr03[i] < 7.0 || mlcape[i] < 250.0 {
+                0.0
+            } else {
+                (ml3cape[i] / 50.0) * (lr03[i] - 7.0)
+            }
+        })
+        .collect())
+}
+
+/// MCS Maintenance Probability (0-1). `[ny, nx]`
+pub fn compute_mmp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    let mucape = crate::diag::cape::compute_mucape(f, t, opts)?;
+    let max_shear = compute_max_bulk_shear_0_1_to_6_10(f, t)?;
+    let mut lr_opts = opts.clone();
+    lr_opts.bottom_m = Some(3000.0);
+    lr_opts.top_m = Some(8000.0);
+    let lr38 = crate::diag::extra::compute_lapse_rate(f, t, &lr_opts)?;
+    let mut wind_opts = opts.clone();
+    wind_opts.bottom_m = Some(3000.0);
+    wind_opts.top_m = Some(12000.0);
+    let mean_wind = crate::diag::srh::compute_mean_wind(f, t, &wind_opts)?;
+    let mean_wind_ms = vector_speed(&mean_wind, f.nxy());
+
+    Ok((0..f.nxy())
+        .map(|i| {
+            if !mucape[i].is_finite()
+                || !max_shear[i].is_finite()
+                || !lr38[i].is_finite()
+                || !mean_wind_ms[i].is_finite()
+            {
+                return 0.0;
+            }
+            if mucape[i] < 100.0 {
+                return 0.0;
+            }
+            let exponent = 13.0
+                - 4.59e-2 * max_shear[i]
+                - 1.16 * lr38[i]
+                - 6.17e-4 * mucape[i]
+                - 0.17 * mean_wind_ms[i];
+            1.0 / (1.0 + exponent.exp())
+        })
+        .collect())
+}
+
 /// Bulk Richardson Number (dimensionless). `[ny, nx]`
 ///
 /// Uses BRN shear rather than plain 0-6 km bulk shear:
@@ -975,6 +1089,53 @@ fn interp_wind_at_height(
         let last = h_prof.len() - 1;
         (u_prof[last], v_prof[last])
     }
+}
+
+fn vector_speed(output: &[f64], nxy: usize) -> Vec<f64> {
+    if output.len() < 2 * nxy {
+        return vec![f64::NAN; nxy];
+    }
+    output[..nxy]
+        .iter()
+        .zip(output[nxy..2 * nxy].iter())
+        .map(|(&u, &v)| (u * u + v * v).sqrt())
+        .collect()
+}
+
+fn compute_max_bulk_shear_0_1_to_6_10(f: &WrfFile, t: usize) -> WrfResult<Vec<f64>> {
+    let u = f.u_destag(t)?;
+    let v = f.v_destag(t)?;
+    let h_agl = f.height_agl(t)?;
+    let u10 = f.u10(t)?;
+    let v10 = f.v10(t)?;
+    let nxy = f.nxy();
+    let nz = f.nz;
+
+    Ok((0..nxy)
+        .into_par_iter()
+        .map(|ij| {
+            let (u_prof, v_prof, h_prof) =
+                build_augmented_wind_profile(&u, &v, &h_agl, u10[ij], v10[ij], nz, nxy, ij);
+            let mut max_shear = f64::NAN;
+            for low in 0..h_prof.len() {
+                if h_prof[low] < 0.0 || h_prof[low] > 1000.0 {
+                    continue;
+                }
+                for high in 0..h_prof.len() {
+                    if h_prof[high] < 6000.0 || h_prof[high] > 10000.0 {
+                        continue;
+                    }
+                    let shear = ((u_prof[high] - u_prof[low]).powi(2)
+                        + (v_prof[high] - v_prof[low]).powi(2))
+                    .sqrt();
+                    if shear.is_finite() && (!max_shear.is_finite() || shear > max_shear) {
+                        max_shear = shear;
+                    }
+                }
+            }
+            max_shear
+        })
+        .collect())
 }
 
 fn critical_angle_from_profile(
