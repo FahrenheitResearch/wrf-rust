@@ -7,6 +7,7 @@ pub enum WrfUnits {
     Kelvin,
     Celsius,
     Fahrenheit,
+    CelsiusPerKilometer,
     // Pressure
     Pascal,
     Hectopascal,
@@ -41,6 +42,7 @@ pub enum WrfUnits {
     M2PerS2,
     // Vorticity
     PerSecond,
+    PotentialVorticityUnit,
     // Dimensionless (STP, SCP, etc.)
     Dimensionless,
     // Precipitable water
@@ -55,6 +57,12 @@ pub fn parse_units(s: &str) -> WrfResult<WrfUnits> {
         "k" | "kelvin" => Ok(WrfUnits::Kelvin),
         "c" | "degc" | "celsius" | "degrees_celsius" | "degree_celsius" => Ok(WrfUnits::Celsius),
         "f" | "degf" | "fahrenheit" | "degrees_fahrenheit" => Ok(WrfUnits::Fahrenheit),
+        "c/km"
+        | "degc/km"
+        | "degc km-1"
+        | "c km-1"
+        | "celsius_per_kilometer"
+        | "degrees_celsius_per_kilometer" => Ok(WrfUnits::CelsiusPerKilometer),
         // Pressure
         "pa" | "pascal" | "pascals" => Ok(WrfUnits::Pascal),
         "hpa" | "hectopascal" | "hectopascals" => Ok(WrfUnits::Hectopascal),
@@ -91,6 +99,9 @@ pub fn parse_units(s: &str) -> WrfResult<WrfUnits> {
         "m2/s2" | "m2 s-2" | "m^2/s^2" => Ok(WrfUnits::M2PerS2),
         // Vorticity
         "s-1" | "1/s" | "/s" => Ok(WrfUnits::PerSecond),
+        "pvu" | "potential_vorticity_unit" | "potential_vorticity_units" => {
+            Ok(WrfUnits::PotentialVorticityUnit)
+        }
         // Dimensionless
         "" | "dimensionless" | "none" | "unitless" => Ok(WrfUnits::Dimensionless),
         // Precipitable water / depth
@@ -202,4 +213,55 @@ pub fn convert_array(values: &mut [f64], from: WrfUnits, to: WrfUnits) -> WrfRes
         *v = convert_value(*v, from, to).unwrap();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_potential_vorticity_units() {
+        assert_eq!(
+            parse_units("PVU").unwrap(),
+            WrfUnits::PotentialVorticityUnit
+        );
+        assert_eq!(
+            parse_units("potential_vorticity_units").unwrap(),
+            WrfUnits::PotentialVorticityUnit
+        );
+
+        let mut values = vec![-1.0, 0.0, 2.5];
+        convert_array(
+            &mut values,
+            WrfUnits::PotentialVorticityUnit,
+            WrfUnits::PotentialVorticityUnit,
+        )
+        .unwrap();
+        assert_eq!(values, vec![-1.0, 0.0, 2.5]);
+    }
+
+    #[test]
+    fn parses_lapse_rate_units() {
+        assert_eq!(
+            parse_units("degC/km").unwrap(),
+            WrfUnits::CelsiusPerKilometer
+        );
+        assert_eq!(
+            parse_units("C km-1").unwrap(),
+            WrfUnits::CelsiusPerKilometer
+        );
+        assert_eq!(
+            parse_units("degrees_celsius_per_kilometer").unwrap(),
+            WrfUnits::CelsiusPerKilometer
+        );
+
+        let mut values = vec![5.5, 6.5, 8.0];
+        convert_array(
+            &mut values,
+            WrfUnits::CelsiusPerKilometer,
+            WrfUnits::CelsiusPerKilometer,
+        )
+        .unwrap();
+        assert_eq!(values, vec![5.5, 6.5, 8.0]);
+    }
 }

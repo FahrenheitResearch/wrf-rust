@@ -9,8 +9,8 @@ use crate::overlay::{
 use crate::presentation::{ProductVisualMode, RenderPresentation, StaticPlotStyle, TitleAnchor};
 use crate::rasterize;
 use crate::request::{
-    ChromeScale, ColorbarOrientation, DomainFrame, ProjectedLabelPlacement, ProjectedMarkerShape,
-    ProjectedPlaceLabelPriority, RasterSampleMode,
+    ChromeScale, ColorbarOrientation, DomainFrame, DomainFrameSource, OverlayLegend,
+    ProjectedLabelPlacement, ProjectedMarkerShape, ProjectedPlaceLabelPriority, RasterSampleMode,
 };
 use crate::text;
 use image::codecs::png::{CompressionType, FilterType as PngFilterType, PngEncoder};
@@ -20,7 +20,7 @@ use image::ImageEncoder;
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Instant;
@@ -45,7 +45,9 @@ pub struct RenderOpts {
     pub subtitle_right: Option<String>,
     pub cbar_tick_step: Option<f64>,
     pub cbar_ticks: Option<Vec<f64>>,
+    pub colorbar_label: Option<String>,
     pub colorbar_mode: crate::colormap::LegendMode,
+    pub overlay_legends: Vec<OverlayLegend>,
     pub chrome_scale: ChromeScale,
     pub supersample_factor: u32,
     pub supersample_sharpen: bool,
@@ -158,7 +160,9 @@ impl Default for RenderOpts {
             subtitle_right: None,
             cbar_tick_step: None,
             cbar_ticks: None,
+            colorbar_label: None,
             colorbar_mode: crate::colormap::LegendMode::Stepped,
+            overlay_legends: Vec::new(),
             chrome_scale: ChromeScale::default(),
             supersample_factor: 1,
             supersample_sharpen: true,
@@ -219,6 +223,25 @@ impl LocalRect {
     fn width(self) -> u32 {
         self.max_x.saturating_sub(self.min_x).saturating_add(1)
     }
+
+    fn height(self) -> u32 {
+        self.max_y.saturating_sub(self.min_y).saturating_add(1)
+    }
+
+    fn expanded_within(self, padding: u32, max_w: u32, max_h: u32) -> Self {
+        Self {
+            min_x: self.min_x.saturating_sub(padding),
+            max_x: self
+                .max_x
+                .saturating_add(padding)
+                .min(max_w.saturating_sub(1)),
+            min_y: self.min_y.saturating_sub(padding),
+            max_y: self
+                .max_y
+                .saturating_add(padding)
+                .min(max_h.saturating_sub(1)),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -277,6 +300,7 @@ struct VariableLayerTiming {
     barb_ms: u128,
     outside_frame_clear_ms: u128,
     domain_clip_rect: Option<LocalRect>,
+    domain_frame_rect: Option<LocalRect>,
     projection_clip_mask_present: bool,
 }
 
@@ -835,6 +859,107 @@ fn ellipsize_text_to_width(text: &str, max_width: u32, scale: u32, bold: bool) -
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SubtitlePlacement {
+    text: String,
+    x: i32,
+    width: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct SubtitleRowLayout {
+    left: Option<SubtitlePlacement>,
+    center: Option<SubtitlePlacement>,
+    right: Option<SubtitlePlacement>,
+}
+
+fn layout_subtitle_row(
+    left: Option<&str>,
+    center: Option<&str>,
+    right: Option<&str>,
+    chrome_left: u32,
+    chrome_right: u32,
+    chrome_center: u32,
+    scale: u32,
+    row_gap: u32,
+) -> SubtitleRowLayout {
+    let row_width = chrome_right.saturating_sub(chrome_left);
+    if row_width == 0 {
+        return SubtitleRowLayout::default();
+    }
+
+    let trimmed_left = left.map(str::trim).filter(|text| !text.is_empty());
+    let trimmed_center = center.map(str::trim).filter(|text| !text.is_empty());
+    let trimmed_right = right.map(str::trim).filter(|text| !text.is_empty());
+
+    let right = trimmed_right.map(|text| {
+        let fitted = ellipsize_text_to_width(text, row_width, scale, false);
+        let width = measure_text_width(&fitted, scale, false).min(row_width);
+        SubtitlePlacement {
+            text: fitted,
+            x: chrome_right.saturating_sub(width) as i32,
+            width,
+        }
+    });
+
+    let reserved_right = right
+        .as_ref()
+        .map(|placement| placement.width.saturating_add(row_gap))
+        .unwrap_or(0);
+    let mut left_budget = row_width.saturating_sub(reserved_right);
+    if trimmed_center.is_some() {
+        left_budget = left_budget.min(row_width.saturating_mul(38) / 100);
+    }
+    let left = trimmed_left.and_then(|text| {
+        if left_budget == 0 {
+            return None;
+        }
+        let fitted = ellipsize_text_to_width(text, left_budget, scale, false);
+        let width = measure_text_width(&fitted, scale, false).min(left_budget);
+        Some(SubtitlePlacement {
+            text: fitted,
+            x: chrome_left as i32,
+            width,
+        })
+    });
+
+    let center = trimmed_center.and_then(|text| {
+        let left_bound = left
+            .as_ref()
+            .map(|placement| {
+                (placement.x.max(0) as u32)
+                    .saturating_add(placement.width)
+                    .saturating_add(row_gap)
+            })
+            .unwrap_or(chrome_left);
+        let right_bound = right
+            .as_ref()
+            .map(|placement| (placement.x.max(0) as u32).saturating_sub(row_gap))
+            .unwrap_or(chrome_right);
+        if right_bound <= left_bound {
+            return None;
+        }
+
+        let budget = right_bound.saturating_sub(left_bound);
+        let fitted = ellipsize_text_to_width(text, budget, scale, false);
+        let width = measure_text_width(&fitted, scale, false).min(budget);
+        let centered_x = centered_text_left(&fitted, chrome_center, scale, false).max(0) as u32;
+        let max_x = right_bound.saturating_sub(width);
+        let x = centered_x.clamp(left_bound, max_x);
+        Some(SubtitlePlacement {
+            text: fitted,
+            x: x as i32,
+            width,
+        })
+    });
+
+    SubtitleRowLayout {
+        left,
+        center,
+        right,
+    }
+}
+
 fn ellipsize_text_to_width_with_factor(
     text: &str,
     max_width: u32,
@@ -879,6 +1004,7 @@ fn filter_tick_labels_to_fit(
     label_right_bound: u32,
     img_w: u32,
     text_scale: u32,
+    colorbar_label: Option<&str>,
 ) -> Vec<(f64, i32, String)> {
     let min_gap_px = (6 * text_scale.max(1)) as i32;
     let min_x = label_left_bound.min(img_w.saturating_sub(1)) as i32;
@@ -894,7 +1020,7 @@ fn filter_tick_labels_to_fit(
             continue;
         }
         let px = cbar_x as f64 + frac * cbar_w as f64;
-        let label = format_colorbar_tick(*tick_val, ticks);
+        let label = format_colorbar_tick_with_label(*tick_val, ticks, colorbar_label);
         let lw = text::text_width(&label, text_scale) as i32;
         if lw >= max_x.saturating_sub(min_x) {
             continue;
@@ -919,6 +1045,7 @@ fn filter_vertical_tick_labels_to_fit(
     cbar_h: u32,
     img_h: u32,
     text_scale: u32,
+    colorbar_label: Option<&str>,
 ) -> Vec<(i32, String)> {
     let line_h = text::regular_line_height(text_scale) as i32;
     let min_gap_px = (3 * text_scale.max(1)) as i32;
@@ -936,7 +1063,7 @@ fn filter_vertical_tick_labels_to_fit(
             continue;
         }
         let py = cbar_y as f64 + (1.0 - frac) * cbar_h as f64;
-        let label = format_colorbar_tick(tick_val, ticks);
+        let label = format_colorbar_tick_with_label(tick_val, ticks, colorbar_label);
         let max_y = (img_h as i32).saturating_sub(line_h).max(0);
         let y = (py.round() as i32 - line_h / 2).clamp(0, max_y);
         if y < last_bottom.saturating_add(min_gap_px) {
@@ -955,6 +1082,33 @@ fn format_colorbar_tick(value: f64, ticks: &[f64]) -> String {
     } else {
         text::format_tick(value)
     }
+}
+
+fn format_colorbar_tick_with_label(
+    value: f64,
+    ticks: &[f64],
+    colorbar_label: Option<&str>,
+) -> String {
+    let mut tick = format_colorbar_tick(value, ticks);
+    let Some(label) = colorbar_label
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+    else {
+        return tick;
+    };
+    let Some(max_tick) = ticks
+        .iter()
+        .copied()
+        .filter(|tick| tick.is_finite())
+        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+    else {
+        return tick;
+    };
+    if (value - max_tick).abs() <= 1.0e-9 {
+        tick.push(' ');
+        tick.push_str(label);
+    }
+    tick
 }
 
 fn ticks_need_fixed_two_decimals(ticks: &[f64]) -> bool {
@@ -1621,6 +1775,7 @@ fn static_base_cache_key(
     opts.domain_frame.is_some().hash(&mut hasher);
     if let Some(frame) = opts.domain_frame {
         frame.clear_outside.hash(&mut hasher);
+        std::mem::discriminant(&frame.source).hash(&mut hasher);
     }
     domain_frame_rect
         .map(|rect| (rect.min_x, rect.max_x, rect.min_y, rect.max_y).hash(&mut hasher));
@@ -2010,10 +2165,116 @@ fn compute_projected_domain_frame_rect(
     pixel_points: &[Option<(f64, f64)>],
     map_w: u32,
     map_h: u32,
+    overlay_padding_px: u32,
 ) -> Option<LocalRect> {
     let mask =
         rasterize::rasterize_projected_coverage_mask(grid.ny, grid.nx, pixel_points, map_w, map_h);
-    inner_rect_from_coverage(&mask, frame.inset_px)
+    let rect = inner_rect_from_coverage(&mask, frame.inset_px)?;
+    let cell_padding = estimated_cell_footprint_padding_px(grid, pixel_points, map_w, map_h);
+    let padding = cell_padding.saturating_add(overlay_padding_px);
+    Some(rect.expanded_within(padding, map_w, map_h))
+}
+
+fn estimated_cell_footprint_padding_px(
+    grid: &ProjectedGrid,
+    pixel_points: &[Option<(f64, f64)>],
+    map_w: u32,
+    map_h: u32,
+) -> u32 {
+    if grid.nx == 0 || grid.ny == 0 || pixel_points.len() != grid.nx * grid.ny {
+        return 0;
+    }
+
+    let mut distances = Vec::new();
+    let max_plausible = (map_w as f64).hypot(map_h as f64).max(1.0);
+    for j in 0..grid.ny {
+        for i in 0..grid.nx {
+            let idx = j * grid.nx + i;
+            let Some((x0, y0)) = pixel_points[idx] else {
+                continue;
+            };
+            for (jj, ii) in [(j, i + 1), (j + 1, i)] {
+                if jj >= grid.ny || ii >= grid.nx {
+                    continue;
+                }
+                let Some((x1, y1)) = pixel_points[jj * grid.nx + ii] else {
+                    continue;
+                };
+                let distance = (x1 - x0).hypot(y1 - y0);
+                if distance.is_finite() && distance > 0.0 && distance <= max_plausible {
+                    distances.push(distance);
+                }
+            }
+        }
+    }
+
+    if distances.is_empty() {
+        return 0;
+    }
+
+    distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let idx = distances.len().saturating_sub(1).saturating_mul(3) / 4;
+    (distances[idx] * 0.5).ceil().max(0.0) as u32
+}
+
+fn overlay_frame_padding_px(opts: &RenderOpts, layout: &Layout) -> u32 {
+    let mut padding = 0u32;
+    for barb in &opts.barbs {
+        let width = barb.width.saturating_add(barb.halo_width.saturating_mul(2));
+        padding = padding.max(barb_glyph_margin_px(barb.length_px, width).ceil() as u32);
+    }
+    for contour in &opts.contours {
+        let line_width = contour
+            .width
+            .max(contour.major_width)
+            .saturating_add(contour.halo_width.saturating_mul(2));
+        let label_padding = if contour.labels {
+            text::regular_line_height(1).saturating_add(8)
+        } else {
+            0
+        };
+        padding = padding.max(line_width.saturating_add(label_padding));
+    }
+    for point in &opts.projected_points {
+        padding = padding.max(
+            point
+                .radius_px
+                .saturating_add(point.width_px)
+                .saturating_add(2),
+        );
+    }
+    for line in &opts.projected_lines {
+        padding = padding.max(line.width.saturating_add(2));
+    }
+    for label in &opts.projected_place_labels {
+        let style = &label.style;
+        let marker_padding = style
+            .marker_radius_px
+            .saturating_add(style.marker_outline_width)
+            .saturating_add(2);
+        let label_width = label
+            .label
+            .as_deref()
+            .map(|text| {
+                measure_text_width_with_factor(
+                    text,
+                    style.label_scale.max(1),
+                    1.0,
+                    style.label_bold,
+                )
+            })
+            .unwrap_or(0);
+        let label_padding = style
+            .label_halo_width_px
+            .saturating_mul(2)
+            .saturating_add(label_width)
+            .saturating_add(style.label_offset_x_px.unsigned_abs())
+            .saturating_add(style.label_offset_y_px.unsigned_abs());
+        padding = padding.max(marker_padding.saturating_add(label_padding));
+    }
+
+    let cap = layout.map_w.min(layout.map_h) / 3;
+    padding.min(cap)
 }
 
 fn scale_render_opts_for_supersample(opts: &RenderOpts, factor: u32) -> RenderOpts {
@@ -2055,9 +2316,13 @@ fn scale_render_opts_for_supersample(opts: &RenderOpts, factor: u32) -> RenderOp
     }
     for contour in &mut scaled.contours {
         contour.width = contour.width.max(1).saturating_mul(factor);
+        contour.major_width = contour.major_width.max(1).saturating_mul(factor);
+        contour.halo_width = contour.halo_width.saturating_mul(factor);
     }
     for barb in &mut scaled.barbs {
         barb.width = barb.width.max(1).saturating_mul(factor);
+        barb.halo_width = barb.halo_width.saturating_mul(factor);
+        barb.spacing_px *= factor as f64;
         barb.length_px *= factor as f64;
     }
     scaled.supersample_factor = 1;
@@ -2428,6 +2693,7 @@ fn maybe_draw_contour_label(
     img: &mut RgbaImage,
     layout: &Layout,
     overlay: &ContourOverlay,
+    level_index: usize,
     level: f64,
     x0: f64,
     y0: f64,
@@ -2437,7 +2703,7 @@ fn maybe_draw_contour_label(
     label_placer: &mut ContourLabelPlacer,
 ) {
     let segment_len = (x1 - x0).hypot(y1 - y0);
-    if *label_drawn || segment_len <= 24.0 {
+    if *label_drawn || segment_len <= 24.0 || !contour_level_allows_label(overlay, level_index) {
         return;
     }
 
@@ -2477,8 +2743,8 @@ fn maybe_draw_contour_label(
         tx,
         ty,
         overlay.color,
-        Rgba::with_alpha(255, 255, 255, 210),
-        1,
+        overlay.halo_color,
+        overlay.halo_width,
         1,
         1.0,
         false,
@@ -2486,10 +2752,57 @@ fn maybe_draw_contour_label(
     *label_drawn = true;
 }
 
+fn contour_level_is_major(overlay: &ContourOverlay, level_index: usize) -> bool {
+    let major_every = overlay.major_every.max(1);
+    level_index % major_every == 0
+}
+
+fn contour_level_width(overlay: &ContourOverlay, level_index: usize) -> u32 {
+    if contour_level_is_major(overlay, level_index) {
+        overlay.major_width.max(overlay.width).max(1)
+    } else {
+        overlay.width.max(1)
+    }
+}
+
+fn contour_level_allows_label(overlay: &ContourOverlay, level_index: usize) -> bool {
+    overlay.labels && level_index % overlay.label_every.max(1) == 0
+}
+
+fn draw_contour_segment_line(
+    img: &mut RgbaImage,
+    layout: &Layout,
+    overlay: &ContourOverlay,
+    level_index: usize,
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+) {
+    let width = contour_level_width(overlay, level_index);
+    let x0 = layout.map_x as f64 + x0;
+    let y0 = layout.map_y as f64 + y0;
+    let x1 = layout.map_x as f64 + x1;
+    let y1 = layout.map_y as f64 + y1;
+    if overlay.halo_color.a > 0 && overlay.halo_width > 0 {
+        draw::draw_line_aa_width(
+            img,
+            x0,
+            y0,
+            x1,
+            y1,
+            overlay.halo_color,
+            width.saturating_add(overlay.halo_width.saturating_mul(2)),
+        );
+    }
+    draw::draw_line_aa_width(img, x0, y0, x1, y1, overlay.color, width);
+}
+
 fn draw_contour_segments_unmasked(
     img: &mut RgbaImage,
     layout: &Layout,
     overlay: &ContourOverlay,
+    level_index: usize,
     level: f64,
     pts: &[(f64, f64); 4],
     count: usize,
@@ -2505,19 +2818,12 @@ fn draw_contour_segments_unmasked(
     for &(a, b) in segments {
         let (x0, y0) = pts[a];
         let (x1, y1) = pts[b];
-        draw::draw_line_aa_width(
-            img,
-            layout.map_x as f64 + x0,
-            layout.map_y as f64 + y0,
-            layout.map_x as f64 + x1,
-            layout.map_y as f64 + y1,
-            overlay.color,
-            overlay.width,
-        );
+        draw_contour_segment_line(img, layout, overlay, level_index, x0, y0, x1, y1);
         maybe_draw_contour_label(
             img,
             layout,
             overlay,
+            level_index,
             level,
             x0,
             y0,
@@ -2533,6 +2839,7 @@ fn draw_contour_segments_masked(
     img: &mut RgbaImage,
     layout: &Layout,
     overlay: &ContourOverlay,
+    level_index: usize,
     level: f64,
     pts: &[(f64, f64); 4],
     count: usize,
@@ -2552,19 +2859,12 @@ fn draw_contour_segments_masked(
         if !segment_intersects_mask(mask, x0, y0, x1, y1) {
             continue;
         }
-        draw::draw_line_aa_width(
-            img,
-            layout.map_x as f64 + x0,
-            layout.map_y as f64 + y0,
-            layout.map_x as f64 + x1,
-            layout.map_y as f64 + y1,
-            overlay.color,
-            overlay.width,
-        );
+        draw_contour_segment_line(img, layout, overlay, level_index, x0, y0, x1, y1);
         maybe_draw_contour_label(
             img,
             layout,
             overlay,
+            level_index,
             level,
             x0,
             y0,
@@ -2640,7 +2940,7 @@ fn draw_contours_bucketed(
 
     if let Some(mask) = clip_mask {
         for (level_index, &level) in overlay.levels.iter().enumerate() {
-            let mut label_drawn = !overlay.labels;
+            let mut label_drawn = !contour_level_allows_label(overlay, level_index);
             for &base in &buckets[level_index] {
                 let Some((pts, count)) =
                     contour_cell_intersections(layout, overlay, pixel_points, base as usize, level)
@@ -2651,6 +2951,7 @@ fn draw_contours_bucketed(
                     img,
                     layout,
                     overlay,
+                    level_index,
                     level,
                     &pts,
                     count,
@@ -2662,7 +2963,7 @@ fn draw_contours_bucketed(
         }
     } else {
         for (level_index, &level) in overlay.levels.iter().enumerate() {
-            let mut label_drawn = !overlay.labels;
+            let mut label_drawn = !contour_level_allows_label(overlay, level_index);
             for &base in &buckets[level_index] {
                 let Some((pts, count)) =
                     contour_cell_intersections(layout, overlay, pixel_points, base as usize, level)
@@ -2673,6 +2974,7 @@ fn draw_contours_bucketed(
                     img,
                     layout,
                     overlay,
+                    level_index,
                     level,
                     &pts,
                     count,
@@ -2692,8 +2994,8 @@ fn draw_contours_legacy(
     clip_mask: Option<&RgbaImage>,
 ) {
     let mut label_placer = ContourLabelPlacer::default();
-    for &level in &overlay.levels {
-        let mut label_drawn = !overlay.labels;
+    for (level_index, &level) in overlay.levels.iter().enumerate() {
+        let mut label_drawn = !contour_level_allows_label(overlay, level_index);
         for j in 0..(overlay.ny - 1) {
             let row_base = j * overlay.nx;
             for i in 0..(overlay.nx - 1) {
@@ -2709,6 +3011,7 @@ fn draw_contours_legacy(
                         img,
                         layout,
                         overlay,
+                        level_index,
                         level,
                         &pts,
                         count,
@@ -2721,6 +3024,7 @@ fn draw_contours_legacy(
                         img,
                         layout,
                         overlay,
+                        level_index,
                         level,
                         &pts,
                         count,
@@ -2958,9 +3262,18 @@ fn draw_barbs(
     }
     let sx = overlay.stride_x.max(1);
     let sy = overlay.stride_y.max(1);
+    let spacing_px = overlay.spacing_px;
+    let use_pixel_spacing = spacing_px.is_finite() && spacing_px > 0.0;
+    let mut occupied_cells: HashMap<(i32, i32), (f64, f64)> = HashMap::new();
 
-    for j in (0..overlay.ny).step_by(sy) {
-        for i in (0..overlay.nx).step_by(sx) {
+    for j in 0..overlay.ny {
+        if !use_pixel_spacing && j % sy != 0 {
+            continue;
+        }
+        for i in 0..overlay.nx {
+            if !use_pixel_spacing && i % sx != 0 {
+                continue;
+            }
             let idx = j * overlay.nx + i;
             if idx >= overlay.u.len() || idx >= overlay.v.len() {
                 continue;
@@ -2988,28 +3301,88 @@ fn draw_barbs(
                     continue;
                 }
             }
+            let local_x = x - layout.map_x as f64;
+            let local_y = y - layout.map_y as f64;
             if !barb_glyph_fits_map_rect(
-                x - layout.map_x as f64,
-                y - layout.map_y as f64,
+                local_x,
+                local_y,
                 layout.map_w,
                 layout.map_h,
                 overlay.length_px,
-                overlay.width,
+                overlay
+                    .width
+                    .saturating_add(overlay.halo_width.saturating_mul(2)),
             ) {
                 continue;
             }
-            draw::draw_wind_barb(
-                img,
-                x,
-                y,
-                overlay.u[idx],
-                overlay.v[idx],
-                overlay.color,
-                overlay.length_px,
-                overlay.width,
-            );
+            if use_pixel_spacing
+                && !accept_pixel_spaced_barb(&mut occupied_cells, local_x, local_y, spacing_px)
+            {
+                continue;
+            }
+            draw_wind_barb_with_halo(img, overlay, x, y, overlay.u[idx], overlay.v[idx]);
         }
     }
+}
+
+fn accept_pixel_spaced_barb(
+    occupied_cells: &mut HashMap<(i32, i32), (f64, f64)>,
+    local_x: f64,
+    local_y: f64,
+    spacing_px: f64,
+) -> bool {
+    if spacing_px <= 0.0 || !local_x.is_finite() || !local_y.is_finite() {
+        return false;
+    }
+    let cell_x = (local_x / spacing_px).floor() as i32;
+    let cell_y = (local_y / spacing_px).floor() as i32;
+    let min_distance_sq = spacing_px * spacing_px;
+    for dy in -1..=1 {
+        for dx in -1..=1 {
+            if let Some((other_x, other_y)) = occupied_cells.get(&(cell_x + dx, cell_y + dy)) {
+                let dist_sq = (local_x - other_x).powi(2) + (local_y - other_y).powi(2);
+                if dist_sq < min_distance_sq {
+                    return false;
+                }
+            }
+        }
+    }
+    occupied_cells.insert((cell_x, cell_y), (local_x, local_y));
+    true
+}
+
+fn draw_wind_barb_with_halo(
+    img: &mut RgbaImage,
+    overlay: &BarbOverlay,
+    x: f64,
+    y: f64,
+    u: f64,
+    v: f64,
+) {
+    if overlay.halo_color.a > 0 && overlay.halo_width > 0 {
+        draw::draw_wind_barb(
+            img,
+            x,
+            y,
+            u,
+            v,
+            overlay.halo_color,
+            overlay.length_px,
+            overlay
+                .width
+                .saturating_add(overlay.halo_width.saturating_mul(2)),
+        );
+    }
+    draw::draw_wind_barb(
+        img,
+        x,
+        y,
+        u,
+        v,
+        overlay.color,
+        overlay.length_px,
+        overlay.width,
+    );
 }
 
 fn barb_glyph_fits_map_rect(
@@ -3023,11 +3396,15 @@ fn barb_glyph_fits_map_rect(
     if map_w == 0 || map_h == 0 {
         return false;
     }
-    let margin = length_px.max(0.0) + (width.max(1) as f64 * 4.0) + 2.0;
+    let margin = barb_glyph_margin_px(length_px, width);
     local_x >= margin
         && local_y >= margin
         && local_x <= map_w.saturating_sub(1) as f64 - margin
         && local_y <= map_h.saturating_sub(1) as f64 - margin
+}
+
+fn barb_glyph_margin_px(length_px: f64, width: u32) -> f64 {
+    length_px.max(0.0) + (width.max(1) as f64 * 4.0) + 2.0
 }
 
 fn draw_variable_layers(
@@ -3039,6 +3416,7 @@ fn draw_variable_layers(
     layout: &Layout,
     projected_pixels: Option<&[Option<(f64, f64)>]>,
     domain_frame_rect: Option<LocalRect>,
+    overlay_padding_px: u32,
     polygon_clip_rect: (i32, i32, i32, i32),
     canvas_background: Rgba,
 ) -> VariableLayerTiming {
@@ -3111,9 +3489,11 @@ fn draw_variable_layers(
         } else {
             None
         };
+    let effective_domain_frame_rect =
+        effective_domain_frame_rect(opts, &map_img, domain_frame_rect, overlay_padding_px);
 
     let frame_clip_rect = match opts.domain_frame {
-        Some(frame) if frame.clear_outside => domain_frame_rect,
+        Some(frame) if frame.clear_outside => effective_domain_frame_rect,
         _ => None,
     };
     let domain_clip_rect = frame_clip_rect.or_else(|| {
@@ -3225,7 +3605,7 @@ fn draw_variable_layers(
         if let Some(frame) = opts.presentation.chrome.frame_color {
             draw_local_mask_outline(img, layout, mask, frame, 1);
         }
-    } else if let (Some(frame), Some(rect)) = (opts.domain_frame, domain_frame_rect) {
+    } else if let (Some(frame), Some(rect)) = (opts.domain_frame, effective_domain_frame_rect) {
         if frame.clear_outside {
             clear_map_outside_local_rect(img, layout, rect, canvas_background);
         }
@@ -3247,7 +3627,27 @@ fn draw_variable_layers(
         barb_ms,
         outside_frame_clear_ms,
         domain_clip_rect,
+        domain_frame_rect: effective_domain_frame_rect,
         projection_clip_mask_present: projection_clip_mask.is_some(),
+    }
+}
+
+fn effective_domain_frame_rect(
+    opts: &RenderOpts,
+    map_img: &RgbaImage,
+    projected_domain_frame_rect: Option<LocalRect>,
+    overlay_padding_px: u32,
+) -> Option<LocalRect> {
+    match opts.domain_frame {
+        Some(frame) if matches!(frame.source, DomainFrameSource::RasterAlpha) => {
+            raster_alpha_bounds(map_img)
+                .map(LocalRect::from_bounds)
+                .and_then(|rect| inset_rect(rect, frame.inset_px))
+                .map(|rect| {
+                    rect.expanded_within(overlay_padding_px, map_img.width(), map_img.height())
+                })
+        }
+        _ => projected_domain_frame_rect,
     }
 }
 
@@ -3274,37 +3674,21 @@ fn draw_chrome_and_colorbar(
         .title
         .as_deref()
         .map(|text| ellipsize_text_to_width(text, row_width, layout.text_scale, true));
-    let left_subtitle = opts
-        .subtitle_left
-        .as_deref()
-        .map(str::trim)
-        .filter(|text| !text.is_empty());
-    let center_subtitle = opts
-        .subtitle_center
-        .as_deref()
-        .map(str::trim)
-        .filter(|text| !text.is_empty());
-    let right_subtitle = opts
-        .subtitle_right
-        .as_deref()
-        .map(str::trim)
-        .filter(|text| !text.is_empty());
-    let fitted_right_subtitle = right_subtitle
-        .map(|text| ellipsize_text_to_width(text, row_width, layout.text_scale, false));
-    let fitted_center_subtitle = center_subtitle
-        .map(|text| ellipsize_text_to_width(text, row_width, layout.text_scale, false));
-    let reserved_right = fitted_right_subtitle
-        .as_deref()
-        .map(|text| text::text_width(text, layout.text_scale).saturating_add(row_gap))
-        .unwrap_or(0);
-    let left_subtitle_width = row_width.saturating_sub(reserved_right).max(1);
-    let fitted_left_subtitle = left_subtitle
-        .map(|text| ellipsize_text_to_width(text, left_subtitle_width, layout.text_scale, false));
+    let subtitle_layout = layout_subtitle_row(
+        opts.subtitle_left.as_deref(),
+        opts.subtitle_center.as_deref(),
+        opts.subtitle_right.as_deref(),
+        chrome_left,
+        chrome_right,
+        chrome_center,
+        layout.text_scale,
+        row_gap,
+    );
 
     if let Some(ref title) = fitted_title {
-        let has_subtitle = fitted_left_subtitle.is_some()
-            || fitted_center_subtitle.is_some()
-            || fitted_right_subtitle.is_some();
+        let has_subtitle = subtitle_layout.left.is_some()
+            || subtitle_layout.center.is_some()
+            || subtitle_layout.right.is_some();
         let title_x = if !has_subtitle
             && matches!(opts.presentation.chrome.title_anchor, TitleAnchor::Center)
         {
@@ -3321,31 +3705,31 @@ fn draw_chrome_and_colorbar(
             layout.text_scale,
         );
     }
-    if let Some(ref subtitle) = fitted_left_subtitle {
+    if let Some(ref subtitle) = subtitle_layout.left {
         text::draw_text(
             img,
-            subtitle,
-            chrome_left as i32,
+            &subtitle.text,
+            subtitle.x,
             subtitle_y as i32,
             subtitle_color,
             layout.text_scale,
         );
     }
-    if let Some(ref subtitle) = fitted_center_subtitle {
+    if let Some(ref subtitle) = subtitle_layout.center {
         text::draw_text(
             img,
-            subtitle,
-            centered_text_left(subtitle, chrome_center, layout.text_scale, false),
+            &subtitle.text,
+            subtitle.x,
             subtitle_y as i32,
             subtitle_color,
             layout.text_scale,
         );
     }
-    if let Some(ref subtitle) = fitted_right_subtitle {
-        text::draw_text_right(
+    if let Some(ref subtitle) = subtitle_layout.right {
+        text::draw_text(
             img,
-            subtitle,
-            chrome_right as i32,
+            &subtitle.text,
+            subtitle.x,
             subtitle_y as i32,
             subtitle_color,
             layout.text_scale,
@@ -3427,6 +3811,7 @@ fn draw_chrome_and_colorbar(
             }
         }
     }
+    draw_overlay_legends(img, layout, opts, domain_frame_rect);
     let chrome_ms = chrome_start.elapsed().as_millis();
 
     let colorbar_start = Instant::now();
@@ -3472,6 +3857,7 @@ fn draw_chrome_and_colorbar(
                             cbar_x.saturating_add(cbar_w),
                             img.width(),
                             layout.text_scale,
+                            opts.colorbar_label.as_deref(),
                         ) {
                             text::draw_text(
                                 img,
@@ -3524,6 +3910,7 @@ fn draw_chrome_and_colorbar(
                             layout.cbar_h,
                             img.height(),
                             layout.text_scale,
+                            opts.colorbar_label.as_deref(),
                         ) {
                             text::draw_text(
                                 img,
@@ -3542,6 +3929,223 @@ fn draw_chrome_and_colorbar(
     let colorbar_ms = colorbar_start.elapsed().as_millis();
 
     (chrome_ms, colorbar_ms)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OverlayLegendBlock {
+    width: u32,
+    height: u32,
+}
+
+fn draw_overlay_legends(
+    img: &mut RgbaImage,
+    layout: &Layout,
+    opts: &RenderOpts,
+    domain_frame_rect: Option<LocalRect>,
+) {
+    if opts.overlay_legends.is_empty() {
+        return;
+    }
+
+    let scale = overlay_legend_text_scale(layout);
+    let drawable = domain_frame_rect.unwrap_or(LocalRect {
+        min_x: 0,
+        max_x: layout.map_w.saturating_sub(1),
+        min_y: 0,
+        max_y: layout.map_h.saturating_sub(1),
+    });
+    if drawable.width() < 64 || drawable.height() < 48 {
+        return;
+    }
+
+    let inset = 8u32.saturating_mul(scale);
+    let pad = 6u32.saturating_mul(scale);
+    let row_gap = 3u32.saturating_mul(scale);
+    let title_gap = 4u32.saturating_mul(scale);
+    let block_gap = 6u32.saturating_mul(scale);
+    let swatch_w = 18u32.saturating_mul(scale);
+    let swatch_h = 8u32.saturating_mul(scale);
+    let title_h = text::bold_line_height(scale);
+    let row_h = text::regular_line_height(scale).max(swatch_h);
+    let max_block_w = drawable.width().saturating_sub(inset.saturating_mul(2));
+    if max_block_w < swatch_w.saturating_add(pad.saturating_mul(2)) {
+        return;
+    }
+
+    let blocks = opts
+        .overlay_legends
+        .iter()
+        .filter(|legend| !legend.items.is_empty())
+        .map(|legend| {
+            let title_w = measure_text_width(&legend.title, scale, true);
+            let max_item_w = legend
+                .items
+                .iter()
+                .map(|item| measure_text_width(&item.label, scale, false))
+                .max()
+                .unwrap_or(0);
+            let text_w = title_w.max(
+                swatch_w
+                    .saturating_add(title_gap)
+                    .saturating_add(max_item_w),
+            );
+            let width = text_w
+                .saturating_add(pad.saturating_mul(2))
+                .min(max_block_w)
+                .max(swatch_w.saturating_add(pad.saturating_mul(2)));
+            let item_rows = legend.items.len() as u32;
+            let height = pad
+                .saturating_add(title_h)
+                .saturating_add(title_gap)
+                .saturating_add(row_h.saturating_mul(item_rows))
+                .saturating_add(row_gap.saturating_mul(item_rows.saturating_sub(1)))
+                .saturating_add(pad);
+            OverlayLegendBlock { width, height }
+        })
+        .collect::<Vec<_>>();
+    if blocks.is_empty() {
+        return;
+    }
+
+    let total_h = blocks.iter().enumerate().fold(0u32, |acc, (idx, block)| {
+        acc.saturating_add(block.height)
+            .saturating_add(if idx == 0 { 0 } else { block_gap })
+    });
+    let drawable_h = drawable.height();
+    let mut y_local = if total_h.saturating_add(inset.saturating_mul(2)) <= drawable_h {
+        drawable.max_y.saturating_sub(inset).saturating_sub(total_h)
+    } else {
+        drawable.min_y.saturating_add(inset)
+    };
+
+    for (legend, block) in opts
+        .overlay_legends
+        .iter()
+        .filter(|legend| !legend.items.is_empty())
+        .zip(blocks)
+    {
+        if y_local > drawable.max_y {
+            break;
+        }
+        let x_local = drawable
+            .min_x
+            .saturating_add(inset)
+            .min(drawable.max_x.saturating_sub(block.width.saturating_sub(1)));
+        let x = layout.map_x.saturating_add(x_local);
+        let y = layout.map_y.saturating_add(y_local);
+        draw_filled_rect(
+            img,
+            x as i32,
+            y as i32,
+            block.width,
+            block.height,
+            Rgba::with_alpha(246, 248, 250, 228),
+        );
+        draw_rect_outline(
+            img,
+            x as i32,
+            y as i32,
+            block.width,
+            block.height,
+            Rgba::with_alpha(19, 23, 29, 210),
+            scale.max(1),
+        );
+
+        let text_x = x.saturating_add(pad) as i32;
+        let mut text_y = y.saturating_add(pad);
+        let title_max_w = block.width.saturating_sub(pad.saturating_mul(2));
+        let title = ellipsize_text_to_width(&legend.title, title_max_w, scale, true);
+        text::draw_text_bold(
+            img,
+            &title,
+            text_x,
+            text_y as i32,
+            opts.presentation.chrome.title_color,
+            scale,
+        );
+        text_y = text_y.saturating_add(title_h).saturating_add(title_gap);
+
+        let label_max_w = block
+            .width
+            .saturating_sub(pad.saturating_mul(2))
+            .saturating_sub(swatch_w)
+            .saturating_sub(title_gap);
+        for item in &legend.items {
+            let row_mid = text_y.saturating_add(row_h / 2);
+            let swatch_y = row_mid.saturating_sub(swatch_h / 2);
+            let swatch_x = x.saturating_add(pad);
+            draw_filled_rect(
+                img,
+                swatch_x as i32,
+                swatch_y as i32,
+                swatch_w,
+                swatch_h,
+                item.fill_color.into(),
+            );
+            draw_rect_outline(
+                img,
+                swatch_x as i32,
+                swatch_y as i32,
+                swatch_w,
+                swatch_h,
+                item.outline_color.into(),
+                scale.max(1),
+            );
+            let label = ellipsize_text_to_width(&item.label, label_max_w, scale, false);
+            text::draw_text(
+                img,
+                &label,
+                swatch_x.saturating_add(swatch_w).saturating_add(title_gap) as i32,
+                text_y as i32,
+                opts.presentation.chrome.subtitle_color,
+                scale,
+            );
+            text_y = text_y.saturating_add(row_h).saturating_add(row_gap);
+        }
+
+        y_local = y_local
+            .saturating_add(block.height)
+            .saturating_add(block_gap);
+    }
+}
+
+fn overlay_legend_text_scale(layout: &Layout) -> u32 {
+    layout.text_scale.saturating_sub(1).max(1)
+}
+
+fn draw_filled_rect(img: &mut RgbaImage, x: i32, y: i32, width: u32, height: u32, color: Rgba) {
+    if width == 0 || height == 0 || color.a == 0 {
+        return;
+    }
+
+    for py in 0..height {
+        for px in 0..width {
+            draw::blend_pixel(img, x + px as i32, y + py as i32, color);
+        }
+    }
+}
+
+fn draw_rect_outline(
+    img: &mut RgbaImage,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    color: Rgba,
+    line_width: u32,
+) {
+    if width == 0 || height == 0 || color.a == 0 || line_width == 0 {
+        return;
+    }
+
+    let x0 = x as f64;
+    let y0 = y as f64;
+    let x1 = (x + width.saturating_sub(1) as i32) as f64;
+    let y1 = (y + height.saturating_sub(1) as i32) as f64;
+    draw::draw_line_aa_width(img, x0, y0, x1, y0, color, line_width);
+    draw::draw_line_aa_width(img, x1, y0, x1, y1, color, line_width);
+    draw::draw_line_aa_width(img, x1, y1, x0, y1, color, line_width);
+    draw::draw_line_aa_width(img, x0, y1, x0, y0, color, line_width);
 }
 
 fn clear_operational_chrome_margins(img: &mut RgbaImage, layout: &Layout, opts: &RenderOpts) {
@@ -3624,18 +4228,24 @@ fn render_to_image_profile_inner(
         _ => None,
     };
     let projected_pixel_ms = projected_pixel_start.elapsed().as_millis();
+    let overlay_padding_px = overlay_frame_padding_px(opts, &layout);
     let domain_frame_rect = match (
         opts.domain_frame,
         opts.projected_grid.as_ref(),
         projected_pixels.as_deref(),
     ) {
-        (Some(frame), Some(grid), Some(pixel_points)) => compute_projected_domain_frame_rect(
-            frame,
-            grid,
-            pixel_points,
-            layout.map_w,
-            layout.map_h,
-        ),
+        (Some(frame), Some(grid), Some(pixel_points))
+            if matches!(frame.source, DomainFrameSource::ProjectedGrid) =>
+        {
+            compute_projected_domain_frame_rect(
+                frame,
+                grid,
+                pixel_points,
+                layout.map_w,
+                layout.map_h,
+                overlay_padding_px,
+            )
+        }
         _ => None,
     };
     let polygon_clip_rect = domain_frame_rect
@@ -3687,15 +4297,17 @@ fn render_to_image_profile_inner(
         &layout,
         projected_pixels.as_deref(),
         domain_frame_rect,
+        overlay_padding_px,
         polygon_clip_rect,
         canvas_background,
     );
+    let effective_domain_frame_rect = variable_timing.domain_frame_rect.or(domain_frame_rect);
     let (chrome_ms, colorbar_ms) = draw_chrome_and_colorbar(
         &mut img,
         &layout,
         opts,
         projected_pixels.as_deref(),
-        domain_frame_rect,
+        effective_domain_frame_rect,
         variable_timing.domain_clip_rect,
         variable_timing.projection_clip_mask_present,
         has_title,
@@ -3724,6 +4336,7 @@ fn render_to_image_profile_inner(
         projection_clip_mask_present: variable_timing.projection_clip_mask_present,
         domain_clip_rect: variable_timing
             .domain_clip_rect
+            .or(effective_domain_frame_rect)
             .map(|rect| [rect.min_x, rect.max_x, rect.min_y, rect.max_y]),
     };
 
@@ -4054,7 +4667,9 @@ mod tests {
             subtitle_right: None,
             cbar_tick_step: None,
             cbar_ticks: None,
+            colorbar_label: None,
             colorbar_mode: crate::colormap::LegendMode::Stepped,
+            overlay_legends: Vec::new(),
             chrome_scale: ChromeScale::default(),
             supersample_factor: 1,
             supersample_sharpen: true,
@@ -4153,6 +4768,7 @@ mod tests {
             clear_outside: true,
             legend_follows_frame: true,
             chrome_follows_frame: true,
+            source: DomainFrameSource::ProjectedGrid,
         }
     }
 
@@ -4196,6 +4812,11 @@ mod tests {
             levels: vec![504.0],
             color: Rgba::BLACK,
             width: 1,
+            halo_color: Rgba::WHITE,
+            halo_width: 1,
+            major_every: 1,
+            major_width: 2,
+            label_every: 1,
             labels: false,
             show_extrema: false,
         }];
@@ -4206,7 +4827,10 @@ mod tests {
             nx: 2,
             stride_x: 1,
             stride_y: 1,
+            spacing_px: 24.0,
             color: Rgba::BLACK,
+            halo_color: Rgba::WHITE,
+            halo_width: 2,
             width: 1,
             length_px: 18.0,
         }];
@@ -4223,7 +4847,11 @@ mod tests {
         assert_eq!(scaled.projected_place_labels[0].style.label_scale, 2);
         assert_eq!(scaled.projected_place_labels[0].style.label_offset_x_px, 12);
         assert_eq!(scaled.contours[0].width, 2);
+        assert_eq!(scaled.contours[0].major_width, 4);
+        assert_eq!(scaled.contours[0].halo_width, 2);
         assert_eq!(scaled.barbs[0].width, 2);
+        assert_eq!(scaled.barbs[0].halo_width, 4);
+        assert_eq!(scaled.barbs[0].spacing_px, 48.0);
         assert_eq!(scaled.barbs[0].length_px, 36.0);
         assert_eq!(scaled.domain_frame.unwrap().outline_width, 4);
         assert_eq!(scaled.supersample_factor, 1);
@@ -4430,6 +5058,7 @@ mod tests {
             pixel_points.as_ref(),
             layout.map_w,
             layout.map_h,
+            0,
         )
         .expect("slanted test grid should produce a frame rect");
         (layout, grid, pixel_points, rect)
@@ -4445,6 +5074,11 @@ mod tests {
             levels: vec![1.5, 2.5],
             color: Rgba::BLACK,
             width: 1,
+            halo_color: Rgba::WHITE,
+            halo_width: 0,
+            major_every: 1,
+            major_width: 1,
+            label_every: 1,
             labels: false,
             show_extrema: false,
         };
@@ -4467,6 +5101,11 @@ mod tests {
             levels: vec![0.5, 1.5, 2.5],
             color: Rgba::BLACK,
             width: 1,
+            halo_color: Rgba::WHITE,
+            halo_width: 0,
+            major_every: 1,
+            major_width: 1,
+            label_every: 1,
             labels: false,
             show_extrema: false,
         };
@@ -4522,6 +5161,127 @@ mod tests {
             outline_pixels > 0,
             "domain frame should still render from projected coverage even when fill alpha is empty"
         );
+    }
+
+    #[test]
+    fn domain_frame_expands_mass_points_to_cell_footprint() {
+        let grid = ProjectedGrid {
+            x: vec![0.0; 4],
+            y: vec![0.0; 4],
+            ny: 2,
+            nx: 2,
+        };
+        let pixel_points = [
+            Some((40.0, 40.0)),
+            Some((80.0, 40.0)),
+            Some((40.0, 80.0)),
+            Some((80.0, 80.0)),
+        ];
+        let mut frame = sample_domain_frame(crate::request::Color::BLACK);
+        frame.inset_px = 0;
+
+        let rect = compute_projected_domain_frame_rect(frame, &grid, &pixel_points, 120, 120, 0)
+            .expect("cell footprint frame");
+
+        assert!(
+            rect.min_x <= 20 && rect.min_y <= 20,
+            "frame should extend beyond outer mass-point centers: {rect:?}"
+        );
+        assert!(
+            rect.max_x >= 99 && rect.max_y >= 99,
+            "frame should include the outer half-cell footprint: {rect:?}"
+        );
+    }
+
+    #[test]
+    fn raster_alpha_domain_frame_tracks_finite_fill_not_full_grid() {
+        let mut opts = RenderOpts {
+            width: 240,
+            height: 180,
+            colorbar: false,
+            title: None,
+            cmap: sample_masked_cmap(),
+            raster_sample_mode: RasterSampleMode::Nearest,
+            domain_frame: Some(DomainFrame {
+                source: DomainFrameSource::RasterAlpha,
+                chrome_follows_frame: false,
+                legend_follows_frame: false,
+                ..sample_domain_frame(crate::request::Color::BLACK)
+            }),
+            ..RenderOpts::default()
+        };
+        opts.presentation = RenderPresentation::for_mode(ProductVisualMode::FilledMeteorology);
+        let mut data = vec![0.0; 25];
+        data[12] = 20.0;
+
+        let (_, timing) = render_to_image_profile(&data, 5, 5, &opts);
+        let rect = timing.domain_clip_rect.expect("finite raster frame rect");
+
+        assert!(
+            rect[0] > timing.map_w / 4 && rect[1] < timing.map_w.saturating_mul(3) / 4,
+            "finite-data frame should not span the full grid width: {rect:?}, map_w={}",
+            timing.map_w
+        );
+        assert!(
+            rect[2] > timing.map_h / 4 && rect[3] < timing.map_h.saturating_mul(3) / 4,
+            "finite-data frame should not span the full grid height: {rect:?}, map_h={}",
+            timing.map_h
+        );
+    }
+
+    #[test]
+    fn domain_frame_adds_overlay_padding_to_prevent_glyph_clipping() {
+        let (layout, grid, pixel_points, _) = slanted_projected_fixture();
+        let frame = sample_domain_frame(crate::request::Color::BLACK);
+
+        let base = compute_projected_domain_frame_rect(
+            frame,
+            &grid,
+            pixel_points.as_ref(),
+            layout.map_w,
+            layout.map_h,
+            0,
+        )
+        .expect("base frame");
+        let padded = compute_projected_domain_frame_rect(
+            frame,
+            &grid,
+            pixel_points.as_ref(),
+            layout.map_w,
+            layout.map_h,
+            24,
+        )
+        .expect("padded frame");
+
+        assert!(padded.min_x < base.min_x);
+        assert!(padded.min_y < base.min_y);
+        assert!(padded.max_x > base.max_x);
+        assert!(padded.max_y > base.max_y);
+    }
+
+    #[test]
+    fn overlay_frame_padding_tracks_barb_glyph_margin() {
+        let mut layout = contour_test_layout();
+        layout.map_w = 180;
+        layout.map_h = 180;
+        let mut opts = sample_projected_opts();
+        opts.barbs = vec![BarbOverlay {
+            u: vec![10.0; 4],
+            v: vec![0.0; 4],
+            ny: 2,
+            nx: 2,
+            stride_x: 1,
+            stride_y: 1,
+            spacing_px: 24.0,
+            color: Rgba::BLACK,
+            halo_color: Rgba::WHITE,
+            halo_width: 2,
+            width: 1,
+            length_px: 18.0,
+        }];
+
+        let expected = barb_glyph_margin_px(18.0, 5).ceil() as u32;
+        assert!(overlay_frame_padding_px(&opts, &layout) >= expected);
     }
 
     #[test]
@@ -4612,6 +5372,30 @@ mod tests {
         assert!(subtitle_y < frame_top);
         assert!(title_y < frame_top);
         assert!(frame_top.saturating_sub(title_y) <= max_gap);
+    }
+
+    #[test]
+    fn subtitle_row_layout_prevents_operational_metadata_collision() {
+        let layout = layout_subtitle_row(
+            Some("WRF | F008:30 | Valid 2011-04-27 16:30Z"),
+            Some("composite severe-weather parameter diagnostic"),
+            Some("Init 2011-04-27 08Z | source: wrfout"),
+            190,
+            1279,
+            734,
+            1,
+            14,
+        );
+
+        let left = layout.left.as_ref().expect("left subtitle");
+        let center = layout.center.as_ref().expect("center subtitle");
+        let right = layout.right.as_ref().expect("right subtitle");
+
+        assert!(left.x >= 190);
+        assert!(right.x + right.width as i32 <= 1279);
+        assert!(left.x + left.width as i32 + 14 <= center.x);
+        assert!(center.x + center.width as i32 + 14 <= right.x);
+        assert!(!center.text.trim().is_empty());
     }
 
     #[test]
@@ -4706,6 +5490,11 @@ mod tests {
             levels: vec![1.5],
             color: Rgba::BLACK,
             width: 1,
+            halo_color: Rgba::WHITE,
+            halo_width: 0,
+            major_every: 1,
+            major_width: 1,
+            label_every: 1,
             labels: false,
             show_extrema: false,
         };
@@ -4822,6 +5611,7 @@ mod tests {
                 legend: crate::colormap::LegendControls {
                     density: LevelDensity::default(),
                     mode: crate::colormap::LegendMode::Stepped,
+                    levels: None,
                 },
             },
         );
@@ -4844,6 +5634,7 @@ mod tests {
             200,
             400,
             1,
+            None,
         );
         assert!(!labels.is_empty());
         for (_, lx, label) in labels {
@@ -4864,6 +5655,94 @@ mod tests {
 
         let stp_ticks = [0.0, 1.0, 2.0, 3.0, 4.0];
         assert_eq!(format_colorbar_tick(1.0, &stp_ticks), "1");
+    }
+
+    #[test]
+    fn high_end_colorbar_tick_carries_unit_label() {
+        let ticks = [0.0, 50.0, 100.0];
+        assert_eq!(
+            format_colorbar_tick_with_label(100.0, &ticks, Some("dBZ")),
+            "100 dBZ"
+        );
+        assert_eq!(
+            format_colorbar_tick_with_label(50.0, &ticks, Some("dBZ")),
+            "50"
+        );
+
+        let horizontal = filter_tick_labels_to_fit(
+            &ticks,
+            &[0.0, 0.5, 1.0],
+            80,
+            240,
+            80,
+            340,
+            400,
+            1,
+            Some("kt"),
+        );
+        assert_eq!(
+            horizontal.last().map(|(_, _, label)| label.as_str()),
+            Some("100 kt")
+        );
+
+        let vertical = filter_vertical_tick_labels_to_fit(
+            &ticks,
+            &[0.0, 0.5, 1.0],
+            20,
+            140,
+            200,
+            1,
+            Some("m2/s2"),
+        );
+        assert_eq!(
+            vertical.first().map(|(_, label)| label.as_str()),
+            Some("100 m2/s2")
+        );
+    }
+
+    #[test]
+    fn render_to_image_draws_overlay_legend_swatch() {
+        let _guard = PROJECTED_PIXEL_CACHE_TEST_LOCK.lock().unwrap();
+        let mut baseline_opts = sample_projected_opts();
+        baseline_opts.title = None;
+        baseline_opts.cmap =
+            LeveledColormap::from_palette(&[Rgba::TRANSPARENT], &[0.0, 1.0], Extend::Neither, None);
+        let mut legend_opts = baseline_opts.clone();
+        legend_opts.overlay_legends = vec![OverlayLegend::new(
+            "UH swath (m2/s2)",
+            vec![crate::request::OverlayLegendItem::new(
+                ">= 50",
+                crate::request::Color::rgba(255, 169, 77, 82),
+                crate::request::Color::BLACK,
+            )],
+        )];
+
+        let data = [0.5; 4];
+        let baseline = render_to_image(&data, 2, 2, &baseline_opts);
+        let with_legend = render_to_image(&data, 2, 2, &legend_opts);
+        let changed_pixels = baseline
+            .pixels()
+            .zip(with_legend.pixels())
+            .filter(|(baseline, with_legend)| baseline.0 != with_legend.0)
+            .count();
+
+        assert!(
+            changed_pixels > 150,
+            "overlay legend should draw readable swatch/text chrome, changed {changed_pixels} pixels"
+        );
+    }
+
+    #[test]
+    fn overlay_legend_scale_is_compact_relative_to_main_chrome() {
+        let mut layout = contour_test_layout();
+        layout.text_scale = 1;
+        assert_eq!(overlay_legend_text_scale(&layout), 1);
+
+        layout.text_scale = 2;
+        assert_eq!(overlay_legend_text_scale(&layout), 1);
+
+        layout.text_scale = 3;
+        assert_eq!(overlay_legend_text_scale(&layout), 2);
     }
 
     #[test]
@@ -4934,7 +5813,10 @@ mod tests {
             nx: 2,
             stride_x: 1,
             stride_y: 1,
+            spacing_px: 24.0,
             color: Rgba::BLACK,
+            halo_color: Rgba::WHITE,
+            halo_width: 2,
             width: 1,
             length_px: 12.0,
         }];
@@ -4962,6 +5844,243 @@ mod tests {
     }
 
     #[test]
+    fn pixel_spaced_barb_decimator_uses_screen_distance() {
+        let mut occupied = std::collections::HashMap::new();
+        assert!(accept_pixel_spaced_barb(&mut occupied, 10.0, 10.0, 20.0));
+        assert!(
+            !accept_pixel_spaced_barb(&mut occupied, 25.0, 10.0, 20.0),
+            "anchors closer than requested screen spacing should be skipped"
+        );
+        assert!(accept_pixel_spaced_barb(&mut occupied, 32.0, 10.0, 20.0));
+    }
+
+    #[test]
+    fn pixel_spaced_barb_rendering_ignores_grid_stride_prefilter() {
+        let mut img = blank_test_image();
+        let layout = contour_test_layout();
+        let mut u = vec![f64::NAN; 9];
+        let mut v = vec![f64::NAN; 9];
+        u[4] = 20.0;
+        v[4] = 0.0;
+
+        draw_barbs(
+            &mut img,
+            &layout,
+            &BarbOverlay {
+                u,
+                v,
+                ny: 3,
+                nx: 3,
+                stride_x: 99,
+                stride_y: 99,
+                spacing_px: 1.0,
+                color: Rgba::BLACK,
+                halo_color: Rgba::TRANSPARENT,
+                halo_width: 0,
+                width: 1,
+                length_px: 10.0,
+            },
+            None,
+            None,
+        );
+
+        let black_pixels = img.pixels().filter(|px| px.0 == [0, 0, 0, 255]).count();
+        assert!(
+            black_pixels > 0,
+            "pixel-spaced barbs should consider all grid anchors before screen-space decimation"
+        );
+    }
+
+    #[test]
+    fn contour_extrema_labels_render_highs_lows_and_halos() {
+        let layout = contour_test_layout();
+        let overlay = extrema_contour_overlay(true);
+        let mut without_extrema = blank_test_image();
+        let mut with_extrema = blank_test_image();
+        let mut baseline_overlay = overlay.clone();
+        baseline_overlay.show_extrema = false;
+
+        draw_contours(&mut without_extrema, &layout, &baseline_overlay, None, None);
+        draw_contours(&mut with_extrema, &layout, &overlay, None, None);
+
+        let changed_pixels = with_extrema
+            .pixels()
+            .zip(without_extrema.pixels())
+            .filter(|(with_extrema, without_extrema)| with_extrema.0 != without_extrema.0)
+            .count();
+        let high_label_pixels = with_extrema
+            .pixels()
+            .filter(|pixel| is_extrema_high_label_pixel(pixel.0))
+            .count();
+        let low_label_pixels = with_extrema
+            .pixels()
+            .filter(|pixel| is_extrema_low_label_pixel(pixel.0))
+            .count();
+        let new_halo_pixels = with_extrema
+            .pixels()
+            .zip(without_extrema.pixels())
+            .filter(|(with_extrema, without_extrema)| {
+                with_extrema.0 != without_extrema.0 && is_extrema_halo_pixel(with_extrema.0)
+            })
+            .count();
+
+        assert!(
+            changed_pixels > 120,
+            "show_extrema should draw visible H/L labels and values, changed {changed_pixels} pixels"
+        );
+        assert!(
+            high_label_pixels > 4,
+            "show_extrema should draw blue high-pressure labels, got {high_label_pixels} pixels"
+        );
+        assert!(
+            low_label_pixels > 4,
+            "show_extrema should draw red low-pressure labels, got {low_label_pixels} pixels"
+        );
+        assert!(
+            new_halo_pixels > 20,
+            "extrema labels should draw dark contrast halos, got {new_halo_pixels} pixels"
+        );
+    }
+
+    #[test]
+    fn contour_hierarchy_marks_major_widths_and_label_cadence() {
+        let overlay = ContourOverlay {
+            data: vec![0.0, 1.0, 2.0, 3.0],
+            ny: 2,
+            nx: 2,
+            levels: vec![0.0, 1.0, 2.0, 3.0],
+            color: Rgba::BLACK,
+            width: 1,
+            halo_color: Rgba::WHITE,
+            halo_width: 1,
+            major_every: 2,
+            major_width: 3,
+            label_every: 2,
+            labels: true,
+            show_extrema: false,
+        };
+
+        assert!(contour_level_is_major(&overlay, 0));
+        assert!(!contour_level_is_major(&overlay, 1));
+        assert_eq!(contour_level_width(&overlay, 0), 3);
+        assert_eq!(contour_level_width(&overlay, 1), 1);
+        assert!(contour_level_allows_label(&overlay, 2));
+        assert!(!contour_level_allows_label(&overlay, 3));
+    }
+
+    fn extrema_contour_overlay(show_extrema: bool) -> ContourOverlay {
+        let nx = 32usize;
+        let ny = 32usize;
+        let mut data = Vec::with_capacity(nx * ny);
+        for j in 0..ny {
+            for i in 0..nx {
+                let high = gaussian_bump(i, j, 10.0, 16.0, 72.0, 18.0);
+                let low = gaussian_bump(i, j, 20.0, 16.0, -72.0, 18.0);
+                data.push(1000.0 + high + low);
+            }
+        }
+
+        ContourOverlay {
+            data,
+            ny,
+            nx,
+            levels: vec![960.0, 980.0, 1000.0, 1020.0, 1040.0],
+            color: Rgba::BLACK,
+            width: 1,
+            halo_color: Rgba::WHITE,
+            halo_width: 1,
+            major_every: 2,
+            major_width: 2,
+            label_every: 2,
+            labels: false,
+            show_extrema,
+        }
+    }
+
+    fn gaussian_bump(
+        i: usize,
+        j: usize,
+        center_i: f64,
+        center_j: f64,
+        amplitude: f64,
+        sigma_sq: f64,
+    ) -> f64 {
+        let dx = i as f64 - center_i;
+        let dy = j as f64 - center_j;
+        amplitude * (-(dx * dx + dy * dy) / sigma_sq).exp()
+    }
+
+    fn is_extrema_high_label_pixel(pixel: [u8; 4]) -> bool {
+        let [r, g, b, a] = pixel;
+        a == 255 && r < 90 && (45..=140).contains(&g) && b > 120
+    }
+
+    fn is_extrema_low_label_pixel(pixel: [u8; 4]) -> bool {
+        let [r, g, b, a] = pixel;
+        a == 255
+            && r > 80
+            && r > g.saturating_add(25)
+            && r > b.saturating_add(25)
+            && g < 130
+            && b < 130
+    }
+
+    fn is_extrema_halo_pixel(pixel: [u8; 4]) -> bool {
+        let [r, g, b, a] = pixel;
+        a == 255 && r < 45 && g < 55 && b < 70
+    }
+
+    #[test]
+    fn contour_labels_use_overlay_halo_style() {
+        let layout = contour_test_layout();
+        let mut img = RgbaImage::from_pixel(80, 80, Rgba::new(64, 64, 64).to_image_rgba());
+        let overlay = ContourOverlay {
+            data: vec![0.0, 1.0, 2.0, 3.0],
+            ny: 2,
+            nx: 2,
+            levels: vec![5.0],
+            color: Rgba::BLACK,
+            width: 1,
+            halo_color: Rgba::new(255, 0, 255),
+            halo_width: 2,
+            major_every: 1,
+            major_width: 1,
+            label_every: 1,
+            labels: true,
+            show_extrema: false,
+        };
+        let mut label_drawn = false;
+        let mut label_placer = ContourLabelPlacer::default();
+
+        maybe_draw_contour_label(
+            &mut img,
+            &layout,
+            &overlay,
+            0,
+            5.0,
+            8.0,
+            30.0,
+            56.0,
+            30.0,
+            &mut label_drawn,
+            &mut label_placer,
+        );
+
+        assert!(label_drawn, "test setup should place one contour label");
+        let halo_pixels = img
+            .pixels()
+            .filter(|px| {
+                let [r, g, b, _] = px.0;
+                r > 140 && g < 120 && b > 140
+            })
+            .count();
+        assert!(
+            halo_pixels > 0,
+            "contour labels should honor the overlay halo color"
+        );
+    }
+
+    #[test]
     fn render_to_png_suppresses_contours_when_overlay_data_is_nan() {
         // Updated expectation: contour overlays self-clip via NaN data, not via
         // the fill raster. Lets height contours render across the whole frame
@@ -4976,6 +6095,11 @@ mod tests {
             levels: vec![1.5],
             color: Rgba::BLACK,
             width: 1,
+            halo_color: Rgba::WHITE,
+            halo_width: 0,
+            major_every: 1,
+            major_width: 1,
+            label_every: 1,
             labels: false,
             show_extrema: false,
         }];

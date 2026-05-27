@@ -52,10 +52,12 @@ pub enum LegendMode {
     SmoothRamp,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LegendControls {
     pub density: LevelDensity,
     pub mode: LegendMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub levels: Option<Vec<f64>>,
 }
 
 impl Default for LegendControls {
@@ -63,11 +65,12 @@ impl Default for LegendControls {
         Self {
             density: LevelDensity::default(),
             mode: LegendMode::Stepped,
+            levels: None,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ColormapBuildOptions {
     pub render_density: RenderDensity,
     pub legend: LegendControls,
@@ -129,13 +132,16 @@ fn sample_listed_palette(palette: &[Rgba], t: f64) -> Rgba {
     palette[idx.min(palette.len() - 1)]
 }
 
-fn sample_palette_for_levels(palette: &[Rgba], levels: &[f64]) -> Vec<Rgba> {
+fn sample_palette_for_levels_in_range(
+    palette: &[Rgba],
+    levels: &[f64],
+    min_level: f64,
+    max_level: f64,
+) -> Vec<Rgba> {
     if palette.is_empty() || levels.len() < 2 {
         return vec![];
     }
 
-    let min_level = levels[0];
-    let max_level = levels[levels.len() - 1];
     let level_span = max_level - min_level;
 
     levels[..levels.len() - 1]
@@ -149,6 +155,42 @@ fn sample_palette_for_levels(palette: &[Rgba], levels: &[f64]) -> Vec<Rgba> {
             sample_listed_palette(palette, t)
         })
         .collect()
+}
+
+fn sample_palette_for_levels(palette: &[Rgba], levels: &[f64]) -> Vec<Rgba> {
+    if levels.len() < 2 {
+        return vec![];
+    }
+    sample_palette_for_levels_in_range(
+        palette,
+        levels,
+        levels[0],
+        levels[levels.len().saturating_sub(1)],
+    )
+}
+
+fn explicit_legend_levels(
+    source_levels: &[f64],
+    requested_levels: Option<&[f64]>,
+) -> Option<Vec<f64>> {
+    let requested_levels = requested_levels?;
+    if source_levels.len() < 2 {
+        return None;
+    }
+    let min_level = source_levels.first().copied()?;
+    let max_level = source_levels.last().copied()?;
+    if !min_level.is_finite() || !max_level.is_finite() || max_level <= min_level {
+        return None;
+    }
+
+    let mut levels = requested_levels
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite() && *value >= min_level && *value <= max_level)
+        .collect::<Vec<f64>>();
+    levels.sort_by(f64::total_cmp);
+    levels.dedup_by(|a, b| a.total_cmp(b).is_eq());
+    (levels.len() >= 2).then_some(levels)
 }
 
 /// How to handle values outside the level range.
@@ -221,7 +263,8 @@ impl LeveledColormap {
         options: ColormapBuildOptions,
     ) -> Self {
         let dense_levels = densify_levels_with_density(levels, options.render_density.fill);
-        let legend_levels = densify_levels_with_density(levels, options.legend.density);
+        let legend_levels = explicit_legend_levels(levels, options.legend.levels.as_deref())
+            .unwrap_or_else(|| densify_levels_with_density(levels, options.legend.density));
         let n_intervals = if dense_levels.len() > 1 {
             dense_levels.len() - 1
         } else {
@@ -246,7 +289,12 @@ impl LeveledColormap {
             densify_palette_with_multiplier(palette, options.render_density.palette_multiplier);
 
         let sampled = sample_palette_for_levels(&dense_palette, &dense_levels);
-        let legend_colors = sample_palette_for_levels(&dense_palette, &legend_levels);
+        let legend_colors = sample_palette_for_levels_in_range(
+            &dense_palette,
+            &legend_levels,
+            dense_levels[0],
+            dense_levels[dense_levels.len() - 1],
+        );
 
         let under_color = match extend {
             Extend::Min | Extend::Both => Some(sample_listed_palette(&dense_palette, 0.0)),
@@ -405,6 +453,31 @@ mod tests {
         );
         assert_eq!(cmap.legend_levels, levels);
         assert_eq!(cmap.legend_colors.len(), levels.len() - 1);
+        assert!(cmap.levels.len() > cmap.legend_levels.len());
+    }
+
+    #[test]
+    fn explicit_legend_levels_override_dense_source_levels() {
+        let palette = vec![Rgba::new(0, 0, 255), Rgba::new(255, 0, 0)];
+        let levels = (0..=100).map(|value| value as f64).collect::<Vec<_>>();
+        let legend_levels = vec![0.0, 10.0, 25.0, 50.0, 100.0];
+        let cmap = LeveledColormap::from_palette_with_options(
+            &palette,
+            &levels,
+            super::Extend::Neither,
+            None,
+            ColormapBuildOptions {
+                render_density: super::RenderDensity::default(),
+                legend: super::LegendControls {
+                    density: LevelDensity::default(),
+                    mode: super::LegendMode::Stepped,
+                    levels: Some(legend_levels.clone()),
+                },
+            },
+        );
+
+        assert_eq!(cmap.legend_levels, legend_levels);
+        assert_eq!(cmap.legend_colors.len(), cmap.legend_levels.len() - 1);
         assert!(cmap.levels.len() > cmap.legend_levels.len());
     }
 

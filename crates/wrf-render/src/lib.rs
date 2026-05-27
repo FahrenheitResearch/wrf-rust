@@ -65,12 +65,13 @@ pub use render::{
 };
 pub use request::{
     ChromeScale, Color, ColorScale, ColorbarOrientation, ContourLayer, ContourStyle,
-    DiscreteColorScale, DomainFrame, ExtendMode, Field2D, GeographicClipBounds, GridShape,
-    InverseRasterProjection, LatLonGrid, MapRenderRequest, ProductKey, ProductMaturity,
-    ProductSemanticFlag, ProductSemantics, ProjectedDomain, ProjectedExtent,
-    ProjectedLabelPlacement, ProjectedLineOverlay, ProjectedMarkerShape, ProjectedPlaceLabel,
-    ProjectedPlaceLabelPriority, ProjectedPlaceLabelStyle, ProjectedPointOverlay,
-    ProjectedPolygonFill, RasterSampleMode, RgbaGridField, WindBarbLayer, WindBarbStyle,
+    DiscreteColorScale, DomainFrame, DomainFrameSource, ExtendMode, Field2D, GeographicClipBounds,
+    GridShape, InverseRasterProjection, LatLonGrid, MapRenderRequest, OverlayLegend,
+    OverlayLegendItem, ProductKey, ProductMaturity, ProductSemanticFlag, ProductSemantics,
+    ProjectedDomain, ProjectedExtent, ProjectedLabelPlacement, ProjectedLineOverlay,
+    ProjectedMarkerShape, ProjectedPlaceLabel, ProjectedPlaceLabelPriority,
+    ProjectedPlaceLabelStyle, ProjectedPointOverlay, ProjectedPolygonFill, RasterSampleMode,
+    RgbaGridField, WindBarbLayer, WindBarbStyle,
 };
 pub use rustwx_core::{
     Field2D as CoreField2D, GridProjection as CoreGridProjection, GridShape as CoreGridShape,
@@ -463,7 +464,7 @@ fn with_render_state_profile_with_style<T>(
             &request.scale,
             ColormapBuildOptions {
                 render_density: plot_style.render_density(request.render_density),
-                legend: request.legend,
+                legend: request.legend.clone(),
             },
         )
     };
@@ -614,6 +615,11 @@ fn with_render_state_profile_with_style<T>(
                 levels: scratch.fill_f64_from_f64(&layer.levels),
                 color: presentation.contour_color(layer.color.into()),
                 width: layer.width,
+                halo_color: layer.halo_color.into(),
+                halo_width: layer.halo_width,
+                major_every: layer.major_every,
+                major_width: layer.major_width,
+                label_every: layer.label_every,
                 labels: layer.labels,
                 show_extrema: layer.show_extrema,
             });
@@ -630,7 +636,10 @@ fn with_render_state_profile_with_style<T>(
                 nx: shape.nx,
                 stride_x: layer.stride_x,
                 stride_y: layer.stride_y,
+                spacing_px: layer.spacing_px,
                 color: presentation.barb_color(layer.color.into()),
+                halo_color: layer.halo_color.into(),
+                halo_width: layer.halo_width,
                 width: layer.width,
                 length_px: layer.length_px,
             });
@@ -650,7 +659,9 @@ fn with_render_state_profile_with_style<T>(
             subtitle_right: request.subtitle_right.clone(),
             cbar_tick_step: request.cbar_tick_step,
             cbar_ticks: request.cbar_ticks.clone(),
+            colorbar_label: request.colorbar_label.clone(),
             colorbar_mode: request.legend.mode,
+            overlay_legends: request.overlay_legends.clone(),
             chrome_scale: request.chrome_scale,
             supersample_factor: plot_style.supersample_factor(request.supersample_factor),
             supersample_sharpen: plot_style.supersample_sharpen(request.supersample_sharpen),
@@ -947,8 +958,10 @@ mod tests {
             subtitle_right: Some("rustwx-render".into()),
             cbar_tick_step: Some(500.0),
             cbar_ticks: None,
+            colorbar_label: Some("J/kg".into()),
             render_density: RenderDensity::default(),
             legend: LegendControls::default(),
+            overlay_legends: Vec::new(),
             chrome_scale: ChromeScale::default(),
             supersample_factor: 1,
             supersample_sharpen: true,
@@ -1015,8 +1028,10 @@ mod tests {
             subtitle_right: None,
             cbar_tick_step: Some(500.0),
             cbar_ticks: None,
+            colorbar_label: Some("J/kg".into()),
             render_density: RenderDensity::default(),
             legend: LegendControls::default(),
+            overlay_legends: Vec::new(),
             chrome_scale: ChromeScale::default(),
             supersample_factor: 1,
             supersample_sharpen: true,
@@ -1089,7 +1104,7 @@ mod tests {
         );
 
         assert_eq!(request.title.as_deref(), Some("ECAPE SCP (EXP)"));
-        assert_eq!(request.cbar_tick_step, Some(1.0));
+        assert_eq!(request.cbar_tick_step, Some(5.0));
         assert!(matches!(
             request.scale,
             ColorScale::Weather(WeatherPreset::Scp)

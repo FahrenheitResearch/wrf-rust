@@ -110,6 +110,11 @@ pub struct ContourOverlay {
     pub levels: Vec<f64>,
     pub color: Rgba,
     pub width: u32,
+    pub halo_color: Rgba,
+    pub halo_width: u32,
+    pub major_every: usize,
+    pub major_width: u32,
+    pub label_every: usize,
     pub labels: bool,
     /// When true, find and draw H/L extrema labels on the contour field.
     pub show_extrema: bool,
@@ -123,7 +128,10 @@ pub struct BarbOverlay {
     pub nx: usize,
     pub stride_x: usize,
     pub stride_y: usize,
+    pub spacing_px: f64,
     pub color: Rgba,
+    pub halo_color: Rgba,
+    pub halo_width: u32,
     pub width: u32,
     pub length_px: f64,
 }

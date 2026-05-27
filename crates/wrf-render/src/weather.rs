@@ -4,10 +4,19 @@ use crate::request::{Color, DiscreteColorScale, ExtendMode, ProductSemantics};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WeatherPalette {
     Cape,
+    Ecape,
     ThreeCape,
+    Ncape,
+    Cin,
+    Scp,
     Ehi,
+    TornadicEhi,
+    TornadicTts,
+    ViolentTornado,
     Srh,
     Stp,
+    HeightAgl,
+    EquilibriumLevel,
     LapseRate,
     Uh,
     EcapeRatio,
@@ -28,7 +37,9 @@ pub enum WeatherPalette {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum WeatherPreset {
     Cape,
+    Ecape,
     ThreeCape,
+    Ncape,
     Cin,
     Lcl,
     Lfc,
@@ -37,6 +48,9 @@ pub enum WeatherPreset {
     Stp,
     Scp,
     Ehi,
+    Tehi,
+    Tts,
+    Vtp,
     EcapeCapeRatio,
     Uh,
     LapseRate,
@@ -301,16 +315,9 @@ impl WeatherProduct {
 
     pub fn scale_preset(self) -> WeatherPreset {
         match self {
-            Self::Sbcape
-            | Self::Mlcape
-            | Self::Mucape
-            | Self::Sbecape
-            | Self::Mlecape
-            | Self::Muecape
-            | Self::Sbncape
-            | Self::Mlncape
-            | Self::Muncape
-            | Self::EcapeCape => WeatherPreset::Cape,
+            Self::Sbcape | Self::Mlcape | Self::Mucape => WeatherPreset::Cape,
+            Self::Sbecape | Self::Mlecape | Self::Muecape | Self::EcapeCape => WeatherPreset::Ecape,
+            Self::Sbncape | Self::Mlncape | Self::Muncape => WeatherPreset::Ncape,
             Self::SbEcapeDerivedCapeRatio
             | Self::MlEcapeDerivedCapeRatio
             | Self::MuEcapeDerivedCapeRatio
@@ -328,14 +335,13 @@ impl WeatherProduct {
             Self::Lfc | Self::EcapeLfc => WeatherPreset::Lfc,
             Self::El | Self::EcapeEl => WeatherPreset::El,
             Self::Srh01km | Self::Srh03km => WeatherPreset::Srh,
-            Self::Stp
-            | Self::StpFixed
-            | Self::StpEffective
-            | Self::Tehi
-            | Self::Tts
-            | Self::VtpMod
-            | Self::EcapeStpExperimental => WeatherPreset::Stp,
+            Self::Stp | Self::StpFixed | Self::StpEffective | Self::EcapeStpExperimental => {
+                WeatherPreset::Stp
+            }
             Self::Scp | Self::EcapeScpExperimental => WeatherPreset::Scp,
+            Self::Tehi => WeatherPreset::Tehi,
+            Self::Tts => WeatherPreset::Tts,
+            Self::VtpMod => WeatherPreset::Vtp,
             Self::Ehi | Self::EcapeEhi01kmExperimental | Self::EcapeEhi03kmExperimental => {
                 WeatherPreset::Ehi
             }
@@ -346,19 +352,26 @@ impl WeatherProduct {
     pub fn default_tick_step(self) -> Option<f64> {
         match self.scale_preset() {
             WeatherPreset::Cape => Some(500.0),
+            WeatherPreset::Ecape => Some(500.0),
             WeatherPreset::ThreeCape => Some(50.0),
+            WeatherPreset::Ncape => Some(250.0),
             WeatherPreset::Cin => Some(50.0),
             WeatherPreset::Lcl => Some(500.0),
             WeatherPreset::Lfc => Some(500.0),
             WeatherPreset::El => Some(1000.0),
             WeatherPreset::Srh => Some(50.0),
             WeatherPreset::Stp => Some(1.0),
-            WeatherPreset::Scp => Some(1.0),
+            WeatherPreset::Scp => Some(5.0),
             WeatherPreset::Ehi => Some(1.0),
+            WeatherPreset::Tehi | WeatherPreset::Tts | WeatherPreset::Vtp => Some(1.0),
             WeatherPreset::EcapeCapeRatio => Some(0.25),
             WeatherPreset::Uh => Some(20.0),
             WeatherPreset::LapseRate => Some(1.0),
         }
+    }
+
+    pub fn legend_levels(self) -> Option<Vec<f64>> {
+        self.scale_preset().legend_levels()
     }
 
     pub fn semantics(self) -> ProductSemantics {
@@ -455,6 +468,10 @@ impl DerivedProductStyle {
         self.scale_preset().default_tick_step()
     }
 
+    pub fn legend_levels(self) -> Option<Vec<f64>> {
+        self.scale_preset().legend_levels()
+    }
+
     pub fn semantics(self) -> ProductSemantics {
         match self {
             Self::ApparentTemperature | Self::HeatIndex | Self::WindChill => {
@@ -496,10 +513,8 @@ impl WeatherPreset {
         }
 
         match normalize(name).as_str() {
-            "sbcape" | "mlcape" | "mucape" | "cape" | "effective_cape" | "ecape" | "sbecape"
-            | "mlecape" | "muecape" | "ecape_cape" | "sbncape" | "mlncape" | "muncape" => {
-                Some(Self::Cape)
-            }
+            "sbcape" | "mlcape" | "mucape" | "cape" | "effective_cape" => Some(Self::Cape),
+            "ecape" | "sbecape" | "mlecape" | "muecape" | "ecape_cape" => Some(Self::Ecape),
             "sb_ecape_derived_cape_ratio"
             | "ml_ecape_derived_cape_ratio"
             | "mu_ecape_derived_cape_ratio"
@@ -513,6 +528,7 @@ impl WeatherPreset {
             | "mlecape_native_cape_ratio"
             | "muecape_native_cape_ratio" => Some(Self::EcapeCapeRatio),
             "cape3d" | "three_cape" => Some(Self::ThreeCape),
+            "sbncape" | "mlncape" | "muncape" | "ncape" | "normalized_cape" => Some(Self::Ncape),
             "sbcin" | "mlcin" | "mucin" | "cin" | "ecape_cin" | "sbecin" | "mlecin" | "muecin" => {
                 Some(Self::Cin)
             }
@@ -523,97 +539,209 @@ impl WeatherPreset {
             "stp" | "stp_fixed" | "stp_effective" | "ecape_stp" => Some(Self::Stp),
             "scp" | "ecape_scp" => Some(Self::Scp),
             "ehi" | "ecape_ehi" | "ecape_ehi_0_1km" | "ecape_ehi_0_3km" => Some(Self::Ehi),
+            "tehi" | "tornadic_ehi" | "tornadic_0_1km_ehi" => Some(Self::Tehi),
+            "tts" | "tornadic_tilting_stretching" => Some(Self::Tts),
+            "vtp_mod" | "modified_vtp" | "vtp" => Some(Self::Vtp),
             "uhel" | "uh" => Some(Self::Uh),
             "lapse_rate" | "lapse_rate_700_500" | "lapse_rate_0_3km" => Some(Self::LapseRate),
             _ => None,
         }
     }
 
+    pub fn legend_levels(self) -> Option<Vec<f64>> {
+        match self {
+            Self::Cape => Some(vec![
+                0.0, 250.0, 500.0, 1000.0, 1500.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0, 8000.0,
+            ]),
+            Self::Ecape => Some(vec![
+                0.0, 100.0, 250.0, 500.0, 750.0, 1000.0, 1500.0, 2000.0, 3000.0, 4000.0, 5000.0,
+            ]),
+            Self::ThreeCape => Some(vec![
+                0.0, 25.0, 50.0, 75.0, 100.0, 150.0, 200.0, 250.0, 300.0, 400.0, 500.0,
+            ]),
+            Self::Ncape => Some(vec![
+                0.0, 50.0, 100.0, 250.0, 500.0, 750.0, 1000.0, 1500.0, 2000.0,
+            ]),
+            Self::Cin => Some(vec![-300.0, -250.0, -200.0, -150.0, -100.0, -50.0, 0.0]),
+            Self::Lcl => Some(vec![
+                0.0, 250.0, 500.0, 750.0, 1000.0, 1500.0, 2000.0, 3000.0, 4000.0,
+            ]),
+            Self::Lfc => Some(vec![
+                0.0, 500.0, 1000.0, 1500.0, 2000.0, 3000.0, 4000.0, 6000.0, 8000.0,
+            ]),
+            Self::El => Some(vec![
+                4000.0, 6000.0, 8000.0, 10000.0, 12000.0, 14000.0, 16000.0, 18000.0,
+            ]),
+            Self::Srh => Some(vec![
+                0.0, 50.0, 100.0, 150.0, 200.0, 250.0, 300.0, 350.0, 400.0, 450.0, 500.0, 550.0,
+                600.0, 700.0, 800.0, 900.0, 1000.0, 1250.0, 1500.0,
+            ]),
+            Self::Stp => Some(vec![
+                0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 15.0, 20.0,
+            ]),
+            Self::Scp => Some(vec![
+                0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0, 60.0,
+                70.0,
+            ]),
+            Self::Ehi => Some(vec![
+                0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0,
+                22.0, 24.0,
+            ]),
+            Self::Tehi | Self::Tts | Self::Vtp => Some(vec![
+                0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0,
+            ]),
+            Self::EcapeCapeRatio => Some(vec![0.0, 0.25, 0.5, 0.75, 1.0, 1.1]),
+            Self::Uh => Some(vec![
+                25.0, 50.0, 75.0, 100.0, 150.0, 200.0, 250.0, 300.0, 400.0,
+            ]),
+            Self::LapseRate => Some(vec![4.0, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0]),
+        }
+    }
+
+    pub fn mask_below(self) -> Option<f64> {
+        match self {
+            Self::Cape | Self::Ecape | Self::ThreeCape | Self::Ncape => Some(1.0),
+            Self::Srh
+            | Self::Stp
+            | Self::Scp
+            | Self::Ehi
+            | Self::Tehi
+            | Self::Tts
+            | Self::Vtp
+            | Self::Uh => Some(0.01),
+            _ => None,
+        }
+    }
+
     pub fn scale(self) -> DiscreteColorScale {
+        let mask_below = self.mask_below();
         match self {
             Self::Cape => DiscreteColorScale {
                 levels: range_step(0.0, 8100.0, 100.0),
                 colors: weather_palette(WeatherPalette::Cape),
                 extend: ExtendMode::Max,
-                mask_below: None,
+                mask_below,
+            },
+            Self::Ecape => DiscreteColorScale {
+                levels: range_step(0.0, 5000.1, 50.0),
+                colors: weather_palette(WeatherPalette::Ecape),
+                extend: ExtendMode::Max,
+                mask_below,
             },
             Self::ThreeCape => DiscreteColorScale {
                 levels: concat_ranges(&[(0.0, 300.0, 5.0), (300.0, 501.0, 20.0)]),
                 colors: weather_palette(WeatherPalette::ThreeCape),
                 extend: ExtendMode::Max,
-                mask_below: None,
+                mask_below,
+            },
+            Self::Ncape => DiscreteColorScale {
+                levels: range_step(0.0, 2000.1, 50.0),
+                colors: weather_palette(WeatherPalette::Ncape),
+                extend: ExtendMode::Max,
+                mask_below,
             },
             Self::Cin => DiscreteColorScale {
                 levels: range_step(-300.0, 1.0, 25.0),
-                colors: weather_palette(WeatherPalette::Cape),
+                colors: weather_palette(WeatherPalette::Cin),
                 extend: ExtendMode::Min,
-                mask_below: None,
+                mask_below,
             },
             Self::Lcl => DiscreteColorScale {
-                levels: range_step(0.0, 4200.0, 200.0),
-                colors: weather_palette(WeatherPalette::Cape),
+                levels: range_step(0.0, 4000.1, 250.0),
+                colors: weather_palette(WeatherPalette::HeightAgl),
                 extend: ExtendMode::Max,
-                mask_below: None,
+                mask_below,
             },
             Self::Lfc => DiscreteColorScale {
-                levels: range_step(0.0, 5500.0, 500.0),
-                colors: weather_palette(WeatherPalette::Cape),
+                levels: range_step(0.0, 8000.1, 500.0),
+                colors: weather_palette(WeatherPalette::HeightAgl),
                 extend: ExtendMode::Max,
-                mask_below: None,
+                mask_below,
             },
             Self::El => DiscreteColorScale {
-                levels: range_step(0.0, 16000.0, 1000.0),
-                colors: weather_palette(WeatherPalette::Cape),
+                levels: range_step(4000.0, 18000.1, 1000.0),
+                colors: weather_palette(WeatherPalette::EquilibriumLevel),
                 extend: ExtendMode::Max,
-                mask_below: None,
+                mask_below,
             },
             Self::Srh => DiscreteColorScale {
                 levels: srh_scale_levels(),
                 colors: weather_palette(WeatherPalette::Srh),
                 extend: ExtendMode::Max,
-                mask_below: None,
+                mask_below,
             },
             Self::Stp => DiscreteColorScale {
                 levels: stp_scale_levels(),
                 colors: weather_palette(WeatherPalette::Stp),
                 extend: ExtendMode::Max,
-                mask_below: None,
+                mask_below,
             },
             Self::Scp => DiscreteColorScale {
-                levels: range_step(0.0, 11.0, 1.0),
-                colors: weather_palette(WeatherPalette::Cape),
+                levels: range_step(0.0, 70.1, 1.0),
+                colors: weather_palette(WeatherPalette::Scp),
                 extend: ExtendMode::Max,
-                mask_below: None,
+                mask_below,
             },
             Self::Ehi => DiscreteColorScale {
-                levels: concat_ranges(&[(0.0, 2.0, 0.1), (2.0, 16.2, 0.2)]),
+                levels: concat_ranges(&[(0.0, 2.0, 0.1), (2.0, 24.2, 0.2)]),
                 colors: weather_palette(WeatherPalette::Ehi),
                 extend: ExtendMode::Max,
-                mask_below: None,
+                mask_below,
+            },
+            Self::Tehi => DiscreteColorScale {
+                levels: range_step(0.0, 20.1, 0.2),
+                colors: weather_palette(WeatherPalette::TornadicEhi),
+                extend: ExtendMode::Max,
+                mask_below,
+            },
+            Self::Tts => DiscreteColorScale {
+                levels: range_step(0.0, 20.1, 0.2),
+                colors: weather_palette(WeatherPalette::TornadicTts),
+                extend: ExtendMode::Max,
+                mask_below,
+            },
+            Self::Vtp => DiscreteColorScale {
+                levels: range_step(0.0, 20.1, 0.2),
+                colors: weather_palette(WeatherPalette::ViolentTornado),
+                extend: ExtendMode::Max,
+                mask_below,
             },
             Self::EcapeCapeRatio => DiscreteColorScale {
                 levels: range_step(0.0, 1.15, 0.05),
                 colors: weather_palette(WeatherPalette::EcapeRatio),
                 extend: ExtendMode::Max,
-                mask_below: None,
+                mask_below,
             },
             Self::Uh => DiscreteColorScale {
                 levels: concat_ranges(&[(0.0, 200.0, 5.0), (200.0, 401.0, 10.0)]),
                 colors: weather_palette(WeatherPalette::Uh),
                 extend: ExtendMode::Max,
-                mask_below: None,
+                mask_below,
             },
             Self::LapseRate => DiscreteColorScale {
                 levels: range_step(2.0, 10.1, 0.1),
                 colors: weather_palette(WeatherPalette::LapseRate),
                 extend: ExtendMode::Both,
-                mask_below: None,
+                mask_below,
             },
         }
     }
 }
 
 impl DerivedScalePreset {
+    pub fn legend_levels(self) -> Option<Vec<f64>> {
+        match self {
+            Self::LiftedIndex => Some(vec![-12.0, -8.0, -4.0, 0.0, 4.0, 8.0, 12.0]),
+            Self::TemperatureAdvection => {
+                Some(vec![-12.0, -8.0, -4.0, -2.0, 0.0, 2.0, 4.0, 8.0, 12.0])
+            }
+            Self::BulkShear => Some(vec![0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0]),
+            Self::SurfaceComfort => {
+                Some(vec![-30.0, -20.0, -10.0, 0.0, 10.0, 20.0, 30.0, 40.0, 50.0])
+            }
+        }
+    }
+
     pub fn scale(self) -> DiscreteColorScale {
         match self {
             Self::LiftedIndex => {
@@ -662,10 +790,19 @@ pub fn weather_palette(palette: WeatherPalette) -> Vec<Color> {
 
     let colors = match palette {
         WeatherPalette::Cape => colormaps::cape(),
+        WeatherPalette::Ecape => ecape_palette(),
         WeatherPalette::ThreeCape => colormaps::three_cape(),
+        WeatherPalette::Ncape => ncape_palette(),
+        WeatherPalette::Cin => cin_palette(),
+        WeatherPalette::Scp => scp_palette(),
         WeatherPalette::Ehi => colormaps::ehi(),
+        WeatherPalette::TornadicEhi => tornadic_ehi_palette(),
+        WeatherPalette::TornadicTts => tornadic_tts_palette(),
+        WeatherPalette::ViolentTornado => violent_tornado_palette(),
         WeatherPalette::Srh => colormaps::srh(),
         WeatherPalette::Stp => colormaps::stp(),
+        WeatherPalette::HeightAgl => height_agl_palette(),
+        WeatherPalette::EquilibriumLevel => equilibrium_level_palette(),
         WeatherPalette::LapseRate => colormaps::lapse_rate(),
         WeatherPalette::Uh => colormaps::uh(),
         WeatherPalette::EcapeRatio => ecape_ratio_palette(),
@@ -765,10 +902,70 @@ fn ecape_ratio_palette() -> Vec<crate::color::Rgba> {
         "#84cc16", "#22c55e", "#15803d",
     ];
 
-    ECAPE_RATIO_HEX
-        .into_iter()
-        .map(rgba_from_hex)
-        .collect::<Vec<_>>()
+    palette_from_hex(&ECAPE_RATIO_HEX)
+}
+
+fn ecape_palette() -> Vec<crate::color::Rgba> {
+    palette_from_hex(&[
+        "#f7fbff", "#deebf7", "#c6dbef", "#9ecae1", "#6baed6", "#31a354", "#fdd049", "#fdae61",
+        "#f46d43", "#d73027", "#7f0000", "#4d004b",
+    ])
+}
+
+fn cin_palette() -> Vec<crate::color::Rgba> {
+    palette_from_hex(&[
+        "#35004f", "#5f006d", "#8b0f6f", "#b52e57", "#d95f35", "#f29f3d", "#f7d77a",
+    ])
+}
+
+fn ncape_palette() -> Vec<crate::color::Rgba> {
+    palette_from_hex(&[
+        "#f7fbff", "#deebf7", "#c6dbef", "#9ecae1", "#6baed6", "#31a354", "#fed976", "#fd8d3c",
+        "#bd0026",
+    ])
+}
+
+fn scp_palette() -> Vec<crate::color::Rgba> {
+    palette_from_hex(&[
+        "#f7fbff", "#c6dbef", "#6baed6", "#2171b5", "#31a354", "#ffd92f", "#fc8d59", "#d7301f",
+        "#7f0000", "#54278f",
+    ])
+}
+
+fn height_agl_palette() -> Vec<crate::color::Rgba> {
+    palette_from_hex(&[
+        "#ffffe5", "#fff7bc", "#fee391", "#fec44f", "#fe9929", "#ec7014", "#cc4c02", "#8c2d04",
+    ])
+}
+
+fn equilibrium_level_palette() -> Vec<crate::color::Rgba> {
+    palette_from_hex(&[
+        "#f7fcfd", "#e0ecf4", "#bfd3e6", "#9ebcda", "#8c96c6", "#8c6bb1", "#88419d", "#810f7c",
+        "#4d004b",
+    ])
+}
+
+fn tornadic_ehi_palette() -> Vec<crate::color::Rgba> {
+    palette_from_hex(&[
+        "#fff7bc", "#fee391", "#fec44f", "#fe9929", "#ec7014", "#cc4c02", "#8c2d04", "#4d004b",
+    ])
+}
+
+fn tornadic_tts_palette() -> Vec<crate::color::Rgba> {
+    palette_from_hex(&[
+        "#f7fcf5", "#c7e9c0", "#74c476", "#31a354", "#006d2c", "#fdd049", "#f16913", "#a63603",
+    ])
+}
+
+fn violent_tornado_palette() -> Vec<crate::color::Rgba> {
+    palette_from_hex(&[
+        "#edf8fb", "#b2e2e2", "#66c2a4", "#238b45", "#fdd049", "#fdae6b", "#e6550d", "#7f2704",
+        "#4a1486",
+    ])
+}
+
+fn palette_from_hex(values: &[&str]) -> Vec<crate::color::Rgba> {
+    values.iter().map(|value| rgba_from_hex(value)).collect()
 }
 
 fn rgba_from_hex(value: &str) -> crate::color::Rgba {
@@ -904,6 +1101,11 @@ mod tests {
             Some(WeatherPreset::EcapeCapeRatio)
         );
         assert_eq!(
+            WeatherPreset::from_product_name("ncape"),
+            Some(WeatherPreset::Ncape)
+        );
+        assert_eq!(WeatherProduct::Sbncape.scale_preset(), WeatherPreset::Ncape);
+        assert_eq!(
             WeatherProduct::from_product_name("ecape_ehi"),
             Some(WeatherProduct::EcapeEhi01kmExperimental)
         );
@@ -925,7 +1127,7 @@ mod tests {
         );
         assert_eq!(
             WeatherPreset::from_product_name("vtp_mod"),
-            Some(WeatherPreset::Stp)
+            Some(WeatherPreset::Vtp)
         );
     }
 
@@ -987,12 +1189,39 @@ mod tests {
             WeatherPreset::ThreeCape.scale().levels,
             concat_ranges(&[(0.0, 300.0, 5.0), (300.0, 501.0, 20.0)])
         );
+        assert_eq!(
+            WeatherPreset::Ncape.scale().levels,
+            range_step(0.0, 2000.1, 50.0)
+        );
+        assert_eq!(
+            WeatherPreset::Cin.scale().levels,
+            range_step(-300.0, 1.0, 25.0)
+        );
+        assert_eq!(
+            WeatherPreset::Lcl.scale().levels,
+            range_step(0.0, 4000.1, 250.0)
+        );
+        assert_eq!(
+            WeatherPreset::Lfc.scale().levels,
+            range_step(0.0, 8000.1, 500.0)
+        );
+        assert_eq!(
+            WeatherPreset::El.scale().levels,
+            range_step(4000.0, 18000.1, 1000.0)
+        );
         assert_eq!(WeatherPreset::Srh.scale().levels, srh_scale_levels());
         assert_eq!(WeatherPreset::Stp.scale().levels, stp_scale_levels());
         assert_eq!(
-            WeatherPreset::Ehi.scale().levels,
-            concat_ranges(&[(0.0, 2.0, 0.1), (2.0, 16.2, 0.2)])
+            WeatherPreset::Scp.scale().levels,
+            range_step(0.0, 70.1, 1.0)
         );
+        assert_eq!(
+            WeatherPreset::Ehi.scale().levels,
+            concat_ranges(&[(0.0, 2.0, 0.1), (2.0, 24.2, 0.2)])
+        );
+        for preset in [WeatherPreset::Tehi, WeatherPreset::Tts, WeatherPreset::Vtp] {
+            assert_eq!(preset.scale().levels, range_step(0.0, 20.1, 0.2));
+        }
         assert_eq!(
             WeatherPreset::EcapeCapeRatio.scale().levels,
             range_step(0.0, 1.15, 0.05)
@@ -1005,6 +1234,97 @@ mod tests {
             WeatherPreset::LapseRate.scale().levels,
             range_step(2.0, 10.1, 0.1)
         );
+    }
+
+    #[test]
+    fn weather_presets_expose_operational_legend_thresholds_and_masks() {
+        for preset in [
+            WeatherPreset::Cape,
+            WeatherPreset::Ecape,
+            WeatherPreset::ThreeCape,
+            WeatherPreset::Ncape,
+            WeatherPreset::Cin,
+            WeatherPreset::Lcl,
+            WeatherPreset::Lfc,
+            WeatherPreset::El,
+            WeatherPreset::Srh,
+            WeatherPreset::Stp,
+            WeatherPreset::Scp,
+            WeatherPreset::Ehi,
+            WeatherPreset::Tehi,
+            WeatherPreset::Tts,
+            WeatherPreset::Vtp,
+            WeatherPreset::EcapeCapeRatio,
+            WeatherPreset::Uh,
+            WeatherPreset::LapseRate,
+        ] {
+            let scale = preset.scale();
+            let legend = preset
+                .legend_levels()
+                .unwrap_or_else(|| panic!("{preset:?} should expose operational legend levels"));
+            assert!(
+                legend.len() >= 2,
+                "{preset:?} should expose at least one legend interval"
+            );
+            assert!(
+                scale.levels.len() >= legend.len(),
+                "{preset:?} should keep dense fill levels separate from sparse legend thresholds"
+            );
+            assert!(
+                *legend.first().unwrap() + 1.0e-6 >= *scale.levels.first().unwrap(),
+                "{preset:?} legend should start inside the fill scale"
+            );
+            assert!(
+                *legend.last().unwrap() <= *scale.levels.last().unwrap() + 1.0e-6,
+                "{preset:?} legend should end inside the fill scale"
+            );
+        }
+
+        assert_eq!(WeatherPreset::Cape.scale().mask_below, Some(1.0));
+        assert_eq!(WeatherPreset::Ecape.scale().mask_below, Some(1.0));
+        assert_eq!(WeatherPreset::Ncape.scale().mask_below, Some(1.0));
+        assert_eq!(WeatherPreset::Stp.scale().mask_below, Some(0.01));
+        assert_eq!(WeatherPreset::Uh.scale().mask_below, Some(0.01));
+        assert_eq!(WeatherPreset::Cin.scale().mask_below, None);
+    }
+
+    #[test]
+    fn renderer_weather_presets_do_not_borrow_generic_severe_palettes() {
+        for preset in [
+            WeatherPreset::Ecape,
+            WeatherPreset::Cin,
+            WeatherPreset::Ncape,
+            WeatherPreset::Lcl,
+            WeatherPreset::Lfc,
+            WeatherPreset::El,
+            WeatherPreset::Scp,
+            WeatherPreset::Tehi,
+            WeatherPreset::Tts,
+            WeatherPreset::Vtp,
+        ] {
+            let scale = preset.scale();
+            assert_ne!(
+                scale.colors,
+                weather_palette(WeatherPalette::Cape),
+                "{preset:?} should not borrow the CAPE palette"
+            );
+            assert_ne!(
+                scale.colors,
+                weather_palette(WeatherPalette::Stp),
+                "{preset:?} should not borrow the STP palette"
+            );
+            assert!(
+                scale.colors.len() >= 2,
+                "{preset:?} should use a visible operational palette"
+            );
+        }
+
+        assert_eq!(WeatherProduct::Tehi.scale_preset(), WeatherPreset::Tehi);
+        assert_eq!(WeatherProduct::Tts.scale_preset(), WeatherPreset::Tts);
+        assert_eq!(WeatherProduct::VtpMod.scale_preset(), WeatherPreset::Vtp);
+        assert_eq!(WeatherProduct::Sbecape.scale_preset(), WeatherPreset::Ecape);
+        assert_eq!(WeatherProduct::Sbncape.scale_preset(), WeatherPreset::Ncape);
+        assert_eq!(WeatherProduct::Scp.default_tick_step(), Some(5.0));
     }
 
     #[test]

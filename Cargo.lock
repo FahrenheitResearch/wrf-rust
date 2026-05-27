@@ -2644,6 +2644,7 @@ dependencies = [
 name = "wrf-products"
 version = "0.1.0"
 dependencies = [
+ "rustwx-core",
  "serde",
  "thiserror",
  "wrf-core",

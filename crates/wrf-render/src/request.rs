@@ -150,6 +150,46 @@ impl Color {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OverlayLegendItem {
+    pub label: String,
+    pub fill_color: Color,
+    pub outline_color: Color,
+}
+
+impl OverlayLegendItem {
+    pub fn new<S: Into<String>>(label: S, fill_color: Color, outline_color: Color) -> Self {
+        Self {
+            label: label.into(),
+            fill_color,
+            outline_color,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OverlayLegend {
+    pub title: String,
+    pub items: Vec<OverlayLegendItem>,
+}
+
+impl OverlayLegend {
+    pub fn new<S: Into<String>>(title: S, items: Vec<OverlayLegendItem>) -> Self {
+        Self {
+            title: title.into(),
+            items,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DomainFrameSource {
+    #[default]
+    ProjectedGrid,
+    RasterAlpha,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DomainFrame {
     pub inset_px: u32,
@@ -158,6 +198,8 @@ pub struct DomainFrame {
     pub clear_outside: bool,
     pub legend_follows_frame: bool,
     pub chrome_follows_frame: bool,
+    #[serde(default)]
+    pub source: DomainFrameSource,
 }
 
 impl DomainFrame {
@@ -169,6 +211,7 @@ impl DomainFrame {
             clear_outside: true,
             legend_follows_frame: true,
             chrome_follows_frame: true,
+            source: DomainFrameSource::ProjectedGrid,
         }
     }
 }
@@ -597,6 +640,11 @@ pub struct ContourLayer {
     pub levels: Vec<f64>,
     pub color: Color,
     pub width: u32,
+    pub halo_color: Color,
+    pub halo_width: u32,
+    pub major_every: usize,
+    pub major_width: u32,
+    pub label_every: usize,
     pub labels: bool,
     pub show_extrema: bool,
 }
@@ -605,6 +653,11 @@ pub struct ContourLayer {
 pub struct ContourStyle {
     pub color: Color,
     pub width: u32,
+    pub halo_color: Color,
+    pub halo_width: u32,
+    pub major_every: usize,
+    pub major_width: u32,
+    pub label_every: usize,
     pub labels: bool,
     pub show_extrema: bool,
 }
@@ -614,6 +667,11 @@ impl Default for ContourStyle {
         Self {
             color: Color::BLACK,
             width: 1,
+            halo_color: Color::WHITE,
+            halo_width: 0,
+            major_every: 1,
+            major_width: 1,
+            label_every: 1,
             labels: false,
             show_extrema: false,
         }
@@ -627,6 +685,11 @@ impl ContourLayer {
             levels,
             color: style.color,
             width: style.width,
+            halo_color: style.halo_color,
+            halo_width: style.halo_width,
+            major_every: style.major_every.max(1),
+            major_width: style.major_width.max(style.width),
+            label_every: style.label_every.max(1),
             labels: style.labels,
             show_extrema: style.show_extrema,
         }
@@ -639,7 +702,10 @@ pub struct WindBarbLayer {
     pub v: Vec<f32>,
     pub stride_x: usize,
     pub stride_y: usize,
+    pub spacing_px: f64,
     pub color: Color,
+    pub halo_color: Color,
+    pub halo_width: u32,
     pub width: u32,
     pub length_px: f64,
 }
@@ -648,7 +714,10 @@ pub struct WindBarbLayer {
 pub struct WindBarbStyle {
     pub stride_x: usize,
     pub stride_y: usize,
+    pub spacing_px: f64,
     pub color: Color,
+    pub halo_color: Color,
+    pub halo_width: u32,
     pub width: u32,
     pub length_px: f64,
 }
@@ -658,7 +727,10 @@ impl Default for WindBarbStyle {
         Self {
             stride_x: 8,
             stride_y: 8,
+            spacing_px: 56.0,
             color: Color::BLACK,
+            halo_color: Color::WHITE,
+            halo_width: 2,
             width: 1,
             length_px: 20.0,
         }
@@ -672,7 +744,10 @@ impl WindBarbLayer {
             v: v.values.clone(),
             stride_x: style.stride_x.max(1),
             stride_y: style.stride_y.max(1),
+            spacing_px: style.spacing_px.max(0.0),
             color: style.color,
+            halo_color: style.halo_color,
+            halo_width: style.halo_width,
             width: style.width,
             length_px: style.length_px,
         }
@@ -708,9 +783,13 @@ pub struct MapRenderRequest {
     #[serde(default)]
     pub cbar_ticks: Option<Vec<f64>>,
     #[serde(default)]
+    pub colorbar_label: Option<String>,
+    #[serde(default)]
     pub render_density: RenderDensity,
     #[serde(default)]
     pub legend: LegendControls,
+    #[serde(default)]
+    pub overlay_legends: Vec<OverlayLegend>,
     #[serde(default)]
     pub chrome_scale: ChromeScale,
     #[serde(default = "default_supersample_factor")]
@@ -753,6 +832,13 @@ const fn default_supersample_sharpen() -> bool {
 
 impl MapRenderRequest {
     pub fn new(field: Field2D, scale: ColorScale) -> Self {
+        let colorbar_label = default_colorbar_label(&field.units);
+        let weather_legend_levels = match &scale {
+            ColorScale::Weather(preset) => preset.legend_levels(),
+            ColorScale::Discrete(_) => None,
+        };
+        let mut legend = LegendControls::default();
+        legend.levels = weather_legend_levels.clone();
         Self {
             field,
             rgba_grid: None,
@@ -768,9 +854,11 @@ impl MapRenderRequest {
             subtitle_center: None,
             subtitle_right: None,
             cbar_tick_step: None,
-            cbar_ticks: None,
+            cbar_ticks: weather_legend_levels,
+            colorbar_label,
             render_density: RenderDensity::default(),
-            legend: LegendControls::default(),
+            legend,
+            overlay_legends: Vec::new(),
             chrome_scale: ChromeScale::default(),
             supersample_factor: default_supersample_factor(),
             supersample_sharpen: default_supersample_sharpen(),
@@ -799,6 +887,8 @@ impl MapRenderRequest {
         apply_reference_discrete_defaults(&mut request);
         request.title = Some(product.display_title().to_string());
         request.cbar_tick_step = product.default_tick_step();
+        request.cbar_ticks = product.legend_levels();
+        request.legend.levels = request.cbar_ticks.clone();
         request.semantics = Some(product.semantics());
         request.visual_mode = product.default_visual_mode();
         request.product_metadata = Some(
@@ -823,6 +913,8 @@ impl MapRenderRequest {
         apply_reference_discrete_defaults(&mut request);
         request.title = Some(product.display_title().to_string());
         request.cbar_tick_step = product.default_tick_step();
+        request.cbar_ticks = product.legend_levels();
+        request.legend.levels = request.cbar_ticks.clone();
         request.semantics = Some(product.semantics());
         request.visual_mode = product.default_visual_mode();
         request.product_metadata = Some(
@@ -1022,7 +1114,13 @@ fn apply_reference_discrete_defaults(request: &mut MapRenderRequest) {
     request.legend = LegendControls {
         density: LevelDensity::default(),
         mode: LegendMode::Stepped,
+        levels: None,
     };
+}
+
+fn default_colorbar_label(units: &str) -> Option<String> {
+    let units = units.trim();
+    (!units.is_empty()).then(|| units.to_string())
 }
 
 fn ensure_same_grid(
@@ -1173,7 +1271,7 @@ mod tests {
 
         assert!(matches!(
             request.scale,
-            ColorScale::Weather(crate::weather::WeatherPreset::Cape)
+            ColorScale::Weather(crate::weather::WeatherPreset::Ecape)
         ));
         assert_eq!(request.title.as_deref(), Some("MLECAPE"));
         assert_eq!(request.cbar_tick_step, Some(500.0));
@@ -1219,13 +1317,45 @@ mod tests {
     }
 
     #[test]
-    fn new_render_requests_start_without_projected_place_labels() {
+    fn new_render_requests_start_without_optional_overlays() {
         let request = MapRenderRequest::new(
             sample_render_field(),
             ColorScale::Weather(crate::weather::WeatherPreset::Cape),
         );
 
         assert!(request.projected_place_labels.is_empty());
+        assert!(request.overlay_legends.is_empty());
+    }
+
+    #[test]
+    fn new_render_requests_use_field_units_as_colorbar_label() {
+        let request = MapRenderRequest::new(
+            sample_render_field(),
+            ColorScale::Weather(crate::weather::WeatherPreset::Cape),
+        );
+
+        assert_eq!(request.colorbar_label.as_deref(), Some("J/kg"));
+
+        let mut no_units = sample_render_field();
+        no_units.units.clear();
+        let request = MapRenderRequest::new(
+            no_units,
+            ColorScale::Weather(crate::weather::WeatherPreset::Cape),
+        );
+
+        assert_eq!(request.colorbar_label, None);
+    }
+
+    #[test]
+    fn weather_scale_requests_start_with_operational_threshold_legend() {
+        let request = MapRenderRequest::new(
+            sample_render_field(),
+            ColorScale::Weather(crate::weather::WeatherPreset::Stp),
+        );
+        let legend = crate::weather::WeatherPreset::Stp.legend_levels().unwrap();
+
+        assert_eq!(request.cbar_ticks.as_deref(), Some(legend.as_slice()));
+        assert_eq!(request.legend.levels.as_deref(), Some(legend.as_slice()));
     }
 
     #[test]
@@ -1282,6 +1412,17 @@ mod tests {
         assert_eq!(weather.render_density.palette_multiplier, 1);
         assert_eq!(weather.legend.density, LevelDensity::default());
         assert_eq!(weather.legend.mode, LegendMode::Stepped);
+        let weather_legend = crate::weather::WeatherProduct::Sbcape
+            .legend_levels()
+            .unwrap();
+        assert_eq!(
+            weather.cbar_ticks.as_deref(),
+            Some(weather_legend.as_slice())
+        );
+        assert_eq!(
+            weather.legend.levels.as_deref(),
+            Some(weather_legend.as_slice())
+        );
 
         let derived = MapRenderRequest::for_derived_product(
             sample_render_field(),
@@ -1290,6 +1431,17 @@ mod tests {
         assert_eq!(derived.render_density.fill, LevelDensity::default());
         assert_eq!(derived.render_density.palette_multiplier, 1);
         assert_eq!(derived.legend.mode, LegendMode::Stepped);
+        let derived_legend = crate::weather::DerivedProductStyle::BulkShear06km
+            .legend_levels()
+            .unwrap();
+        assert_eq!(
+            derived.cbar_ticks.as_deref(),
+            Some(derived_legend.as_slice())
+        );
+        assert_eq!(
+            derived.legend.levels.as_deref(),
+            Some(derived_legend.as_slice())
+        );
     }
 
     #[test]
@@ -1301,6 +1453,10 @@ mod tests {
 
         assert_eq!(request.title.as_deref(), Some("0-6 KM BULK SHEAR"));
         assert_eq!(request.cbar_tick_step, Some(5.0));
+        assert_eq!(
+            request.cbar_ticks.as_deref(),
+            Some([0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0].as_slice())
+        );
         assert_eq!(
             request
                 .semantics
