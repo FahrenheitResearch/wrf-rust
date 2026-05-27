@@ -2936,10 +2936,10 @@ fn requested_frame_policy(
 
 fn product_frame_policy(product: WrfProduct) -> ProductFramePolicy {
     match product {
-        WrfProduct::ReflectivityUh => ProductFramePolicy::FiniteDataWithOverlays,
-        WrfProduct::Reflectivity | WrfProduct::Reflectivity1km | WrfProduct::UpdraftHelicity => {
-            ProductFramePolicy::FiniteData
-        }
+        WrfProduct::Reflectivity
+        | WrfProduct::Reflectivity1km
+        | WrfProduct::ReflectivityUh
+        | WrfProduct::UpdraftHelicity => ProductFramePolicy::FullDomain,
         _ => ProductFramePolicy::FullDomain,
     }
 }
@@ -6090,10 +6090,7 @@ mod tests {
             .visual_recipe(WrfProduct::ReflectivityUh);
         assert_eq!(visual.palette, ProductPalette::Reflectivity);
         assert_eq!(visual.mask_policy, MaskPolicy::Below(5.0));
-        assert_eq!(
-            visual.frame_policy,
-            ProductFramePolicy::FiniteDataWithOverlays
-        );
+        assert_eq!(visual.frame_policy, ProductFramePolicy::FullDomain);
         assert_eq!(
             visual.legend_ticks.as_deref(),
             Some(&[5.0, 15.0, 25.0, 35.0, 45.0, 55.0, 65.0, 75.0][..])
@@ -6971,15 +6968,15 @@ mod tests {
             SyntheticSmokeCase::new(WrfProduct::ReflectivityUh, ordinary_grid.clone())
                 .expect_rgba_grid()
                 .expect_contours()
-                .expect_frame_policy(ProductFramePolicy::FiniteDataWithOverlays)
-                .expect_signature(0x99e7851469f89623),
+                .expect_frame_policy(ProductFramePolicy::FullDomain)
+                .expect_signature(0x38b1acc23f6a7af1),
             SyntheticSmokeCase::new(WrfProduct::Reflectivity1km, ordinary_grid.clone())
-                .expect_frame_policy(ProductFramePolicy::FiniteData)
-                .expect_signature(0x2b89ac55cfb81d27),
+                .expect_frame_policy(ProductFramePolicy::FullDomain)
+                .expect_signature(0x1eae9e558ef26a4d),
             SyntheticSmokeCase::new(WrfProduct::UpdraftHelicity, ordinary_grid.clone())
                 .expect_contours()
-                .expect_frame_policy(ProductFramePolicy::FiniteData)
-                .expect_signature(0xaec735c02558f349),
+                .expect_frame_policy(ProductFramePolicy::FullDomain)
+                .expect_signature(0xb8dc0e7fe829ae33),
             SyntheticSmokeCase::new(WrfProduct::PrecipAccum, ordinary_grid.clone())
                 .expect_signature(0xecb4be8c61c658fa),
             SyntheticSmokeCase::new(WrfProduct::Terrain, ordinary_grid.clone())
@@ -7074,8 +7071,7 @@ mod tests {
             cases.iter().any(|case| {
                 case.product == WrfProduct::ReflectivityUh
                     && case.expect_rgba_grid
-                    && case.expected_frame_policy
-                        == Some(ProductFramePolicy::FiniteDataWithOverlays)
+                    && case.expected_frame_policy == Some(ProductFramePolicy::FullDomain)
             }),
             "canonical smoke gallery should include reflectivity plus UH swath semantics"
         );
@@ -7242,8 +7238,6 @@ mod tests {
         );
         for expected in [
             ProductFramePolicy::FullDomain,
-            ProductFramePolicy::FiniteData,
-            ProductFramePolicy::FiniteDataWithOverlays,
             ProductFramePolicy::StormCentered,
             ProductFramePolicy::GeographicCrop,
         ] {
@@ -7801,16 +7795,13 @@ mod tests {
             reflectivity.legend_ticks.as_deref(),
             Some(&[5.0, 15.0, 25.0, 35.0, 45.0, 55.0, 65.0, 75.0][..])
         );
-        assert_eq!(
-            reflectivity.frame_policy,
-            ProductFramePolicy::FiniteDataWithOverlays
-        );
+        assert_eq!(reflectivity.frame_policy, ProductFramePolicy::FullDomain);
         assert_eq!(
             reflectivity.frame_source,
-            Some(DomainFrameSource::RasterAlpha)
+            Some(DomainFrameSource::ProjectedGrid)
         );
-        assert_eq!(reflectivity.frame_clear_outside, Some(false));
-        assert_eq!(reflectivity.frame_padding_fraction, 0.04);
+        assert_eq!(reflectivity.frame_clear_outside, Some(true));
+        assert_eq!(reflectivity.frame_padding_fraction, 0.02);
         assert_eq!(reflectivity.overlay_count, 1);
         assert_eq!(
             reflectivity.overlay_legend_titles,

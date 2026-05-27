@@ -1722,6 +1722,73 @@ fn projected_grid_to_pixels_cached(
     })
 }
 
+fn render_debug_env_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn domain_frame_debug_enabled() -> bool {
+    render_debug_env_enabled("WRF_RENDER_DEBUG_FRAME")
+        || render_debug_env_enabled("WRF_RENDER_DEBUG_DOMAIN_FRAME")
+}
+
+fn projected_grid_bounds(grid: &ProjectedGrid) -> Option<(f64, f64, f64, f64)> {
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for (&x, &y) in grid.x.iter().zip(grid.y.iter()) {
+        if !x.is_finite() || !y.is_finite() {
+            continue;
+        }
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+        min_y = min_y.min(y);
+        max_y = max_y.max(y);
+    }
+    if min_x.is_finite() && max_x.is_finite() && min_y.is_finite() && max_y.is_finite() {
+        Some((min_x, max_x, min_y, max_y))
+    } else {
+        None
+    }
+}
+
+fn log_domain_frame_debug(
+    opts: &RenderOpts,
+    layout: &Layout,
+    domain_frame_rect: Option<LocalRect>,
+    domain_clip_rect: Option<LocalRect>,
+) {
+    if !domain_frame_debug_enabled() {
+        return;
+    }
+
+    let extent = opts
+        .map_extent
+        .as_ref()
+        .map(|extent| (extent.x_min, extent.x_max, extent.y_min, extent.y_max));
+    let grid_bbox = opts.projected_grid.as_ref().and_then(projected_grid_bounds);
+    eprintln!(
+        "[wrf-render domain-frame] output={}x{} layout_map_rect=[x={}, y={}, w={}, h={}] map_extent={:?} projected_grid_bbox={:?} domain_frame_rect={:?} domain_clip_rect={:?}",
+        opts.width,
+        opts.height,
+        layout.map_x,
+        layout.map_y,
+        layout.map_w,
+        layout.map_h,
+        extent,
+        grid_bbox,
+        domain_frame_rect,
+        domain_clip_rect
+    );
+}
+
 fn hash_rgba(hasher: &mut impl Hasher, color: Rgba) {
     color.r.hash(hasher);
     color.g.hash(hasher);
@@ -4302,6 +4369,15 @@ fn render_to_image_profile_inner(
         canvas_background,
     );
     let effective_domain_frame_rect = variable_timing.domain_frame_rect.or(domain_frame_rect);
+    let effective_domain_clip_rect = variable_timing
+        .domain_clip_rect
+        .or(effective_domain_frame_rect);
+    log_domain_frame_debug(
+        opts,
+        &layout,
+        effective_domain_frame_rect,
+        effective_domain_clip_rect,
+    );
     let (chrome_ms, colorbar_ms) = draw_chrome_and_colorbar(
         &mut img,
         &layout,
@@ -4334,9 +4410,7 @@ fn render_to_image_profile_inner(
         has_projected_grid: opts.projected_grid.is_some(),
         has_inverse_raster: opts.inverse_projected_grid.is_some(),
         projection_clip_mask_present: variable_timing.projection_clip_mask_present,
-        domain_clip_rect: variable_timing
-            .domain_clip_rect
-            .or(effective_domain_frame_rect)
+        domain_clip_rect: effective_domain_clip_rect
             .map(|rect| [rect.min_x, rect.max_x, rect.min_y, rect.max_y]),
     };
 
