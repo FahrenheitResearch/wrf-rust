@@ -10,8 +10,40 @@ permissions:
   contents: write
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Rust tests
+        run: cargo test --workspace --all-targets
+      - name: Release version/docs check
+        run: |
+          python - <<'PY'
+          import pathlib
+          import re
+          import tomllib
+
+          root = pathlib.Path(".")
+          pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+          cargo = tomllib.loads((root / "Cargo.toml").read_text())
+          init_text = (root / "python" / "wrf" / "__init__.py").read_text()
+          fallback = re.search(r'__version__ = "([^"]+)"', init_text).group(1)
+          expected = pyproject["project"]["version"]
+          assert cargo["package"]["version"] == expected
+          assert fallback == expected
+          for manifest in (root / "crates").glob("*/Cargo.toml"):
+              data = tomllib.loads(manifest.read_text())
+              assert data["package"]["version"] == expected, manifest
+          assert (root / "docs" / "API_COMPATIBILITY.md").exists()
+          PY
+
   linux:
     runs-on: ${{ matrix.platform.runner }}
+    needs: [verify]
     strategy:
       fail-fast: false
       matrix:
@@ -39,6 +71,7 @@ jobs:
 
   macos:
     runs-on: ${{ matrix.platform.runner }}
+    needs: [verify]
     strategy:
       fail-fast: false
       matrix:
@@ -65,6 +98,7 @@ jobs:
 
   windows:
     runs-on: windows-latest
+    needs: [verify]
     strategy:
       matrix:
         target: [x64]
@@ -86,6 +120,7 @@ jobs:
 
   sdist:
     runs-on: ubuntu-latest
+    needs: [verify]
     steps:
       - uses: actions/checkout@v4
       - name: Build sdist

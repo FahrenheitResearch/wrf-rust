@@ -9,6 +9,7 @@ use std::path::Path;
 use crate::classic_netcdf_reader::ClassicNetcdfFile;
 use crate::error::{WrfError, WrfResult};
 use crate::hdf5_reader::PureRustFile as Hdf5PureRustFile;
+use crate::reader::ReaderCapabilities;
 
 const CDF_MAGIC_PREFIX: [u8; 3] = *b"CDF";
 const HDF5_SIGNATURE: [u8; 8] = [0x89, b'H', b'D', b'F', 0x0D, 0x0A, 0x1A, 0x0A];
@@ -35,9 +36,16 @@ impl PureRustFile {
             return Ok(Self::Hdf5(Hdf5PureRustFile::open(path)?));
         }
 
-        Err(WrfError::NetCdf(
+        Err(WrfError::UnsupportedFeature(
             "unsupported WRF file format for pure-Rust reader".to_string(),
         ))
+    }
+
+    pub fn capabilities(&self) -> ReaderCapabilities {
+        match self {
+            Self::Classic(_) => ReaderCapabilities::pure_classic(),
+            Self::Hdf5(_) => ReaderCapabilities::pure_hdf5(),
+        }
     }
 
     pub fn has_dataset(&self, name: &str) -> bool {

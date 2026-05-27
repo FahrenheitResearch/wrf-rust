@@ -84,7 +84,7 @@ pub struct ComputeOpts {
 
 #[cfg(test)]
 mod tests {
-    use super::StormMotion;
+    use super::{convert_raw_units_for_values, StormMotion};
 
     #[test]
     fn grid_storm_motion_returns_column_components() {
@@ -103,6 +103,34 @@ mod tests {
 
         assert_eq!(motion.at(0), (12.0, 8.0));
         assert_eq!(motion.at(99), (12.0, 8.0));
+    }
+
+    #[test]
+    fn raw_unit_conversion_changes_data_and_units_together() {
+        let mut values = vec![25.4, 50.8];
+        let units = convert_raw_units_for_values(&mut values, "RAINNC", "mm", "in").unwrap();
+
+        assert_eq!(units, "in");
+        assert!((values[0] - 1.0).abs() < 1.0e-12);
+        assert!((values[1] - 2.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn raw_unit_conversion_errors_for_unknown_source_units() {
+        let mut values = vec![1.0];
+        let err = convert_raw_units_for_values(&mut values, "FOO", "", "m").unwrap_err();
+
+        assert!(err.to_string().contains("no known default units"));
+        assert_eq!(values, vec![1.0]);
+    }
+
+    #[test]
+    fn raw_unit_conversion_does_not_relabel_on_failed_conversion() {
+        let mut values = vec![100.0];
+        let err = convert_raw_units_for_values(&mut values, "HFX", "W/m2", "K").unwrap_err();
+
+        assert!(err.to_string().contains("not convertible"));
+        assert_eq!(values, vec![100.0]);
     }
 }
 
@@ -248,30 +276,11 @@ fn getvar_raw(file: &WrfFile, name: &str, t: usize, opts: &ComputeOpts) -> WrfRe
         .filter(|shape| !shape.is_empty() && shape.iter().product::<usize>() == data.len())
         .unwrap_or_else(|| vec![data.len()]);
 
-    // Raw variables don't have a known default unit, but if the user
-    // requests a conversion from/to a specific pair we can try.
-    // Common WRF raw variables and their units:
-    let default_unit = match upper_name.as_str() {
-        "RAINNC" | "RAINC" | "RAINSH" | "SNOWNC" | "GRAUPELNC" => "mm",
-        "T2" | "TSK" | "SST" => "K",
-        "PSFC" => "Pa",
-        "PBLH" | "SNOWH" => "m",
-        "HFX" | "LH" => "W/m2",
-        "SWDOWN" | "GLW" | "OLR" => "W/m2",
-        "UST" => "m/s",
-        "U10" | "V10" => "m/s",
-        "UP_HELI_MAX" => "m2/s2",
-        _ => "",
-    };
+    let default_unit = raw_default_unit(&upper_name);
 
     let mut data = data;
     let actual_units = if let Some(ref req_units) = opts.units {
-        if !default_unit.is_empty() {
-            if let (Ok(from), Ok(to)) = (parse_units(default_unit), parse_units(req_units)) {
-                let _ = convert_array(&mut data, from, to);
-            }
-        }
-        req_units.clone()
+        convert_raw_units_for_values(&mut data, name, default_unit, req_units)?
     } else {
         default_unit.to_string()
     };
@@ -282,4 +291,58 @@ fn getvar_raw(file: &WrfFile, name: &str, t: usize, opts: &ComputeOpts) -> WrfRe
         units: actual_units,
         description: format!("Raw WRF variable: {name}"),
     })
+}
+
+fn raw_default_unit(upper_name: &str) -> &'static str {
+    match upper_name {
+        "RAINNC" | "RAINC" | "RAINSH" | "SNOWNC" | "GRAUPELNC" => "mm",
+        "T2" | "TSK" | "SST" => "K",
+        "PSFC" => "Pa",
+        "PBLH" | "SNOWH" => "m",
+        "HFX" | "LH" => "W/m2",
+        "SWDOWN" | "GLW" | "OLR" => "W/m2",
+        "UST" => "m/s",
+        "U10" | "V10" => "m/s",
+        "UP_HELI_MAX" => "m2/s2",
+        _ => "",
+    }
+}
+
+fn convert_raw_units_for_values(
+    data: &mut [f64],
+    name: &str,
+    default_unit: &str,
+    requested_unit: &str,
+) -> WrfResult<String> {
+    let requested = requested_unit.trim();
+    if requested.is_empty() {
+        return Ok(default_unit.to_string());
+    }
+
+    if default_unit.is_empty() {
+        return Err(WrfError::UnitConversion(format!(
+            "raw variable `{name}` has no known default units; cannot convert to `{requested}`"
+        )));
+    }
+
+    if default_unit.eq_ignore_ascii_case(requested) {
+        return Ok(default_unit.to_string());
+    }
+
+    let from = parse_units(default_unit).map_err(|err| {
+        WrfError::UnitConversion(format!(
+            "raw variable `{name}` default units `{default_unit}` are not convertible: {err}"
+        ))
+    })?;
+    let to = parse_units(requested).map_err(|err| {
+        WrfError::UnitConversion(format!(
+            "raw variable `{name}` requested units `{requested}` are not recognized: {err}"
+        ))
+    })?;
+    convert_array(data, from, to).map_err(|err| {
+        WrfError::UnitConversion(format!(
+            "raw variable `{name}` cannot convert from `{default_unit}` to `{requested}`: {err}"
+        ))
+    })?;
+    Ok(requested.to_string())
 }

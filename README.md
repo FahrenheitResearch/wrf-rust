@@ -161,19 +161,20 @@ cargo run -p wrf-products --example render_suite -- \
   sbcape,mlcape,srh03,stp_effective,scp,reflectivity
 ```
 
-Render with an explicit history directory for products that can use neighboring
-WRF output files:
+Render with explicit history for products that can use neighboring WRF output
+files:
 
 ```bash
 cargo run -p wrf-products --example render_suite -- \
-  --history-dir /path/to/wrfout/history \
   /path/to/wrfout_d02_1974-04-03_22_00_00 \
   output/severe \
   0 \
-  reflectivity_uh
+  reflectivity_uh \
+  --previous-file /path/to/wrfout_d02_1974-04-03_21_00_00
 ```
 
-Ask the renderer what a product list needs before staging files:
+Ask the renderer what a product list needs before staging files. The output is
+machine-readable JSON:
 
 ```bash
 cargo run -p wrf-products --example render_suite -- \
@@ -195,8 +196,11 @@ directory for sibling wrfout files.
 `reflectivity_uh` renders from the current wrfout by default. If the file
 contains multiple `Time` records, those records may be used to build the 1-hour
 UH max track within that single file. To include neighboring wrfout files in the
-track, pass `--history-dir DIR`; only same-domain wrfout files in that explicit
-directory with valid times in the previous 60 minutes are considered.
+track, pass `--previous-file FILE` one or more times, or pass `--history-dir DIR`.
+Only explicitly supplied history files are considered; sibling wrfout files are
+never scanned implicitly. Each rendered PNG gets a JSON sidecar with product id,
+input file, valid/init time, units, provenance, required inputs, frame policy,
+and explicit history information.
 
 ## Native Soundings
 

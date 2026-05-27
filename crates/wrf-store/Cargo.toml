@@ -1,6 +1,6 @@
 [package]
 name = "wrf-store"
-version = "0.1.0"
+version = "0.2.35"
 edition.workspace = true
 license.workspace = true
 description = "Local WRF run and file discovery primitives"

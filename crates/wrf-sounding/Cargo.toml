@@ -1,6 +1,6 @@
 [package]
 name = "wrf-sounding"
-version = "0.1.0"
+version = "0.2.35"
 edition.workspace = true
 license.workspace = true
 description = "WRF point and box sounding extraction"

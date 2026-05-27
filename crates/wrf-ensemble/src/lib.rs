@@ -22,6 +22,8 @@ const GRID_TOLERANCE_DEG: f32 = 1.0e-4;
 pub enum EnsembleError {
     #[error("ensemble has no members")]
     EmptyEnsemble,
+    #[error("manifest member `{member}` is missing path `{path}`")]
+    MissingMember { member: String, path: String },
     #[error("glob pattern `{pattern}` matched no WRF files")]
     EmptyGlob { pattern: String },
     #[error("failed to read glob pattern `{pattern}`: {source}")]
@@ -38,10 +40,22 @@ pub enum EnsembleError {
     },
     #[error("member `{member}` grid does not match the first ensemble member")]
     GridMismatch { member: String },
+    #[error(
+        "member `{member}` valid time `{valid_time}` does not match first member `{expected}`"
+    )]
+    ValidTimeMismatch {
+        member: String,
+        expected: String,
+        valid_time: String,
+    },
     #[error("stat `{stat}` requires a value")]
     MissingStatValue { stat: &'static str },
     #[error("percentile must be between 0 and 100, got {0}")]
     InvalidPercentile(f64),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
     #[error(transparent)]
     Wrf(#[from] wrf_core::WrfError),
     #[error(transparent)]
@@ -76,6 +90,39 @@ impl EnsembleMember {
             .unwrap_or("member")
             .to_string();
         Self { id, path }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnsembleManifest {
+    pub members: Vec<ManifestMember>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ManifestMember {
+    Path(PathBuf),
+    Object {
+        id: Option<String>,
+        path: PathBuf,
+        valid_time: Option<String>,
+    },
+}
+
+impl ManifestMember {
+    fn into_member(self, manifest_dir: &Path) -> EnsembleMember {
+        match self {
+            Self::Path(path) => {
+                EnsembleMember::from_path(resolve_manifest_path(manifest_dir, path))
+            }
+            Self::Object { id, path, .. } => {
+                let path = resolve_manifest_path(manifest_dir, path);
+                match id {
+                    Some(id) => EnsembleMember::new(id, path),
+                    None => EnsembleMember::from_path(path),
+                }
+            }
+        }
     }
 }
 
@@ -125,6 +172,28 @@ impl WrfEnsemble {
         Self::from_paths(paths)
     }
 
+    pub fn from_manifest<P: AsRef<Path>>(path: P) -> EnsembleResult<Self> {
+        let path = path.as_ref();
+        let manifest: EnsembleManifest = serde_json::from_slice(&std::fs::read(path)?)?;
+        let manifest_dir = path.parent().unwrap_or_else(|| Path::new("."));
+        let members = manifest
+            .members
+            .into_iter()
+            .map(|member| member.into_member(manifest_dir))
+            .collect::<Vec<_>>();
+
+        for member in &members {
+            if !member.path.exists() {
+                return Err(EnsembleError::MissingMember {
+                    member: member.id.clone(),
+                    path: member.path.display().to_string(),
+                });
+            }
+        }
+
+        Self::new(members)
+    }
+
     pub fn members(&self) -> &[EnsembleMember] {
         &self.members
     }
@@ -145,9 +214,22 @@ impl WrfEnsemble {
     ) -> EnsembleResult<MapRenderRequest> {
         let mut member_fields = Vec::with_capacity(self.members.len());
         let mut template = None;
+        let mut expected_valid_time: Option<String> = None;
 
         for member in &self.members {
             let file = WrfFile::open(&member.path)?;
+            let valid_time = valid_time_for_member(&file, timeidx)?;
+            if let (Some(expected), Some(valid_time)) = (&expected_valid_time, &valid_time) {
+                if expected != valid_time {
+                    return Err(EnsembleError::ValidTimeMismatch {
+                        member: member.id.clone(),
+                        expected: expected.clone(),
+                        valid_time: valid_time.clone(),
+                    });
+                }
+            } else if expected_valid_time.is_none() {
+                expected_valid_time = valid_time;
+            }
             let request = build_product_request(&file, product, timeidx)?;
             if let Some(first) = member_fields.first() {
                 validate_same_grid(first, &request.field, &member.id)?;
@@ -166,8 +248,13 @@ impl WrfEnsemble {
             product.recipe().title_template,
             stat.title_label()
         ));
-        request.subtitle_center = Some(format!("{} members", self.members.len()));
-        request.subtitle_right = Some("source: wrf ensemble".to_string());
+        request.subtitle_center = Some(format!(
+            "{} members | probability denominator: finite members",
+            self.members.len()
+        ));
+        request.subtitle_right = expected_valid_time
+            .map(|valid| format!("valid {valid} | source: wrf ensemble"))
+            .or_else(|| Some("source: wrf ensemble".to_string()));
 
         // First pass only reduces the filled scalar product. Keep overlays off
         // until contour/vector fields are reduced explicitly too.
@@ -185,9 +272,55 @@ impl WrfEnsemble {
     ) -> EnsembleResult<()> {
         let request = self.build_product_request(product, stat, timeidx)?;
         let image = render_image_with_style(&request, OPERATIONAL_FAST)?;
+        let path = path.as_ref();
         save_rgba_png_profile_with_options(&image, path, &PngWriteOptions::default())?;
+        write_ensemble_sidecar(path, &ensemble_sidecar(self, product, stat, &request))?;
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnsembleRenderSidecar {
+    pub package_name: String,
+    pub package_version: String,
+    pub product_id: String,
+    pub stat: String,
+    pub units: String,
+    pub members: Vec<EnsembleMember>,
+    pub member_count: usize,
+    pub valid_time_alignment: String,
+    pub same_grid_validation: String,
+    pub probability_denominator: String,
+    pub provenance: String,
+}
+
+fn ensemble_sidecar(
+    ensemble: &WrfEnsemble,
+    product: WrfProduct,
+    stat: EnsembleStat,
+    request: &MapRenderRequest,
+) -> EnsembleRenderSidecar {
+    EnsembleRenderSidecar {
+        package_name: "wrf-ensemble".to_string(),
+        package_version: env!("CARGO_PKG_VERSION").to_string(),
+        product_id: product.canonical_name().to_string(),
+        stat: stat.slug(),
+        units: request.field.units.clone(),
+        members: ensemble.members.clone(),
+        member_count: ensemble.members.len(),
+        valid_time_alignment: "strict_same_timeidx_valid_time".to_string(),
+        same_grid_validation: "strict_lat_lon_grid_match".to_string(),
+        probability_denominator: "finite_members_per_grid_cell".to_string(),
+        provenance: "wrf-ensemble manifest/glob -> wrf-products product -> product-first reduction"
+            .to_string(),
+    }
+}
+
+fn write_ensemble_sidecar(path: &Path, sidecar: &EnsembleRenderSidecar) -> EnsembleResult<()> {
+    let sidecar_path = path.with_extension("json");
+    let data = serde_json::to_vec_pretty(sidecar)?;
+    std::fs::write(sidecar_path, data)?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -447,6 +580,20 @@ fn is_probability(stat: EnsembleStat) -> bool {
     )
 }
 
+fn valid_time_for_member(file: &WrfFile, timeidx: Option<usize>) -> EnsembleResult<Option<String>> {
+    let t = timeidx.unwrap_or(0);
+    let times = file.times()?;
+    Ok(times.get(t).map(|value| value.trim().to_string()))
+}
+
+fn resolve_manifest_path(manifest_dir: &Path, path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        manifest_dir.join(path)
+    }
+}
+
 fn normalize_stat_name(name: &str) -> String {
     name.trim().to_ascii_lowercase().replace(['-', ' '], "_")
 }
@@ -539,5 +686,37 @@ mod tests {
             parse_ensemble_stat("prob_ge", Some(1.0)).unwrap(),
             EnsembleStat::ProbabilityAtOrAbove(1.0)
         );
+    }
+
+    #[test]
+    fn manifest_paths_are_resolved_relative_to_manifest() {
+        let resolved = resolve_manifest_path(
+            Path::new("case_root"),
+            PathBuf::from("members/m01/wrfout_d01"),
+        );
+
+        assert_eq!(
+            resolved,
+            PathBuf::from("case_root").join("members/m01/wrfout_d01")
+        );
+    }
+
+    #[test]
+    fn manifest_missing_members_fail_before_rendering() {
+        let dir =
+            std::env::temp_dir().join(format!("wrf_ensemble_manifest_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let manifest = dir.join("ensemble.json");
+        std::fs::write(
+            &manifest,
+            r#"{"members":[{"id":"m01","path":"missing_wrfout"}]}"#,
+        )
+        .unwrap();
+
+        let err = WrfEnsemble::from_manifest(&manifest).unwrap_err();
+        assert!(matches!(err, EnsembleError::MissingMember { .. }));
+
+        let _ = std::fs::remove_file(manifest);
+        let _ = std::fs::remove_dir(dir);
     }
 }

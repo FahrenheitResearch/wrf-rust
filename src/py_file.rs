@@ -1,5 +1,6 @@
 use numpy::IntoPyArray;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use crate::py_opts;
 
@@ -69,6 +70,22 @@ impl WrfFile {
         self.inner
             .times()
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    }
+
+    /// Return the active reader backend and supported feature envelope.
+    fn reader_capabilities(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let caps = self.inner.reader_capabilities();
+        let dict = PyDict::new(py);
+        dict.set_item("backend", caps.backend)?;
+        dict.set_item("file_format", caps.file_format)?;
+        dict.set_item("supports_time_slicing", caps.supports_time_slicing)?;
+        dict.set_item("supports_classic_netcdf", caps.supports_classic_netcdf)?;
+        dict.set_item("supports_netcdf4_hdf5", caps.supports_netcdf4_hdf5)?;
+        dict.set_item("supports_chunked", caps.supports_chunked)?;
+        dict.set_item("supports_deflate", caps.supports_deflate)?;
+        dict.set_item("supports_shuffle", caps.supports_shuffle)?;
+        dict.set_item("unsupported_features", caps.unsupported_features.to_vec())?;
+        Ok(dict.into_any().unbind())
     }
 
     /// Compute a diagnostic variable.

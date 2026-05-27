@@ -1,6 +1,6 @@
 [package]
 name = "wrf-products"
-version = "0.1.0"
+version = "0.2.35"
 edition.workspace = true
 license.workspace = true
 description = "WRF product recipes and getvar-to-render glue"
@@ -12,6 +12,7 @@ pure-rust-reader = ["wrf-core/pure-rust-reader"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "2"
 rustwx-core = { path = "../rustwx-core" }
 wrf-core = { path = "../wrf-core", default-features = false }

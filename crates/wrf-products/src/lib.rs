@@ -64,6 +64,10 @@ pub enum ProductError {
     #[error("history directory `{path}` could not be read: {message}")]
     HistoryDirRead { path: PathBuf, message: String },
     #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
     Wrf(#[from] wrf_core::WrfError),
     #[error(transparent)]
     Render(#[from] RustwxRenderError),
@@ -1805,6 +1809,72 @@ pub fn all_products() -> impl Iterator<Item = WrfProduct> {
     std::iter::once(WrfProduct::Ecape).chain(default_product_suite().iter().copied())
 }
 
+pub type ProductId = WrfProduct;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProductInputSource {
+    CurrentFile,
+    ExplicitHistory,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequiredInput {
+    pub name: String,
+    pub role: String,
+    pub units: String,
+    pub source: ProductInputSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryRequirementKind {
+    None,
+    CurrentFileWindow,
+    ExplicitHistoryWindow,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryRequirement {
+    pub kind: HistoryRequirementKind,
+    pub window_minutes: Option<u32>,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProductSpec {
+    pub id: String,
+    pub aliases: Vec<String>,
+    pub title: String,
+    pub fill_variable: String,
+    pub output_units: String,
+    pub palette: ProductPalette,
+    pub levels: Vec<f32>,
+    pub legend_ticks: Option<Vec<f64>>,
+    pub required_inputs: Vec<RequiredInput>,
+    pub history: HistoryRequirement,
+    pub frame_policy: ProductFramePolicy,
+    pub visual_mode: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RenderSidecar {
+    pub package_name: String,
+    pub package_version: String,
+    pub product_id: String,
+    pub input_file: String,
+    pub valid_time: Option<String>,
+    pub init_time: Option<String>,
+    pub units: String,
+    pub source: String,
+    pub provenance: String,
+    pub required_inputs: Vec<RequiredInput>,
+    pub history: HistoryRequirement,
+    pub history_files: Vec<String>,
+    pub history_dir: Option<String>,
+    pub frame_policy: ProductFramePolicy,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProductRecipe {
     pub fill_var: &'static str,
@@ -1939,7 +2009,8 @@ pub struct UpperAirTemplateRecipe {
     pub wind_units: &'static str,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProductFramePolicy {
     FullDomain,
     FiniteData,
@@ -1999,6 +2070,7 @@ impl ProductRecipe {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ProductRenderOptions {
     pub history_dir: Option<PathBuf>,
+    pub history_files: Vec<PathBuf>,
     pub geographic_bounds: Option<GeographicBounds>,
     pub storm_center: Option<StormCenteredFrame>,
 }
@@ -2048,6 +2120,19 @@ impl ProductRenderOptions {
     pub fn with_history_dir<P: Into<PathBuf>>(mut self, path: P) -> Self {
         self.history_dir = Some(path.into());
         self
+    }
+
+    pub fn with_history_files<I, P>(mut self, paths: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: Into<PathBuf>,
+    {
+        self.history_files = paths.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn push_history_file<P: Into<PathBuf>>(&mut self, path: P) {
+        self.history_files.push(path.into());
     }
 
     pub fn with_geographic_bounds(
@@ -2373,6 +2458,262 @@ impl ComputeOptsPatch {
             top_m: self.top_m,
             ..Default::default()
         }
+    }
+}
+
+pub fn product_spec(product: ProductId) -> ProductSpec {
+    let recipe = product.recipe();
+    let visual = recipe.visual_recipe(product);
+    ProductSpec {
+        id: product.canonical_name().to_string(),
+        aliases: product_aliases(product),
+        title: recipe.title_template.to_string(),
+        fill_variable: recipe.fill_var.to_string(),
+        output_units: display_unit_label(recipe.fill_units).to_string(),
+        palette: visual.palette,
+        levels: visual.levels.clone(),
+        legend_ticks: visual.legend_ticks.clone(),
+        required_inputs: required_inputs_for_product(product, &recipe, &visual),
+        history: history_requirement(product),
+        frame_policy: visual.frame_policy,
+        visual_mode: visual_mode_name(product.visual_mode()).to_string(),
+    }
+}
+
+pub fn product_specs() -> Vec<ProductSpec> {
+    all_products().map(product_spec).collect()
+}
+
+pub fn product_specs_for(products: &[ProductId]) -> Vec<ProductSpec> {
+    products.iter().copied().map(product_spec).collect()
+}
+
+pub fn product_specs_json(products: &[ProductId]) -> ProductResult<String> {
+    Ok(serde_json::to_string_pretty(&product_specs_for(products))?)
+}
+
+pub fn product_docs_markdown() -> String {
+    let mut out = String::from(
+        "| Product | Units | Palette | History | Required inputs |\n| --- | --- | --- | --- | --- |\n",
+    );
+    for spec in product_specs() {
+        let inputs = spec
+            .required_inputs
+            .iter()
+            .map(|input| input.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!(
+            "| `{}` | `{}` | `{:?}` | `{:?}` | {} |\n",
+            spec.id, spec.output_units, spec.palette, spec.history.kind, inputs
+        ));
+    }
+    out
+}
+
+fn product_aliases(product: ProductId) -> Vec<String> {
+    let aliases: &[&str] = match product {
+        WrfProduct::SbEcape => &["sb_ecape", "sbecape", "surface_based_ecape"],
+        WrfProduct::MlEcape => &["ml_ecape", "mlecape", "mixed_layer_ecape"],
+        WrfProduct::MuEcape => &["mu_ecape", "muecape", "most_unstable_ecape"],
+        WrfProduct::Sbcape => &["sbcape", "surface_based_cape"],
+        WrfProduct::Mlcape => &["mlcape", "mixed_layer_cape"],
+        WrfProduct::Mucape => &["mucape", "most_unstable_cape"],
+        WrfProduct::Srh01 => &["srh01", "srh1", "srh_0_1km", "srh01km"],
+        WrfProduct::Srh03 => &["srh03", "srh3", "srh_0_3km", "srh03km"],
+        WrfProduct::StpEffective => &["stp_effective", "stp"],
+        WrfProduct::StpFixed => &["stp_fixed"],
+        WrfProduct::Scp => &["scp", "supercell_composite_parameter"],
+        WrfProduct::Reflectivity => &["reflectivity", "dbz", "maxdbz"],
+        WrfProduct::ReflectivityUh => &[
+            "reflectivity_uh",
+            "uh_reflectivity",
+            "refl_uh",
+            "dbz_uh",
+            "reflectivity_uh_combo",
+        ],
+        WrfProduct::SurfaceWind10m => &["surface_wind10m", "surface_wind", "wspd10", "wind10m"],
+        WrfProduct::SlpWind10m => &["slp_wind10m", "slp_wind", "mslp_wind10m"],
+        WrfProduct::PrecipAccum => &["precip_accum", "precip", "qpf", "rainnc"],
+        WrfProduct::Pwat => &["pw", "pwat", "precipitable_water"],
+        _ => &[],
+    };
+    let mut result = Vec::with_capacity(aliases.len() + 1);
+    result.push(product.canonical_name().to_string());
+    for alias in aliases {
+        if *alias != product.canonical_name() {
+            result.push((*alias).to_string());
+        }
+    }
+    result
+}
+
+fn required_inputs_for_product(
+    _product: ProductId,
+    recipe: &ProductRecipe,
+    visual: &ProductVisualRecipe,
+) -> Vec<RequiredInput> {
+    let mut inputs = Vec::new();
+    push_required_inputs(
+        &mut inputs,
+        recipe.fill_var,
+        "fill",
+        recipe.fill_units,
+        ProductInputSource::CurrentFile,
+    );
+    for contour in &recipe.contour_overlays {
+        push_required_inputs(
+            &mut inputs,
+            contour.var,
+            "contour",
+            contour.units,
+            ProductInputSource::CurrentFile,
+        );
+    }
+    if let Some(barbs) = &recipe.barb_overlay {
+        push_required_inputs(
+            &mut inputs,
+            barbs.u_var,
+            "barb_u",
+            barbs.units,
+            ProductInputSource::CurrentFile,
+        );
+        push_required_inputs(
+            &mut inputs,
+            barbs.v_var,
+            "barb_v",
+            barbs.units,
+            ProductInputSource::CurrentFile,
+        );
+    }
+    for overlay in &visual.overlays {
+        match overlay {
+            ProductOverlayRecipe::UhTrackSwath(overlay) => {
+                push_required_inputs(
+                    &mut inputs,
+                    overlay.source_var,
+                    "overlay",
+                    overlay.units,
+                    ProductInputSource::CurrentFile,
+                );
+            }
+        }
+    }
+    dedup_required_inputs(inputs)
+}
+
+fn push_required_inputs(
+    inputs: &mut Vec<RequiredInput>,
+    var: &str,
+    role: &str,
+    units: &str,
+    source: ProductInputSource,
+) {
+    match var {
+        "precip_accum" => {
+            push_required_input(inputs, "RAINC", role, "mm", source);
+            push_required_input(inputs, "RAINNC", role, "mm", source);
+        }
+        "uhel_0_3km_1h_max" => {
+            push_required_input(
+                inputs,
+                "UP_HELI_MAX|uhel",
+                role,
+                "m2/s2",
+                ProductInputSource::CurrentFile,
+            );
+            push_required_input(
+                inputs,
+                "UP_HELI_MAX|uhel",
+                "history_window",
+                "m2/s2",
+                ProductInputSource::ExplicitHistory,
+            );
+        }
+        NATIVE_OR_COMPUTED_UH_VAR => {
+            push_required_input(inputs, "UP_HELI_MAX|uhel", role, "m2/s2", source);
+        }
+        _ => {
+            if let Some((source_var, _)) = parse_multiplane_2d_var(var) {
+                push_required_input(inputs, source_var, role, units, source);
+            } else if let Some((base_var, _)) = parse_height_level_var(var) {
+                push_required_input(inputs, "height_agl", "vertical_coordinate", "m", source);
+                push_required_input(inputs, base_var, role, units, source);
+            } else if let Some((source_var, _, _)) = parse_multiplane_pressure_level_var(var) {
+                push_required_input(inputs, "pressure", "vertical_coordinate", "hPa", source);
+                push_required_input(inputs, source_var, role, units, source);
+            } else if let Some((base_var, _)) = parse_pressure_level_var(var) {
+                push_required_input(inputs, "pressure", "vertical_coordinate", "hPa", source);
+                push_required_input(inputs, base_var, role, units, source);
+            } else {
+                push_required_input(inputs, var, role, units, source);
+            }
+        }
+    }
+}
+
+fn push_required_input(
+    inputs: &mut Vec<RequiredInput>,
+    name: &str,
+    role: &str,
+    units: &str,
+    source: ProductInputSource,
+) {
+    inputs.push(RequiredInput {
+        name: name.to_string(),
+        role: role.to_string(),
+        units: display_unit_label(units).to_string(),
+        source,
+    });
+}
+
+fn dedup_required_inputs(inputs: Vec<RequiredInput>) -> Vec<RequiredInput> {
+    let mut deduped = Vec::new();
+    for input in inputs {
+        if !deduped.iter().any(|existing: &RequiredInput| {
+            existing.name == input.name
+                && existing.role == input.role
+                && existing.source == input.source
+        }) {
+            deduped.push(input);
+        }
+    }
+    deduped
+}
+
+fn history_requirement(product: ProductId) -> HistoryRequirement {
+    if product == WrfProduct::ReflectivityUh {
+        HistoryRequirement {
+            kind: HistoryRequirementKind::ExplicitHistoryWindow,
+            window_minutes: Some(60),
+            note: "single-file by default; pass explicit previous files or --history-dir for a complete one-hour UH window".to_string(),
+        }
+    } else {
+        HistoryRequirement {
+            kind: HistoryRequirementKind::None,
+            window_minutes: None,
+            note: "single current file".to_string(),
+        }
+    }
+}
+
+fn visual_mode_name(mode: ProductVisualMode) -> &'static str {
+    match mode {
+        ProductVisualMode::FilledMeteorology => "filled_meteorology",
+        ProductVisualMode::UpperAirAnalysis => "upper_air_analysis",
+        ProductVisualMode::OverlayAnalysis => "overlay_analysis",
+        ProductVisualMode::SevereDiagnostic => "severe_diagnostic",
+        ProductVisualMode::PanelMember => "panel_member",
+        ProductVisualMode::ComparisonPanel => "comparison_panel",
+    }
+}
+
+fn display_unit_label(units: &str) -> &str {
+    match units.trim() {
+        "" => "unitless",
+        "knots" => "kt",
+        "degrees" => "deg",
+        _ => units,
     }
 }
 
@@ -3658,10 +3999,59 @@ pub fn render_product_png_with_options<P: AsRef<Path>>(
     path: P,
     options: &ProductRenderOptions,
 ) -> ProductResult<()> {
+    let t = timeidx.unwrap_or(0);
     let request = build_product_request_with_options(file, product, timeidx, options)?;
     let image = render_image_with_style(&request, operational_product_presentation_style())?;
+    let path = path.as_ref();
     save_rgba_png_profile_with_options(&image, path, &PngWriteOptions::default())?;
+    write_render_sidecar(path, &render_sidecar(file, product, t, &request, options))?;
     Ok(())
+}
+
+fn write_render_sidecar(path: &Path, sidecar: &RenderSidecar) -> ProductResult<()> {
+    let sidecar_path = path.with_extension("json");
+    let data = serde_json::to_vec_pretty(sidecar)?;
+    fs::write(sidecar_path, data)?;
+    Ok(())
+}
+
+fn render_sidecar(
+    file: &WrfFile,
+    product: WrfProduct,
+    timeidx: usize,
+    request: &MapRenderRequest,
+    options: &ProductRenderOptions,
+) -> RenderSidecar {
+    let spec = product_spec(product);
+    RenderSidecar {
+        package_name: "wrf-products".to_string(),
+        package_version: env!("CARGO_PKG_VERSION").to_string(),
+        product_id: product.canonical_name().to_string(),
+        input_file: file.path.display().to_string(),
+        valid_time: raw_valid_time_for_index(file, timeidx),
+        init_time: wrf_init_time(file).map(format_init_time),
+        units: request.field.units.clone(),
+        source: wrf_source_subtitle(file),
+        provenance: request
+            .product_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.description.clone())
+            .unwrap_or_else(|| {
+                "wrf-products recipe -> wrf-core getvar -> wrf-render OPERATIONAL_FAST".to_string()
+            }),
+        required_inputs: spec.required_inputs,
+        history: spec.history,
+        history_files: options
+            .history_files
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect(),
+        history_dir: options
+            .history_dir
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        frame_policy: spec.frame_policy,
+    }
 }
 
 fn build_recipe_field(
@@ -4023,6 +4413,19 @@ fn build_uhel_0_3km_1h_max_field(
         accumulate_uhel_max(&mut max_values, file, idx)?;
     }
 
+    if let Some(current) = valid_time_for_index(file, timeidx) {
+        for path in &options.history_files {
+            if normalize_path_for_compare(path) == normalize_path_for_compare(&file.path) {
+                continue;
+            }
+            let sibling = WrfFile::open(path)?;
+            ensure_history_grid_matches(file, &sibling, path)?;
+            for idx in one_hour_window_indices_for_valid_time(&sibling, current) {
+                accumulate_uhel_max(&mut max_values, &sibling, idx)?;
+            }
+        }
+    }
+
     if let (Some(history_dir), Some(current)) = (
         options.history_dir.as_deref(),
         valid_time_for_index(file, timeidx),
@@ -4121,6 +4524,20 @@ fn native_or_computed_uhel_output(file: &WrfFile, timeidx: usize) -> ProductResu
     .map_err(Into::into)
 }
 
+fn ensure_history_grid_matches(
+    file: &WrfFile,
+    history: &WrfFile,
+    path: &Path,
+) -> ProductResult<()> {
+    if history.nx != file.nx || history.ny != file.ny || history.nz != file.nz {
+        return Err(ProductError::Projection(format!(
+            "history file `{}` grid does not match current file",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 fn history_dir_one_hour_window_paths(
     file: &WrfFile,
     current: WrfTimestamp,
@@ -4199,11 +4616,34 @@ fn one_hour_window_indices(file: &WrfFile, timeidx: usize) -> Vec<usize> {
     }
 }
 
+fn one_hour_window_indices_for_valid_time(file: &WrfFile, current: WrfTimestamp) -> Vec<usize> {
+    let Ok(times) = file.times() else {
+        return Vec::new();
+    };
+    let current_minutes = timestamp_minutes(current);
+    times
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, value)| {
+            let time = parse_wrf_timestamp(value.trim())?;
+            let minutes = timestamp_minutes(time);
+            (minutes <= current_minutes && minutes >= current_minutes - 60).then_some(idx)
+        })
+        .collect()
+}
+
 fn valid_time_for_index(file: &WrfFile, timeidx: usize) -> Option<WrfTimestamp> {
     file.times()
         .ok()?
         .get(timeidx)
         .and_then(|value| parse_wrf_timestamp(value.trim()))
+}
+
+fn raw_valid_time_for_index(file: &WrfFile, timeidx: usize) -> Option<String> {
+    file.times()
+        .ok()?
+        .get(timeidx)
+        .map(|value| value.trim().to_string())
 }
 
 fn normalize_path_for_compare(path: &Path) -> PathBuf {

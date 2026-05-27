@@ -26,6 +26,7 @@ Usage:
 import os
 import sys
 import warnings
+from importlib.metadata import PackageNotFoundError, version
 
 import numpy as np
 
@@ -55,6 +56,7 @@ from wrf._wrf import list_variables as _list_variables
 __all__ = [
     "WrfFile",
     "getvar",
+    "getvar_all_times",
     "list_variables",
     "ALL_TIMES",
     "available_variables",
@@ -63,7 +65,10 @@ __all__ = [
     "latlon_coords",
     "ll_to_xy",
 ]
-__version__ = "0.2.34"
+try:
+    __version__ = version("wrf-rust")
+except PackageNotFoundError:
+    __version__ = "0.2.35"
 
 # ── Optional plotting imports (require matplotlib) ──
 try:
@@ -186,9 +191,17 @@ class WrfFile:
         """Return list of time strings (e.g. '2024-01-01_00:00:00')."""
         return self._inner.times()
 
+    def reader_capabilities(self):
+        """Return the active reader backend and supported feature envelope."""
+        return self._inner.reader_capabilities()
+
     def getvar(self, name, timeidx=0, **kwargs):
         """Shorthand for ``getvar(self, name, timeidx, **kwargs)``."""
         return getvar(self, name, timeidx=timeidx, **kwargs)
+
+    def getvar_all_times(self, name, **kwargs):
+        """Shorthand for ``getvar(self, name, timeidx=ALL_TIMES, **kwargs)``."""
+        return getvar_all_times(self, name, **kwargs)
 
     def __repr__(self):
         return (
@@ -477,6 +490,16 @@ def getvar(
         return result
     else:
         return wf._inner.getvar(name, timeidx=resolved_timeidx, **kwargs)
+
+
+def getvar_all_times(wrffile, name, **kwargs):
+    """Compute a diagnostic for every time in *wrffile*.
+
+    This is the stable public wrapper around the native
+    ``WrfFile.getvar_all_times`` fast path. It is equivalent to
+    ``getvar(wrffile, name, timeidx=ALL_TIMES, **kwargs)``.
+    """
+    return getvar(wrffile, name, timeidx=ALL_TIMES, **kwargs)
 
 
 def list_variables():
@@ -775,8 +798,11 @@ def latlon_coords(wrffile, timeidx=0):
         XLAT and XLONG arrays in degrees.
     """
     wf = _ensure_wrffile(wrffile)
-    lat = wf._inner.getvar("lat", timeidx=timeidx)
-    lon = wf._inner.getvar("lon", timeidx=timeidx)
+    resolved_timeidx = _normalize_single_timeidx(wf, timeidx)
+    if resolved_timeidx is ALL_TIMES:
+        raise ValueError("latlon_coords requires a single time index, not ALL_TIMES")
+    lat = getvar(wf, "lat", timeidx=resolved_timeidx, squeeze=True)
+    lon = getvar(wf, "lon", timeidx=resolved_timeidx, squeeze=True)
     return lat, lon
 
 

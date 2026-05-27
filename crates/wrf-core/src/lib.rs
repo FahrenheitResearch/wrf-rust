@@ -7,6 +7,7 @@ pub mod grid;
 pub mod met;
 pub mod multi;
 pub mod projection;
+pub mod reader;
 pub mod units;
 pub mod variables;
 
@@ -23,4 +24,5 @@ pub use compute::{
 pub use error::{WrfError, WrfResult};
 pub use file::WrfFile;
 pub use projection::WrfProjection;
+pub use reader::ReaderCapabilities;
 pub use units::WrfUnits;

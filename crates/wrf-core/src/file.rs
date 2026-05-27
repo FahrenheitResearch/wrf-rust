@@ -7,6 +7,7 @@ use ndarray::Axis;
 
 use crate::error::{WrfError, WrfResult};
 use crate::grid;
+use crate::reader::ReaderCapabilities;
 
 // ── Physical constants ──
 const G: f64 = 9.80665;
@@ -384,6 +385,19 @@ impl WrfFile {
 // ═══════════════════════════════════════════════════════════════════════════
 
 impl WrfFile {
+    /// Report the active backend and feature envelope for this file handle.
+    pub fn reader_capabilities(&self) -> ReaderCapabilities {
+        #[cfg(feature = "netcdf-backend")]
+        {
+            ReaderCapabilities::netcdf_backend()
+        }
+
+        #[cfg(feature = "pure-rust-reader")]
+        {
+            self.hdf5.capabilities()
+        }
+    }
+
     /// Number of grid cells in a 2D plane.
     pub fn nxy(&self) -> usize {
         self.nx * self.ny

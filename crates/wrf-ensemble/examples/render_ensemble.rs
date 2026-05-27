@@ -1,13 +1,13 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use wrf_ensemble::{parse_ensemble_stat, stat_requires_value, WrfEnsemble};
 use wrf_products::parse_product;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args().skip(1);
-    let member_glob = args.next().ok_or(
-        "usage: render_ensemble <member_glob> <product> <stat> <output.png> [timeidx] [value]",
+    let member_source = args.next().ok_or(
+        "usage: render_ensemble <member_glob_or_manifest.json> <product> <stat> <output.png> [timeidx] [value]",
     )?;
     let product_name = args.next().ok_or(
         "usage: render_ensemble <member_glob> <product> <stat> <output.png> [timeidx] [value]",
@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let product = parse_product(&product_name)?;
     let stat = parse_ensemble_stat(&stat_name, value)?;
-    let ensemble = WrfEnsemble::from_glob(&member_glob)?;
+    let ensemble = open_ensemble(&member_source)?;
     ensemble.render_product_png(product, stat, timeidx, PathBuf::from(&output))?;
 
     println!(
@@ -42,4 +42,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     Ok(())
+}
+
+fn open_ensemble(source: &str) -> Result<WrfEnsemble, Box<dyn std::error::Error>> {
+    let path = Path::new(source);
+    if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+        Ok(WrfEnsemble::from_manifest(path)?)
+    } else {
+        Ok(WrfEnsemble::from_glob(source)?)
+    }
 }

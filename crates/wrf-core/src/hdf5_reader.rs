@@ -50,7 +50,12 @@ const MSG_SYMBOL_TABLE: u8 = 0x11;
 // ---------------------------------------------------------------------------
 
 fn hdf5_err(msg: impl Into<String>) -> WrfError {
-    WrfError::NetCdf(msg.into())
+    let msg = msg.into();
+    if msg.to_ascii_lowercase().contains("unsupported") {
+        WrfError::UnsupportedFeature(msg)
+    } else {
+        WrfError::NetCdf(msg)
+    }
 }
 
 fn io_err(e: std::io::Error) -> WrfError {

@@ -2021,7 +2021,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "rustwx-core"
-version = "0.1.0"
+version = "0.2.35"
 dependencies = [
  "bincode",
  "serde",
@@ -2614,11 +2614,11 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "wrf-contour"
-version = "0.1.0"
+version = "0.2.35"
 
 [[package]]
 name = "wrf-core"
-version = "0.1.0"
+version = "0.2.35"
 dependencies = [
  "ecape-rs",
  "flate2",
@@ -2630,10 +2630,11 @@ dependencies = [
 
 [[package]]
 name = "wrf-ensemble"
-version = "0.1.0"
+version = "0.2.35"
 dependencies = [
  "glob",
  "serde",
+ "serde_json",
  "thiserror",
  "wrf-core",
  "wrf-products",
@@ -2642,10 +2643,11 @@ dependencies = [
 
 [[package]]
 name = "wrf-products"
-version = "0.1.0"
+version = "0.2.35"
 dependencies = [
  "rustwx-core",
  "serde",
+ "serde_json",
  "thiserror",
  "wrf-core",
  "wrf-render",
@@ -2664,7 +2666,7 @@ dependencies = [
 
 [[package]]
 name = "wrf-render"
-version = "0.1.0"
+version = "0.2.35"
 dependencies = [
  "font8x8",
  "image",
@@ -2678,7 +2680,7 @@ dependencies = [
 
 [[package]]
 name = "wrf-sounding"
-version = "0.1.0"
+version = "0.2.35"
 dependencies = [
  "ecape-rs",
  "image",
@@ -2691,7 +2693,7 @@ dependencies = [
 
 [[package]]
 name = "wrf-store"
-version = "0.1.0"
+version = "0.2.35"
 dependencies = [
  "chrono",
  "serde",

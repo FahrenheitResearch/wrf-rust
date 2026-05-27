@@ -1,14 +1,14 @@
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use wrf_ensemble::{parse_ensemble_stat, stat_requires_value, EnsembleStat, WrfEnsemble};
 use wrf_products::{default_product_suite, parse_product, WrfProduct};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args().skip(1);
-    let member_glob = args.next().ok_or(
-        "usage: render_ensemble_suite <member_glob> <output-dir> [timeidx] [stats_csv] [products_csv]",
+    let member_source = args.next().ok_or(
+        "usage: render_ensemble_suite <member_glob_or_manifest.json> <output-dir> [timeidx] [stats_csv] [products_csv]",
     )?;
     let output_dir = args.next().ok_or(
         "usage: render_ensemble_suite <member_glob> <output-dir> [timeidx] [stats_csv] [products_csv]",
@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     fs::create_dir_all(&output_dir)?;
-    let ensemble = WrfEnsemble::from_glob(&member_glob)?;
+    let ensemble = open_ensemble(&member_source)?;
     let mut rendered = 0usize;
     let mut failed = 0usize;
 
@@ -92,4 +92,13 @@ fn parse_products_csv(csv: &str) -> Result<Vec<WrfProduct>, Box<dyn std::error::
         .filter(|name| !name.is_empty())
         .map(|name| Ok(parse_product(name)?))
         .collect()
+}
+
+fn open_ensemble(source: &str) -> Result<WrfEnsemble, Box<dyn std::error::Error>> {
+    let path = Path::new(source);
+    if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+        Ok(WrfEnsemble::from_manifest(path)?)
+    } else {
+        Ok(WrfEnsemble::from_glob(source)?)
+    }
 }

@@ -17,6 +17,8 @@ pub enum WrfError {
     UnknownVar(String),
     /// Unit conversion error.
     UnitConversion(String),
+    /// Reader or product feature is intentionally not supported.
+    UnsupportedFeature(String),
     /// Invalid parameter.
     InvalidParam(String),
     /// General computation error.
@@ -33,6 +35,7 @@ impl fmt::Display for WrfError {
             Self::DimMismatch(s) => write!(f, "dimension mismatch: {s}"),
             Self::UnknownVar(s) => write!(f, "unknown variable: {s}"),
             Self::UnitConversion(s) => write!(f, "unit conversion error: {s}"),
+            Self::UnsupportedFeature(s) => write!(f, "unsupported feature: {s}"),
             Self::InvalidParam(s) => write!(f, "invalid parameter: {s}"),
             Self::Compute(s) => write!(f, "computation error: {s}"),
         }
