@@ -31,12 +31,12 @@ const DEFAULT_PRODUCT_WIDTH: u32 = 1600;
 const DEFAULT_PRODUCT_HEIGHT: u32 = 1200;
 const UH_TRACK_THRESHOLD: f32 = 50.0;
 const UH_TRACK_BINS: [f32; 4] = [50.0, 100.0, 200.0, 300.0];
-const UH_TRACK_FILL_ALPHA: u8 = 58;
+const UH_TRACK_FILL_ALPHA: u8 = 48;
 const UH_TRACK_FILL_COLORS: [Color; 4] = [
     Color::rgba(255, 241, 118, UH_TRACK_FILL_ALPHA),
-    Color::rgba(255, 169, 77, 82),
-    Color::rgba(239, 83, 80, 104),
-    Color::rgba(171, 71, 188, 132),
+    Color::rgba(255, 169, 77, 72),
+    Color::rgba(239, 83, 80, 94),
+    Color::rgba(171, 71, 188, 122),
 ];
 const SURFACE_BARB_SPACING_PX: f64 = 58.0;
 const UPPER_AIR_BARB_SPACING_PX: f64 = 64.0;
@@ -2954,8 +2954,8 @@ fn product_overlay_recipes(product: WrfProduct) -> Vec<ProductOverlayRecipe> {
                 fill_colors: UH_TRACK_FILL_COLORS.to_vec(),
                 edge_color: Color::BLACK,
                 edge_width_px: 2,
-                edge_halo_color: Color::WHITE,
-                edge_halo_width_px: 1,
+                edge_halo_color: Color::TRANSPARENT,
+                edge_halo_width_px: 0,
                 lookback_minutes: 60,
                 label: "1 h 0-3 km UH swath",
             })]
@@ -6104,8 +6104,8 @@ mod tests {
         assert_eq!(overlay.fill_colors, UH_TRACK_FILL_COLORS.to_vec());
         assert_eq!(overlay.edge_color, Color::BLACK);
         assert_eq!(overlay.edge_width_px, 2);
-        assert_eq!(overlay.edge_halo_color, Color::WHITE);
-        assert_eq!(overlay.edge_halo_width_px, 1);
+        assert_eq!(overlay.edge_halo_color, Color::TRANSPARENT);
+        assert_eq!(overlay.edge_halo_width_px, 0);
         assert_eq!(overlay.lookback_minutes, 60);
         assert_eq!(visual.overlay_legends.len(), 1);
         assert_eq!(
@@ -6972,7 +6972,7 @@ mod tests {
                 .expect_rgba_grid()
                 .expect_contours()
                 .expect_frame_policy(ProductFramePolicy::FullDomain)
-                .expect_signature(0x38b1acc23f6a7af1),
+                .expect_signature(0xaf07c71b3fe7bddb),
             SyntheticSmokeCase::new(WrfProduct::Reflectivity1km, ordinary_grid.clone())
                 .expect_frame_policy(ProductFramePolicy::FullDomain)
                 .expect_signature(0x1eae9e558ef26a4d),
@@ -8053,8 +8053,6 @@ mod tests {
                         && overlay.fill_count == overlay.threshold_bins.len()
                         && overlay.edge_color.a == 255
                         && overlay.edge_width_px > 0
-                        && overlay.edge_halo_color.a > 0
-                        && overlay.edge_halo_width_px > 0
                         && overlay.lookback_minutes.map_or(true, |minutes| minutes > 0),
                     "{} overlay summaries should expose bins, fills, outlines, and time semantics",
                     product.canonical_name()
@@ -8283,7 +8281,7 @@ mod tests {
         let outline = uh_track_outline_style(overlay);
         assert_eq!(outline.color, Color::BLACK);
         assert_eq!(outline.width, overlay.edge_width_px);
-        assert_eq!(outline.halo_color, Color::WHITE);
+        assert_eq!(outline.halo_color, Color::TRANSPARENT);
         assert_eq!(outline.halo_width, overlay.edge_halo_width_px);
 
         let bins = [
@@ -8551,8 +8549,6 @@ mod tests {
                             overlay.fill_colors.iter().all(|color| color.a > 0)
                                 && overlay.edge_color.a == 255
                                 && overlay.edge_width_px > 0
-                                && overlay.edge_halo_color.a > 0
-                                && overlay.edge_halo_width_px > 0
                                 && overlay.lookback_minutes > 0,
                             "{} UH swath overlay should define visible fills, crisp outlined edges, and a history window",
                             product.canonical_name()
