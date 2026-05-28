@@ -5129,8 +5129,8 @@ fn height_contours(var: &'static str, levels: Vec<f32>) -> ContourRecipe {
         levels,
         color: Color::BLACK,
         width_px: 1,
-        halo_color: Color::WHITE,
-        halo_width_px: 1,
+        halo_color: Color::TRANSPARENT,
+        halo_width_px: 0,
         major_every: 2,
         major_width_px: 2,
         label_every: 2,
@@ -5324,8 +5324,8 @@ fn slp_contours(levels: Vec<f32>) -> ContourRecipe {
         levels,
         color: Color::BLACK,
         width_px: 1,
-        halo_color: Color::WHITE,
-        halo_width_px: 1,
+        halo_color: Color::TRANSPARENT,
+        halo_width_px: 0,
         major_every: 2,
         major_width_px: 2,
         label_every: 2,
@@ -6320,7 +6320,8 @@ mod tests {
         assert_eq!(slp.var, "slp");
         assert_eq!(slp.units, "hPa");
         assert_eq!(slp.width_px, 1);
-        assert_eq!(slp.halo_width_px, 1);
+        assert_eq!(slp.halo_width_px, 0);
+        assert_eq!(slp.halo_color, Color::TRANSPARENT);
         assert_eq!(slp.major_every, 2);
         assert_eq!(slp.major_width_px, 2);
         assert_eq!(slp.label_every, 2);
@@ -6332,6 +6333,8 @@ mod tests {
         assert_eq!(height.units, "dam");
         assert_eq!(height.major_every, 2);
         assert_eq!(height.major_width_px, 2);
+        assert_eq!(height.halo_width_px, 0);
+        assert_eq!(height.halo_color, Color::TRANSPARENT);
         assert_eq!(height.label_every, 2);
         assert!(!height.show_extrema);
     }
@@ -6892,75 +6895,75 @@ mod tests {
             SyntheticSmokeCase::new(WrfProduct::Wind250, conus_grid.clone())
                 .expect_contours()
                 .expect_barbs()
-                .expect_signature(0x79e8dbe370934a19),
+                .expect_signature(0xf23a70f9ab086603),
             SyntheticSmokeCase::new(WrfProduct::Wind300, conus_grid.clone())
                 .expect_contours()
                 .expect_barbs()
-                .expect_signature(0x25d61db6d2a72d7c),
+                .expect_signature(0x7bb19fbd8dcb9206),
             SyntheticSmokeCase::new(WrfProduct::Height500Wind, conus_grid.clone())
                 .expect_contours()
                 .expect_barbs()
-                .expect_signature(0x326bcb4deb5d20a9),
+                .expect_signature(0x9b8e0736b80a879f),
             SyntheticSmokeCase::new(WrfProduct::Temp500Wind, conus_grid.clone())
                 .expect_contours()
                 .expect_barbs()
-                .expect_signature(0xecb8182dcf5957cc),
+                .expect_signature(0xc0f92c6f7091bec5),
             SyntheticSmokeCase::new(WrfProduct::Vort500Wind, conus_grid.clone())
                 .expect_contours()
                 .expect_barbs()
-                .expect_signature(0x30d969c7618536bf),
+                .expect_signature(0xbbd51267658c1196),
             SyntheticSmokeCase::new(WrfProduct::Pvo500, conus_grid.clone())
                 .expect_contours()
                 .expect_barbs()
-                .expect_signature(0x2caa5d0b39e30b59),
+                .expect_signature(0x5993342287f07e3f),
             SyntheticSmokeCase::new(WrfProduct::Omega500, conus_grid.clone())
                 .expect_contours()
                 .expect_barbs()
-                .expect_signature(0xc066ab6c0e702764),
+                .expect_signature(0xc0235ac0c653d2e0),
             SyntheticSmokeCase::new(WrfProduct::Temp700Wind, conus_grid.clone())
                 .expect_contours()
                 .expect_barbs()
-                .expect_signature(0xdd3dc4722c9f74a2),
+                .expect_signature(0xbc70a0b64d514b41),
             SyntheticSmokeCase::new(WrfProduct::Height700Wind, conus_grid.clone())
                 .expect_contours()
                 .expect_barbs()
-                .expect_signature(0x967bc68d2109bd53),
+                .expect_signature(0x88351a9a05ab87b6),
             SyntheticSmokeCase::new(WrfProduct::Rh700Wind, conus_grid.clone())
                 .expect_contours()
                 .expect_barbs()
-                .expect_signature(0x37f79679dcd2098b),
+                .expect_signature(0xc165c116a6bb6909),
             SyntheticSmokeCase::new(WrfProduct::Omega700Wind, conus_grid.clone())
                 .expect_contours()
                 .expect_barbs()
-                .expect_signature(0xc2fa6877dead8236),
+                .expect_signature(0xc423de41a07a8c54),
             SyntheticSmokeCase::new(WrfProduct::ThetaW850, conus_grid.clone())
                 .expect_contours()
                 .expect_barbs()
-                .expect_signature(0x2f16bf60c472bb31),
+                .expect_signature(0xb6f9145bd2f4495b),
             SyntheticSmokeCase::new(WrfProduct::Temp850Wind, conus_grid.clone())
                 .expect_contours()
                 .expect_barbs()
-                .expect_signature(0xe05a8a9381b5a200),
+                .expect_signature(0xa223d5e8274b0a4a),
             SyntheticSmokeCase::new(WrfProduct::Td850Wind, conus_grid.clone())
                 .expect_contours()
                 .expect_barbs()
-                .expect_signature(0xf6dd52c039f60ef2),
+                .expect_signature(0x913d0d93a94774f2),
             SyntheticSmokeCase::new(WrfProduct::Height850Wind, conus_grid.clone())
                 .expect_contours()
                 .expect_barbs()
-                .expect_signature(0xbf103923416924f8),
+                .expect_signature(0x70d99586944588db),
             SyntheticSmokeCase::new(WrfProduct::Wind850, conus_grid.clone())
                 .expect_contours()
                 .expect_barbs()
-                .expect_signature(0xbf103923416924f8),
+                .expect_signature(0x70d99586944588db),
             SyntheticSmokeCase::new(WrfProduct::T2, ordinary_grid.clone())
                 .expect_contours()
                 .expect_barbs()
-                .expect_signature(0x71fb47ceae746c1f),
+                .expect_signature(0x854289806917bbd7),
             SyntheticSmokeCase::new(WrfProduct::Td2, ordinary_grid.clone())
                 .expect_contours()
                 .expect_barbs()
-                .expect_signature(0xa8abcd227dc2fa13),
+                .expect_signature(0x3606ca844606b720),
             SyntheticSmokeCase::new(WrfProduct::Rh2, ordinary_grid.clone())
                 .expect_signature(0xad05e4531f646e92),
             SyntheticSmokeCase::new(WrfProduct::U10Component, ordinary_grid.clone())
@@ -7025,7 +7028,7 @@ mod tests {
                 .expect_contours()
                 .expect_barbs()
                 .allow_no_basemap_linework()
-                .expect_signature(0x43b3ffba5c2b4ab2),
+                .expect_signature(0x794d7135b044eafd),
             SyntheticSmokeCase::new(WrfProduct::Pwat, dateline_grid.clone())
                 .with_options(
                     ProductRenderOptions::default()
@@ -7849,9 +7852,9 @@ mod tests {
         assert!(height_contour.labels);
         assert_eq!(height_contour.label_every, 2);
         assert_eq!(height_contour.color, Color::BLACK);
-        assert_eq!(height_contour.halo_color, Color::WHITE);
+        assert_eq!(height_contour.halo_color, Color::TRANSPARENT);
         assert!(height_contour.major_width_px > height_contour.width_px);
-        assert!(height_contour.halo_width_px > 0);
+        assert_eq!(height_contour.halo_width_px, 0);
         let barbs = upper.barbs.as_ref().expect("upper-air barbs");
         assert_eq!(barbs.u_var, "uvmet_u_500mb");
         assert_eq!(barbs.v_var, "uvmet_v_500mb");
@@ -8032,11 +8035,11 @@ mod tests {
                         && contour.first_level.is_some()
                         && contour.last_level.is_some()
                         && contour.major_width_px >= contour.width_px
-                        && contour.halo_width_px > 0
                         && contour.color.a > 0
-                        && contour.halo_color.a > 0
-                        && color_contrast(contour.color, contour.halo_color) > 96,
-                    "{} contour summaries should expose operational hierarchy, ranges, and contrast styling",
+                        && (contour.halo_width_px == 0
+                            || (contour.halo_color.a > 0
+                                && color_contrast(contour.color, contour.halo_color) > 96)),
+                    "{} contour summaries should expose operational hierarchy, ranges, and optional contrast styling",
                     product.canonical_name()
                 );
             }
@@ -8518,8 +8521,8 @@ mod tests {
                     contour.var
                 );
                 assert!(
-                    contour.halo_width_px > 0 && contour.major_width_px >= contour.width_px,
-                    "{} contour {} should carry hierarchy and halo styling",
+                    contour.major_width_px >= contour.width_px,
+                    "{} contour {} should carry major/minor hierarchy",
                     product.canonical_name(),
                     contour.var
                 );
