@@ -40,6 +40,40 @@ def _finite_number(value: float) -> float | None:
     return float(value) if math.isfinite(float(value)) else None
 
 
+def _float32_reference_allowance(
+    candidate: np.ndarray,
+    reference: np.ndarray,
+) -> np.ndarray:
+    """Return the directional half-ULP rounding cell around each reference value."""
+    with np.errstate(over="ignore", invalid="ignore"):
+        encoded = reference.astype(np.float32)
+    decoded = encoded.astype(np.float64)
+    representable = decoded == reference
+    if not np.all(representable):
+        mismatch_count = int(np.count_nonzero(~representable))
+        raise ParityError(
+            "comparison.reference_precision='float32' requires finite reference "
+            "values to be exactly representable as float32; "
+            f"{mismatch_count} of {reference.size} finite values are not"
+        )
+
+    # The spacing immediately below and above a floating-point value can differ
+    # at binade boundaries (for example, at 1.0). Use the neighbor on the side
+    # of the candidate instead of a symmetric epsilon. At +/-MAX, nextafter in
+    # one direction is infinity, so the finite opposite spacing supplies the
+    # continuation of the terminal binade.
+    direction = np.where(candidate < reference, -np.inf, np.inf).astype(np.float32)
+    with np.errstate(over="ignore", invalid="ignore"):
+        neighbor = np.nextafter(encoded, direction)
+        fallback_neighbor = np.nextafter(encoded, -direction)
+    spacing = np.abs(neighbor.astype(np.float64) - reference)
+    fallback_spacing = np.abs(fallback_neighbor.astype(np.float64) - reference)
+    spacing = np.where(np.isfinite(spacing), spacing, fallback_spacing)
+    if np.any(~np.isfinite(spacing)) or np.any(spacing <= 0.0):
+        raise ParityError("cannot determine a finite float32 ULP for the reference")
+    return spacing * 0.5
+
+
 def compare_array(
     candidate: np.ndarray,
     reference: np.ndarray,
@@ -82,8 +116,21 @@ def compare_array(
         cand = candidate[overlap]
         ref = reference[overlap]
         absolute = np.abs(cand - ref)
-        tolerance = contract["comparison"]["tolerance"]
+        comparison = contract["comparison"]
+        tolerance = comparison["tolerance"]
         allowed = float(tolerance["atol"]) + float(tolerance["rtol"]) * np.abs(ref)
+        reference_precision = comparison.get("reference_precision")
+        if reference_precision == "float32":
+            quantization_allowance = _float32_reference_allowance(cand, ref)
+            allowed = allowed + quantization_allowance
+            result.update(
+                {
+                    "reference_precision": reference_precision,
+                    "max_reference_quantization_allowance": _finite_number(
+                        np.max(quantization_allowance)
+                    ),
+                }
+            )
         within = absolute <= allowed
         denominator = np.maximum(np.abs(ref), float(tolerance.get("relative_floor", 0.0)))
         relative = np.divide(

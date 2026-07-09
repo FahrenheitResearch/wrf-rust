@@ -111,6 +111,23 @@ must use the identical selection, fixture, time index, and contract document.
 `diagnostic` differences are reported but do not fail by default; add
 `--strict-diagnostic` only after that contract is scientifically reconciled.
 
+### Quantized reference outputs
+
+`comparison.reference_precision: "float32"` declares that the compared
+wrf-python field was quantized by its compiled wrapper before extraction. The
+comparator first verifies that every finite reference value lies exactly on the
+float32 lattice. It then adds only the directional half-ULP rounding allowance:
+the spacing to the immediately lower float32 neighbor for a lower candidate,
+or to the immediately higher neighbor for a higher candidate. This distinction
+matters at power-of-two binade boundaries, where the two spacings differ.
+
+This policy models representation loss, not scientific disagreement. The
+ordinary `atol`/`rtol` remains a separate algorithmic allowance. AVO and PVO
+use zero algorithmic tolerance because all 50,560,000 values in each field
+match the pinned wrf-python output exactly after casting the Rust result to
+float32. Their report rows include `reference_precision` and
+`max_reference_quantization_allowance` so the applied policy remains auditable.
+
 ## WRF-Runner acceptance
 
 The consumer manifest is based on commit
@@ -143,7 +160,10 @@ faithful multi-process call-sequence driver.
   `DCOMPUTEABSVORT`/`DCOMPUTEPV` kernels: raw C-grid winds, stagger-specific
   and mass map factors, raw `F`, clamped boundary stencils, the pinned 9.81
   m/s^2 gravity constant, and all three Ertel-PV terms. They are required
-  comparisons rather than documented approximations.
+  comparisons rather than documented approximations. The reference wrapper
+  returns float32 while wrf-rust preserves float64 kernel results, so their
+  contracts allow only the explicit directional half-float32-ULP output
+  quantization described above, with zero additional numerical tolerance.
 - `interplevel` now supports arbitrary left dimensions, the leading
   multiproduct dimension used by vector diagnostics, scalar and 1-D level
   requests, shared or left-dependent target surfaces, caller-selected missing

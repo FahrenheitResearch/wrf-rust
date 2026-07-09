@@ -96,6 +96,7 @@ def validate_contract_document(document: dict[str, Any]) -> None:
     }
     valid_modes = {"required", "diagnostic", "contract_only"}
     valid_extractors = {"getvar", "component", "none"}
+    valid_reference_precisions = {"float32"}
 
     for index, variable in enumerate(variables):
         if not isinstance(variable, dict):
@@ -132,6 +133,18 @@ def validate_contract_document(document: dict[str, Any]) -> None:
         if not isinstance(comparison, dict) or comparison.get("mode") not in valid_modes:
             raise ParityError(
                 f"{identifier}: comparison.mode must be one of {sorted(valid_modes)}"
+            )
+        reference_precision = comparison.get("reference_precision")
+        if (
+            reference_precision is not None
+            and (
+                not isinstance(reference_precision, str)
+                or reference_precision not in valid_reference_precisions
+            )
+        ):
+            raise ParityError(
+                f"{identifier}: comparison.reference_precision must be one of "
+                f"{sorted(valid_reference_precisions)} when present"
             )
         tolerance = comparison.get("tolerance")
         if not isinstance(tolerance, dict):
