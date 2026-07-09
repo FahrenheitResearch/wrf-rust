@@ -472,7 +472,7 @@ pub static VARS: &[VarDef] = &[
     },
     VarDef {
         name: "srh",
-        aliases: &["storm_relative_helicity"],
+        aliases: &["storm_relative_helicity", "helicity"],
         description: "Storm-relative helicity (configurable depth)",
         default_units: "m2/s2",
         dim: VarDim::TwoD,
@@ -569,7 +569,7 @@ pub static VARS: &[VarDef] = &[
     },
     VarDef {
         name: "uhel",
-        aliases: &["updraft_helicity", "helicity"],
+        aliases: &["updraft_helicity"],
         description: "Updraft helicity",
         default_units: "m2/s2",
         dim: VarDim::TwoD,
@@ -1005,7 +1005,6 @@ mod tests {
         assert_eq!(get_var_def("cape_2d").unwrap().name, "cape2d");
         assert_eq!(get_var_def("cape_3d").unwrap().name, "cape3d");
         assert_eq!(get_var_def("mdbz").unwrap().name, "maxdbz");
-        assert_eq!(get_var_def("helicity").unwrap().name, "uhel");
         assert_eq!(get_var_def("entraining_cape").unwrap().name, "ecape");
         assert_eq!(get_var_def("ecin").unwrap().name, "ecape_cin");
         assert_eq!(get_var_def("3cape").unwrap().name, "ml3cape");
@@ -1013,5 +1012,11 @@ mod tests {
         assert_eq!(get_var_def("downdraft_cape").unwrap().name, "dcape");
         assert_eq!(get_var_def("tot_tots").unwrap().name, "total_totals");
         assert_eq!(get_var_def("dgz_rh").unwrap().name, "dgz_rh");
+    }
+
+    #[test]
+    fn bare_helicity_alias_resolves_to_storm_relative_helicity() {
+        assert_eq!(get_var_def("helicity").unwrap().name, "srh");
+        assert_eq!(get_var_def("updraft_helicity").unwrap().name, "uhel");
     }
 }
