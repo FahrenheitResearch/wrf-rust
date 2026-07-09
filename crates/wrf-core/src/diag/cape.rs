@@ -115,10 +115,10 @@ fn compute_cape_fields(
     let mut lcl = vec![0.0f64; nxy];
     let mut lfc = vec![0.0f64; nxy];
 
-    cape.iter_mut()
-        .zip(cin.iter_mut())
-        .zip(lcl.iter_mut())
-        .zip(lfc.iter_mut())
+    cape.par_iter_mut()
+        .zip(cin.par_iter_mut())
+        .zip(lcl.par_iter_mut())
+        .zip(lfc.par_iter_mut())
         .enumerate()
         .for_each(|(ij, (((cape_v, cin_v), lcl_v), lfc_v))| {
             // Extract column profiles -- pass Pa pressure to cape_cin_core
