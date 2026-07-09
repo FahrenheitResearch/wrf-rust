@@ -309,30 +309,15 @@ pub fn cape_cin_core(
     top_m: Option<f64>,
 ) -> (f64, f64, f64, f64) {
     // --- 0. Unit Standardization ---
-    let mut p_prof = p_prof.to_vec();
-    let mut t_prof = t_prof.to_vec();
-    let mut td_prof = td_prof.to_vec();
-    let mut psfc_val = psfc;
-    let mut t2m_val = t2m;
-    let mut td2m_val = td2m;
-
-    if psfc_val > 2000.0 {
-        for v in p_prof.iter_mut() {
-            *v /= 100.0;
-        }
-        psfc_val /= 100.0;
-    }
-
-    if t2m_val > 150.0 {
-        for v in t_prof.iter_mut() {
-            *v -= ZEROCNK;
-        }
-        for v in td_prof.iter_mut() {
-            *v -= ZEROCNK;
-        }
-        t2m_val -= ZEROCNK;
-        td2m_val -= ZEROCNK;
-    }
+    let pressure_in_pa = psfc > 2000.0;
+    let temperature_in_k = t2m > 150.0;
+    let psfc_val = if pressure_in_pa { psfc / 100.0 } else { psfc };
+    let t2m_val = if temperature_in_k { t2m - ZEROCNK } else { t2m };
+    let mut td2m_val = if temperature_in_k {
+        td2m - ZEROCNK
+    } else {
+        td2m
+    };
 
     // Ensure Td2m <= T2m
     if td2m_val > t2m_val {
@@ -352,12 +337,27 @@ pub fn cape_cin_core(
     new_h.push(0.0);
 
     for i in 0..n {
-        new_p.push(p_prof[i]);
-        new_t.push(t_prof[i]);
-        new_td.push(if td_prof[i] <= t_prof[i] {
-            td_prof[i]
+        let pressure = if pressure_in_pa {
+            p_prof[i] / 100.0
+        } else {
+            p_prof[i]
+        };
+        let temperature = if temperature_in_k {
+            t_prof[i] - ZEROCNK
         } else {
             t_prof[i]
+        };
+        let dewpoint = if temperature_in_k {
+            td_prof[i] - ZEROCNK
+        } else {
+            td_prof[i]
+        };
+        new_p.push(pressure);
+        new_t.push(temperature);
+        new_td.push(if dewpoint <= temperature {
+            dewpoint
+        } else {
+            temperature
         });
         new_h.push(height_agl[i]);
     }
@@ -501,6 +501,8 @@ pub fn cape_cin_core(
     // --- Integrate CIN from Surface (p_start) to LCL (dry adiabat) ---
     let mut curr_dry_p = p_start;
     let mut dry_idx = start_idx;
+    let dry_theta_start_k = (t_start + ZEROCNK) * ((1000.0 / p_start).powf(ROCP));
+    let dry_parcel_mixratio = mixratio(p_start, td_start);
 
     while curr_dry_p > p_lcl {
         // Find next model level
@@ -531,15 +533,12 @@ pub fn cape_cin_core(
         let tv_env = virtual_temp(t_env, p_mid, td_env);
 
         // Parcel temperature via dry adiabat
-        let theta_start_k = (t_start + ZEROCNK) * ((1000.0 / p_start).powf(ROCP));
-        let t_parc_k = theta_start_k * ((p_mid / 1000.0).powf(ROCP));
+        let t_parc_k = dry_theta_start_k * ((p_mid / 1000.0).powf(ROCP));
         let t_parc = t_parc_k - ZEROCNK;
 
         // Parcel mixing ratio is constant (from starting dewpoint)
-        let r_parcel = mixratio(p_start, td_start);
-
         // Virtual Temp of Parcel with known W
-        let tv_parc = (t_parc + ZEROCNK) * (1.0 + 0.61 * (r_parcel / 1000.0)) - ZEROCNK;
+        let tv_parc = (t_parc + ZEROCNK) * (1.0 + 0.61 * (dry_parcel_mixratio / 1000.0)) - ZEROCNK;
 
         let val = RD * (tv_parc - tv_env) * (p1 / p2).ln();
 
