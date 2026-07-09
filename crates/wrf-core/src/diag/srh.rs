@@ -4,7 +4,7 @@
 //! broken 0.75*(3-10km mean wind) rotated 30 degrees.
 
 use crate::compute::{ComputeOpts, StormMotionMethod};
-use crate::diag::cape::{build_surface_augmented_thermo_column, find_effective_inflow_layer};
+use crate::diag::cape::{build_surface_augmented_thermo_column, effective_inflow_layer_grid};
 use crate::error::WrfResult;
 use crate::file::WrfFile;
 use rayon::prelude::*;
@@ -403,6 +403,7 @@ pub fn compute_effective_srh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
     let ny = f.ny;
     let nz = f.nz;
     let nxy = nx * ny;
+    let effective_layers = effective_inflow_layer_grid(f, t, opts)?;
 
     // Rotate 3D winds to earth coordinates
     let mut u = vec![0.0f64; u_grid.len()];
@@ -426,10 +427,10 @@ pub fn compute_effective_srh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
     Ok((0..nxy)
         .into_par_iter()
         .map(|ij| {
-            let (p_prof, t_prof, td_prof, h_prof) = build_surface_augmented_thermo_column(
+            let (p_prof, _, _, h_prof) = build_surface_augmented_thermo_column(
                 &pres_hpa, &tc, &qv, &h_agl, psfc[ij], t2[ij], q2[ij], nz, nxy, ij,
             );
-            let layer = match find_effective_inflow_layer(&p_prof, &t_prof, &td_prof, &h_prof) {
+            let layer = match effective_layers.layer(ij) {
                 Some(layer) => layer,
                 None => return 0.0,
             };

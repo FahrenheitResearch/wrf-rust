@@ -2,7 +2,7 @@
 //! stp, scp, ehi, ecape_scp, ecape_ehi, critical_angle, ship, bri
 
 use crate::compute::{ComputeOpts, StormMotionMethod};
-use crate::diag::cape::{build_surface_augmented_thermo_column, find_effective_inflow_layer};
+use crate::diag::cape::effective_inflow_layer_grid;
 use crate::error::WrfResult;
 use crate::file::WrfFile;
 use rayon::prelude::*;
@@ -126,34 +126,23 @@ pub fn compute_effective_bulk_wind_difference(
     t: usize,
     opts: &ComputeOpts,
 ) -> WrfResult<Vec<f64>> {
-    let pres_hpa = f.pressure_hpa(t)?;
-    let tc = f.temperature_c(t)?;
-    let qv = f.qvapor(t)?;
+    let effective_layers = effective_inflow_layer_grid(f, t, opts)?;
     let h_agl = f.height_agl(t)?;
-    let psfc = f.psfc(t)?;
-    let t2 = f.t2_for_opts(t, opts)?;
-    let q2 = f.q2_for_opts(t, opts)?;
     let u = f.u_destag(t)?;
     let v = f.v_destag(t)?;
     let u10 = f.u10(t)?;
     let v10 = f.v10(t)?;
 
-    let nx = f.nx;
-    let ny = f.ny;
     let nz = f.nz;
-    let nxy = nx * ny;
+    let nxy = f.nxy();
 
     Ok((0..nxy)
         .into_par_iter()
         .map(|ij| {
-            let (p_prof, t_prof, td_prof, thermo_h_prof) = build_surface_augmented_thermo_column(
-                &pres_hpa, &tc, &qv, &h_agl, psfc[ij], t2[ij], q2[ij], nz, nxy, ij,
-            );
-            let layer =
-                match find_effective_inflow_layer(&p_prof, &t_prof, &td_prof, &thermo_h_prof) {
-                    Some(layer) => layer,
-                    None => return 0.0,
-                };
+            let layer = match effective_layers.layer(ij) {
+                Some(layer) => layer,
+                None => return 0.0,
+            };
             let mu_el_h = match layer.mu_el_h {
                 Some(el_h) if el_h > layer.base_h => el_h,
                 _ => return 0.0,
