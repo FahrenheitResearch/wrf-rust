@@ -150,29 +150,17 @@ pub fn compute_srh_field(
             storm_motion_method,
             Some(StormMotionMethod::NonPressureWeighted)
         ) {
-            Ok(crate::met::composite::compute_srh_with_npw_bunkers_and_latitude(
-                &u_aug,
-                &v_aug,
-                &h_aug,
-                &p_aug,
-                &latitude,
-                nx,
-                ny,
-                nz_aug,
-                depth_m,
-            ))
+            Ok(
+                crate::met::composite::compute_srh_with_npw_bunkers_and_latitude(
+                    &u_aug, &v_aug, &h_aug, &p_aug, &latitude, nx, ny, nz_aug, depth_m,
+                ),
+            )
         } else {
-            Ok(crate::met::composite::compute_srh_with_pressure_and_latitude(
-                &u_aug,
-                &v_aug,
-                &h_aug,
-                &p_aug,
-                &latitude,
-                nx,
-                ny,
-                nz_aug,
-                depth_m,
-            ))
+            Ok(
+                crate::met::composite::compute_srh_with_pressure_and_latitude(
+                    &u_aug, &v_aug, &h_aug, &p_aug, &latitude, nx, ny, nz_aug, depth_m,
+                ),
+            )
         }
     }
 }
@@ -235,9 +223,7 @@ pub(crate) fn compute_shear_field(
                     h_prof[1..].reverse();
                 }
 
-                surface_augmented_shear_from_profile(
-                    u_prof, v_prof, h_prof, bottom_m, top_m,
-                )
+                surface_augmented_shear_from_profile(u_prof, v_prof, h_prof, bottom_m, top_m)
             },
         )
         .collect())
@@ -480,11 +466,7 @@ pub fn compute_effective_srh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
                         (right, left)
                     }
                 };
-                crate::met::wind::cyclonic_bunkers_motion(
-                    latitude[ij],
-                    right_mover,
-                    left_mover,
-                )
+                crate::met::wind::cyclonic_bunkers_motion(latitude[ij], right_mover, left_mover)
             };
 
             let (_, _, total) = crate::met::wind::storm_relative_helicity(

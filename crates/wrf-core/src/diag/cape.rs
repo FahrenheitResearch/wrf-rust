@@ -240,11 +240,7 @@ fn mu_parcel_mixing_ratio_cache_key(t: usize, lake_interp: Option<f64>) -> Strin
     format!("mu_parcel_mixing_ratio_{t}_{lake_interp}")
 }
 
-fn mu_parcel_mixing_ratio_from_profile(
-    p_prof: &[f64],
-    t_prof: &[f64],
-    td_prof: &[f64],
-) -> f64 {
+fn mu_parcel_mixing_ratio_from_profile(p_prof: &[f64], t_prof: &[f64], td_prof: &[f64]) -> f64 {
     let (mu_p, _, mu_td) =
         crate::met::thermo::get_most_unstable_parcel(p_prof, t_prof, td_prof, 300.0);
     crate::met::thermo::mixratio(mu_p, mu_td)
@@ -967,8 +963,7 @@ mod tests {
         let temperature = [20.0, 25.0, 15.0, 8.0, -5.0];
         let dewpoint = [0.0, 20.0, 5.0, -2.0, -20.0];
 
-        let actual =
-            mu_parcel_mixing_ratio_from_profile(&pressure, &temperature, &dewpoint);
+        let actual = mu_parcel_mixing_ratio_from_profile(&pressure, &temperature, &dewpoint);
         let expected = crate::met::thermo::mixratio(950.0, 20.0);
 
         assert!((actual - expected).abs() < 1.0e-12);

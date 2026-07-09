@@ -44,8 +44,7 @@ fn ship_spc_2014_from_components(
     let shear = shear_0_6km.clamp(7.0, 27.0);
     let t500 = t500_c.min(-5.5);
     let mut ship =
-        -(mucape * mixing_ratio * lapse_rate_700_500 * t500 * shear)
-            / SHIP_SPC_2014_DENOMINATOR;
+        -(mucape * mixing_ratio * lapse_rate_700_500 * t500 * shear) / SHIP_SPC_2014_DENOMINATOR;
 
     if mucape < 1_300.0 {
         ship *= mucape / 1_300.0;
@@ -799,9 +798,7 @@ pub fn compute_ship(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<
 
     let lr_700_500 = crate::diag::extra::compute_lapse_rate_700_500(f, t, opts)?;
     let freezing_level = crate::diag::extra::compute_freezing_level(f, t, opts)?;
-    let t500 = crate::met::composite::interp_to_pressure_level(
-        &tc, &pres_hpa, nx, ny, nz, 500.0,
-    );
+    let t500 = crate::met::composite::interp_to_pressure_level(&tc, &pres_hpa, nx, ny, nz, 500.0);
 
     Ok((0..nxy)
         .map(|ij| {
@@ -1172,10 +1169,9 @@ mod tests {
         v_aug.extend_from_slice(&v_prof);
         h_aug.extend_from_slice(&h_prof);
 
-        let ((sm_u, sm_v), _, _) =
-            crate::met::wind::bunkers_storm_motion_npw_pressure_resampled(
-                &u_aug, &v_aug, &h_aug, &p_prof,
-            );
+        let ((sm_u, sm_v), _, _) = crate::met::wind::bunkers_storm_motion_npw_pressure_resampled(
+            &u_aug, &v_aug, &h_aug, &p_prof,
+        );
         let (u_500, v_500) = interp_wind_at_height(&u_aug, &v_aug, &h_aug, 500.0);
         let expected = crate::met::wind::critical_angle(sm_u, sm_v, u10, v10, u_500, v_500);
         let first_level =

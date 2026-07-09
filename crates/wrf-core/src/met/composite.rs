@@ -444,15 +444,7 @@ fn compute_srh_column(
     top_m: f64,
     latitude_deg: f64,
 ) -> f64 {
-    compute_srh_column_with_method(
-        heights,
-        u_prof,
-        v_prof,
-        p_prof,
-        top_m,
-        latitude_deg,
-        false,
-    )
+    compute_srh_column_with_method(heights, u_prof, v_prof, p_prof, top_m, latitude_deg, false)
 }
 
 fn compute_srh_column_with_method(
@@ -1616,8 +1608,14 @@ mod tests {
         let north = compute_srh_column(&heights, &u_prof, &v_north, &[], 1000.0, 35.0);
         let south = compute_srh_column(&heights, &u_prof, &v_south, &[], 1000.0, -35.0);
 
-        assert!(north > 0.0, "expected positive NH cyclonic SRH, got {north}");
-        assert!(south < 0.0, "expected signed-negative SH cyclonic SRH, got {south}");
+        assert!(
+            north > 0.0,
+            "expected positive NH cyclonic SRH, got {north}"
+        );
+        assert!(
+            south < 0.0,
+            "expected signed-negative SH cyclonic SRH, got {south}"
+        );
         assert_close(south, -north);
     }
 }

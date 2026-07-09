@@ -344,18 +344,10 @@ fn parcel_temperature_excess(
 ) -> f64 {
     let (environment_temperature, environment_dewpoint) =
         get_env_at_pres(pressure, p_prof, t_prof, td_prof);
-    let environment_virtual_temperature = virtual_temp(
-        environment_temperature,
-        pressure,
-        environment_dewpoint,
-    );
-    parcel_virtual_temperature(
-        pressure,
-        p_lcl,
-        dry_theta_k,
-        dry_mixratio_gkg,
-        thetam,
-    ) - environment_virtual_temperature
+    let environment_virtual_temperature =
+        virtual_temp(environment_temperature, pressure, environment_dewpoint);
+    parcel_virtual_temperature(pressure, p_lcl, dry_theta_k, dry_mixratio_gkg, thetam)
+        - environment_virtual_temperature
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -437,12 +429,8 @@ fn integrate_moist_pressure_range(
         thetam,
     );
 
-    let crossing = zero_crossing_pressure(
-        bottom_pressure,
-        bottom_buoyancy,
-        top_pressure,
-        top_buoyancy,
-    );
+    let crossing =
+        zero_crossing_pressure(bottom_pressure, bottom_buoyancy, top_pressure, top_buoyancy);
     let ranges = [
         (bottom_pressure, crossing.unwrap_or(top_pressure)),
         (crossing.unwrap_or(top_pressure), top_pressure),
@@ -805,11 +793,7 @@ pub fn cape_cin_core(
     }
 
     let (cape, cin) = limited_trace.unwrap_or(natural_trace).cape_cin();
-    let h_lfc = get_height_at_pres(
-        natural_trace.minimum_pressure,
-        &p_prof,
-        &height_agl,
-    );
+    let h_lfc = get_height_at_pres(natural_trace.minimum_pressure, &p_prof, &height_agl);
     (cape, cin, h_lcl, h_lfc)
 }
 
@@ -967,20 +951,18 @@ mod tests {
     };
 
     const PRESSURE: [f64; 14] = [
-        975.0, 950.0, 925.0, 900.0, 850.0, 800.0, 750.0, 700.0, 650.0, 600.0,
-        550.0, 500.0, 450.0, 400.0,
+        975.0, 950.0, 925.0, 900.0, 850.0, 800.0, 750.0, 700.0, 650.0, 600.0, 550.0, 500.0, 450.0,
+        400.0,
     ];
     const TEMPERATURE: [f64; 14] = [
-        28.0, 27.0, 24.0, 20.0, 14.0, 8.0, 2.0, -4.0, -10.0, -17.0, -24.0,
-        -31.0, -39.0, -47.0,
+        28.0, 27.0, 24.0, 20.0, 14.0, 8.0, 2.0, -4.0, -10.0, -17.0, -24.0, -31.0, -39.0, -47.0,
     ];
     const DEWPOINT: [f64; 14] = [
-        19.0, 18.0, 15.0, 12.0, 6.0, 0.0, -6.0, -12.0, -18.0, -25.0, -32.0,
-        -40.0, -48.0, -55.0,
+        19.0, 18.0, 15.0, 12.0, 6.0, 0.0, -6.0, -12.0, -18.0, -25.0, -32.0, -40.0, -48.0, -55.0,
     ];
     const HEIGHT: [f64; 14] = [
-        250.0, 500.0, 750.0, 1000.0, 1500.0, 2000.0, 2500.0, 3000.0, 3600.0,
-        4200.0, 4900.0, 5600.0, 6400.0, 7200.0,
+        250.0, 500.0, 750.0, 1000.0, 1500.0, 2000.0, 2500.0, 3000.0, 3600.0, 4200.0, 4900.0,
+        5600.0, 6400.0, 7200.0,
     ];
 
     fn parcel_cape(
@@ -1095,8 +1077,7 @@ mod tests {
         let thetam = theta_lcl_c - wobf(theta_lcl_c) + wobf(t_lcl);
 
         let below_lcl_pressure = (1000.0 + p_lcl) / 2.0;
-        let dry_temperature_k =
-            dry_theta_k * (below_lcl_pressure / 1000.0).powf(ROCP);
+        let dry_temperature_k = dry_theta_k * (below_lcl_pressure / 1000.0).powf(ROCP);
         let expected_dry_virtual_temperature =
             dry_temperature_k * (1.0 + 0.61 * dry_mixratio / 1000.0) - ZEROCNK;
         let actual_below = parcel_virtual_temperature(

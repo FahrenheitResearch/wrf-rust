@@ -227,20 +227,22 @@ mod tests {
     #[test]
     fn converts_precipitation_depth_to_centimeters() {
         assert_eq!(parse_units("cm").unwrap(), WrfUnits::Centimeters);
-        assert!((convert_value(25.0, WrfUnits::Millimeters, WrfUnits::Centimeters)
-            .unwrap()
-            - 2.5)
-            .abs()
-            < 1.0e-12);
+        assert!(
+            (convert_value(25.0, WrfUnits::Millimeters, WrfUnits::Centimeters).unwrap() - 2.5)
+                .abs()
+                < 1.0e-12
+        );
     }
 
     #[test]
     fn converts_absolute_vorticity_display_units() {
         let display = parse_units("10-5 s-1").unwrap();
         assert_eq!(display, WrfUnits::TenToMinusFivePerSecond);
-        assert!((convert_value(1.5e-4, WrfUnits::PerSecond, display).unwrap() - 15.0).abs()
-            < 1.0e-12);
-        assert!((convert_value(15.0, display, WrfUnits::PerSecond).unwrap() - 1.5e-4).abs()
-            < 1.0e-12);
+        assert!(
+            (convert_value(1.5e-4, WrfUnits::PerSecond, display).unwrap() - 15.0).abs() < 1.0e-12
+        );
+        assert!(
+            (convert_value(15.0, display, WrfUnits::PerSecond).unwrap() - 1.5e-4).abs() < 1.0e-12
+        );
     }
 }

@@ -337,8 +337,7 @@ pub fn mean_wind_npw_pressure_resampled(
             && pressure_hpa[i].is_finite()
             && pressure_hpa[i] > 0.0
             && (i == 0
-                || (height_prof[i] > height_prof[i - 1]
-                    && pressure_hpa[i] < pressure_hpa[i - 1]))
+                || (height_prof[i] > height_prof[i - 1] && pressure_hpa[i] < pressure_hpa[i - 1]))
     });
     if !usable {
         return mean_wind_npw(u_prof, v_prof, height_prof, bottom_m, top_m);
@@ -372,10 +371,7 @@ pub fn mean_wind_npw_pressure_resampled(
     // Equivalent to len(np.arange(p_bottom, p_top - 1.0, -1.0)).
     let sample_count = (p_bottom - p_top + 1.0).ceil() as usize;
     let last_sample_pressure = p_bottom - sample_count.saturating_sub(1) as f64;
-    if sample_count == 0
-        || sample_count > MAX_PRESSURE_SAMPLES
-        || last_sample_pressure <= 0.0
-    {
+    if sample_count == 0 || sample_count > MAX_PRESSURE_SAMPLES || last_sample_pressure <= 0.0 {
         return mean_wind_npw(u_prof, v_prof, height_prof, bottom_m, top_m);
     }
 
@@ -395,10 +391,7 @@ pub fn mean_wind_npw_pressure_resampled(
         sum_v += v_prof[segment] + fraction * (v_prof[segment + 1] - v_prof[segment]);
     }
 
-    (
-        sum_u / sample_count as f64,
-        sum_v / sample_count as f64,
-    )
+    (sum_u / sample_count as f64, sum_v / sample_count as f64)
 }
 
 /// Bunkers storm motion estimate using the internal dynamics (ID) method.
@@ -470,30 +463,12 @@ pub fn bunkers_storm_motion_npw_pressure_resampled(
 ) -> ((f64, f64), (f64, f64), (f64, f64)) {
     let deviation = 7.5;
 
-    let (mw_u, mw_v) = mean_wind_npw_pressure_resampled(
-        u_prof,
-        v_prof,
-        height_prof,
-        pressure_hpa,
-        0.0,
-        6000.0,
-    );
-    let (low_u, low_v) = mean_wind_npw_pressure_resampled(
-        u_prof,
-        v_prof,
-        height_prof,
-        pressure_hpa,
-        0.0,
-        500.0,
-    );
-    let (high_u, high_v) = mean_wind_npw_pressure_resampled(
-        u_prof,
-        v_prof,
-        height_prof,
-        pressure_hpa,
-        5500.0,
-        6000.0,
-    );
+    let (mw_u, mw_v) =
+        mean_wind_npw_pressure_resampled(u_prof, v_prof, height_prof, pressure_hpa, 0.0, 6000.0);
+    let (low_u, low_v) =
+        mean_wind_npw_pressure_resampled(u_prof, v_prof, height_prof, pressure_hpa, 0.0, 500.0);
+    let (high_u, high_v) =
+        mean_wind_npw_pressure_resampled(u_prof, v_prof, height_prof, pressure_hpa, 5500.0, 6000.0);
 
     let shear_u = high_u - low_u;
     let shear_v = high_v - low_v;

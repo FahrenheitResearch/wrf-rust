@@ -119,9 +119,7 @@ mod tests {
     const DX: f64 = 2_000.0;
     const DY: f64 = 3_000.0;
 
-    fn analytic_wind(
-        mut wind_at: impl FnMut(f64, f64) -> (f64, f64),
-    ) -> (Vec<f64>, Vec<f64>) {
+    fn analytic_wind(mut wind_at: impl FnMut(f64, f64) -> (f64, f64)) -> (Vec<f64>, Vec<f64>) {
         let mut u = Vec::with_capacity(NX * NY);
         let mut v = Vec::with_capacity(NX * NY);
         for j in 0..NY {
