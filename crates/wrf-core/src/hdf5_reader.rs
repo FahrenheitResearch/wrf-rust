@@ -13,6 +13,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use flate2::read::ZlibDecoder;
+use rayon::prelude::*;
 
 use crate::error::{WrfError, WrfResult};
 
@@ -31,6 +32,7 @@ const TREE_SIGNATURE: [u8; 4] = *b"TREE";
 const SNOD_SIGNATURE: [u8; 4] = *b"SNOD";
 const HEAP_SIGNATURE: [u8; 4] = *b"HEAP";
 const UNDEF_ADDR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+const MAX_PARALLEL_CHUNK_DECODES: usize = 2;
 
 // HDF5 message types
 const MSG_DATASPACE: u8 = 0x01;
@@ -1021,38 +1023,56 @@ impl PureRustFile {
         let mut chunks: Vec<(Vec<u64>, u64, u32, u32)> = Vec::new();
         self.collect_btree_v1_chunks(btree_addr, ndims, &mut chunks)?;
 
-        for (offsets, chunk_addr, compressed_size, filter_mask) in &chunks {
-            if *chunk_addr == UNDEF_ADDR {
-                continue;
+        let ndim = shape.len();
+        let batch_size = rayon::current_num_threads()
+            .min(MAX_PARALLEL_CHUNK_DECODES)
+            .max(1);
+        for chunk_batch in chunks.chunks(batch_size) {
+            let decoded_chunks: WrfResult<Vec<Option<(Vec<usize>, Vec<u8>)>>> = chunk_batch
+                .par_iter()
+                .map(|(offsets, chunk_addr, compressed_size, filter_mask)| {
+                    if *chunk_addr == UNDEF_ADDR {
+                        return Ok(None);
+                    }
+
+                    // Filter: only read chunks whose time range includes time_index.
+                    let chunk_time_start = offsets[0] as usize;
+                    if time_index < chunk_time_start
+                        || time_index >= chunk_time_start + chunk_time_size
+                    {
+                        return Ok(None);
+                    }
+
+                    let compressed =
+                        read_bytes(&self.reader, *chunk_addr, *compressed_size as usize)?;
+                    let decompressed = if *filter_mask == 0 && !filters.is_empty() {
+                        decompress_chunk(&compressed, filters, chunk_bytes)?
+                    } else {
+                        compressed
+                    };
+                    let chunk_offsets = offsets
+                        .iter()
+                        .take(ndim)
+                        .map(|&offset| offset as usize)
+                        .collect();
+                    Ok(Some((chunk_offsets, decompressed)))
+                })
+                .collect();
+
+            // Preserve B-tree order while assembling. Valid HDF5 chunks do not
+            // overlap, but ordered copying also retains the previous last-write
+            // behavior for malformed files with duplicate chunk offsets.
+            for (chunk_offsets, decompressed) in decoded_chunks?.into_iter().flatten() {
+                copy_chunk_to_output_slice(
+                    &decompressed,
+                    &mut output,
+                    shape,
+                    &chunk_shape,
+                    &chunk_offsets,
+                    elem_size,
+                    time_index,
+                );
             }
-
-            // Filter: only read chunks whose time range includes time_index
-            let ndim = shape.len();
-            let chunk_time_start = offsets[0] as usize;
-            if time_index < chunk_time_start || time_index >= chunk_time_start + chunk_time_size {
-                continue;
-            }
-
-            let compressed = read_bytes(&self.reader, *chunk_addr, *compressed_size as usize)?;
-
-            let decompressed = if *filter_mask == 0 && !filters.is_empty() {
-                decompress_chunk(&compressed, filters, chunk_bytes)?
-            } else {
-                compressed
-            };
-
-            let chunk_offsets: Vec<usize> =
-                offsets.iter().take(ndim).map(|&o| o as usize).collect();
-
-            copy_chunk_to_output_slice(
-                &decompressed,
-                &mut output,
-                shape,
-                &chunk_shape,
-                &chunk_offsets,
-                elem_size,
-                time_index,
-            );
         }
 
         Ok(output)
