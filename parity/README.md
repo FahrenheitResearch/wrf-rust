@@ -124,7 +124,7 @@ python parity/probe_wrf_runner.py \
 This is a compatibility gate, not the upstream oracle. WRF-Runner deliberately
 uses wrf-rust extensions including `WrfFile`, handle-based `get_cartopy` and
 `latlon_coords`, parcel-specific/truncated CAPE, lake interpolation, Bunkers
-SRH, effective-layer products, and 2-D target-pressure interpolation.
+SRH, and effective-layer products.
 
 Its production performance also cannot be inferred solely from a single-process
 79-product benchmark. `generate_plots_for_timestep` submits products to separate
@@ -140,6 +140,15 @@ faithful multi-process call-sequence driver.
   and mass map factors, raw `F`, clamped boundary stencils, the pinned 9.81
   m/s^2 gravity constant, and all three Ertel-PV terms. They are required
   comparisons rather than documented approximations.
+- `interplevel` now supports arbitrary left dimensions, the leading
+  multiproduct dimension used by vector diagnostics, scalar and 1-D level
+  requests, shared or left-dependent target surfaces, caller-selected missing
+  values, `squeeze`, and optional xarray metadata. Its bracket scan, strict
+  bounds, dtype, and dimension order follow wrf-python 1.3.4.1 commit
+  `31c923335227b22fa656fd589a5342b91103e939` while retaining WRF-Runner's
+  2-D target-surface use case. Without optional xarray, the shim deliberately
+  still applies `squeeze` and keeps NaN in masked output buffers so existing
+  WRF-Runner `numpy.asarray`/`numpy.array` call paths remain safe.
 
 ## Known stage-one gaps
 
@@ -149,9 +158,6 @@ faithful multi-process call-sequence driver.
   explicitly ports RIP `DCALRELHL`; the existing `srh`/`srh1`/`srh3` names
   retain WRF-Runner's Bunkers behavior. Southern-Hemisphere and threshold-level
   fixtures are still needed to exercise the strict path end to end.
-- Full upstream `interplevel` supports left dimensions, 1-D level sequences,
-  caller-selected missing values, `squeeze`, and metadata. Stage one fixes and
-  probes WRF-Runner's scalar/2-D cases.
 - `ll_to_xy` and `xy_to_ll` now use the pinned wrf-python 1.3.4.1 analytic
   Lambert, polar-stereographic, Mercator, regular-lat/lon, and rotated-lat/lon
   equations. They preserve scalar/sequence and optional xarray metadata
@@ -165,8 +171,9 @@ faithful multi-process call-sequence driver.
   coordinates and rejected explicitly. Time-dependent moving-domain output,
   multi-file `cat`/`join` dimensions, and mapping inputs remain stage-two gaps.
 - Projection constructors now use WRF's spherical globe and pinned Lambert,
-  Mercator, polar, regular, and rotated-lat/lon parameters. Moving domains,
-  xarray metadata, and exact inference without netCDF4 remain unsupported.
+  Mercator, polar, regular, and rotated-lat/lon parameters. Moving-domain,
+  multi-file mapping, and complete `CoordPair` utility semantics remain
+  unsupported.
 - Multiple representative fixtures are still needed: high terrain, lakes,
   moving nests, Southern Hemisphere, dateline/global grids, high surface
   pressure, shallow caps, and multiple buoyant layers.

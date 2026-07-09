@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2026-07-09-wrf-runner-fe2e540",
+  "contract_version": "2026-07-09-wrf-runner-fe2e540-v2",
   "consumer": {
     "name": "WRF-Runner",
     "branch": "New-PC-Updates",
@@ -31,7 +31,7 @@
     {
       "id": "interplevel_2d_target",
       "priority": "P0",
-      "layer": "runner_extension",
+      "layer": "strict_upstream",
       "signature": "interplevel(field_3d, vert_coord_3d, target_level_2d)",
       "runner_usage": "run_viewer.py sounding boxes pass one (ny,nx) pressure target per standard level.",
       "expected": "One target per horizontal column; output (ny,nx), linear in pressure.",
@@ -43,8 +43,9 @@
       "layer": "strict_upstream",
       "signature": "interplevel(field3d, vert, desiredlev, missing=..., squeeze=True, meta=True)",
       "expected": "Supports left dimensions, scalar or 1-D desired-level sequences, metadata and caller-selected missing values.",
-      "status": "gap",
-      "gap": "wrf-rust currently supports exact 3-D inputs and scalar/2-D target levels only."
+      "status": "implemented",
+      "implementation": "python/wrf/interpolation.py:interplevel",
+      "reference": "NCAR wrf-python 1.3.4.1 commit 31c923335227b22fa656fd589a5342b91103e939 DINTERP3DZ/DINTERP3DZ_2DLEV and interpolation decorators"
     },
     {
       "id": "wrffile_handle",
