@@ -711,29 +711,19 @@ struct WrfPythonCapeInputs {
 
 #[inline]
 fn wrfpython_temperature_f32(pressure_pa: f32, theta_k: f32) -> f32 {
-    ((f64::from(pressure_pa) / 100_000.0).powf(crate::met::rip_cape::GAMMA)
-        * f64::from(theta_k)) as f32
+    ((f64::from(pressure_pa) / 100_000.0).powf(crate::met::rip_cape::GAMMA) * f64::from(theta_k))
+        as f32
 }
 
 #[inline]
-fn wrfpython_geopotential_f32(
-    ph_lower: f64,
-    phb_lower: f64,
-    ph_upper: f64,
-    phb_upper: f64,
-) -> f32 {
+fn wrfpython_geopotential_f32(ph_lower: f64, phb_lower: f64, ph_upper: f64, phb_upper: f64) -> f32 {
     let lower = ph_lower as f32 + phb_lower as f32;
     let upper = ph_upper as f32 + phb_upper as f32;
     0.5_f32 * (lower + upper)
 }
 
 #[inline]
-fn wrfpython_height_f32(
-    ph_lower: f64,
-    phb_lower: f64,
-    ph_upper: f64,
-    phb_upper: f64,
-) -> f32 {
+fn wrfpython_height_f32(ph_lower: f64, phb_lower: f64, ph_upper: f64, phb_upper: f64) -> f32 {
     wrfpython_geopotential_f32(ph_lower, phb_lower, ph_upper, phb_upper) / 9.81_f32
 }
 
@@ -803,10 +793,7 @@ fn build_wrfpython_cape_inputs(f: &WrfFile, t: usize) -> WrfResult<WrfPythonCape
 
     let terrain_raw = f.read_var("HGT", t)?;
     validate_strict_input_size("HGT", terrain_raw.len(), nxy)?;
-    let terrain_m = terrain_raw
-        .into_iter()
-        .map(|value| value as f32)
-        .collect();
+    let terrain_m = terrain_raw.into_iter().map(|value| value as f32).collect();
 
     let surface_pressure_raw = f.read_var("PSFC", t)?;
     validate_strict_input_size("PSFC", surface_pressure_raw.len(), nxy)?;
@@ -923,23 +910,11 @@ fn wrfpython_cape2d_stack(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResul
     }
     let inputs = build_wrfpython_cape_inputs(f, t)?;
     validate_strict_input_size("pressure", inputs.pressure_hpa.len(), nxyz)?;
-    validate_strict_input_size(
-        "temperature",
-        inputs.temperature_k.len(),
-        nxyz,
-    )?;
-    validate_strict_input_size(
-        "water-vapor mixing ratio",
-        inputs.mixing_ratio.len(),
-        nxyz,
-    )?;
+    validate_strict_input_size("temperature", inputs.temperature_k.len(), nxyz)?;
+    validate_strict_input_size("water-vapor mixing ratio", inputs.mixing_ratio.len(), nxyz)?;
     validate_strict_input_size("height", inputs.height_msl.len(), nxyz)?;
     validate_strict_input_size("terrain", inputs.terrain_m.len(), nxy)?;
-    validate_strict_input_size(
-        "surface pressure",
-        inputs.surface_pressure_hpa.len(),
-        nxy,
-    )?;
+    validate_strict_input_size("surface pressure", inputs.surface_pressure_hpa.len(), nxy)?;
 
     let columns: Result<Vec<crate::met::rip_cape::Cape2dColumn>, String> = (0..nxy)
         .into_par_iter()
@@ -1029,16 +1004,8 @@ fn wrfpython_cape3d_stack(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResul
     }
     let inputs = build_wrfpython_cape_inputs(f, t)?;
     validate_strict_input_size("pressure", inputs.pressure_hpa.len(), nxyz)?;
-    validate_strict_input_size(
-        "temperature",
-        inputs.temperature_k.len(),
-        nxyz,
-    )?;
-    validate_strict_input_size(
-        "water-vapor mixing ratio",
-        inputs.mixing_ratio.len(),
-        nxyz,
-    )?;
+    validate_strict_input_size("temperature", inputs.temperature_k.len(), nxyz)?;
+    validate_strict_input_size("water-vapor mixing ratio", inputs.mixing_ratio.len(), nxyz)?;
     validate_strict_input_size("height", inputs.height_msl.len(), nxyz)?;
 
     let mut stack = vec![f64::NAN; WRFPYTHON_CAPE3D_FIELDS * nxyz];
