@@ -2,8 +2,9 @@
 wrf-rust: Fast WRF post-processing powered by Rust.
 
 Adds parcel-explicit SBCAPE/MLCAPE/MUCAPE, modern Bunkers SRH for operational
-workflows, an explicitly named ``srh_wrfpython`` compatibility path for NCAR's
-legacy RIP algorithm, 65+ variables, and universal unit support.
+workflows, and separately named ``cape2d_wrfpython``, ``cape3d_wrfpython``,
+and ``srh_wrfpython`` compatibility paths for NCAR's legacy RIP algorithms,
+plus broad diagnostic and unit support.
 
 Usage:
     from wrf import WrfFile, getvar
@@ -382,7 +383,8 @@ def getvar(
         Convert output to these units (e.g. "degC", "hPa", "knots").
     parcel_type : str, optional
         Parcel selection for CAPE and ECAPE-family variables: "sb", "ml",
-        or "mu".
+        or "mu". The separately named ``*_wrfpython`` CAPE diagnostics use
+        fixed NCAR/RIP semantics and reject parcel overrides.
     storm_motion : tuple, optional
         Custom storm motion in m/s for SRH-family diagnostics. Pass either
         a scalar ``(u, v)`` pair, a pair of 2-D component grids

@@ -6,7 +6,7 @@
 use rayon::prelude::*;
 
 use crate::compute::ComputeOpts;
-use crate::error::WrfResult;
+use crate::error::{WrfError, WrfResult};
 use crate::file::{SharedField, WrfFile};
 
 const CAPE_STACK_FIELDS: usize = 4;
@@ -687,6 +687,372 @@ pub fn compute_cape3d(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<V
     Ok(cape3d)
 }
 
+// ── Strict NCAR wrf-python/RIP compatibility ──
+
+const WRFPYTHON_CAPE2D_FIELDS: usize = 4;
+const WRFPYTHON_CAPE3D_FIELDS: usize = 2;
+
+fn validate_wrfpython_cape_opts(opts: &ComputeOpts) -> WrfResult<()> {
+    let mut unsupported = Vec::new();
+    if opts.parcel_type.is_some() {
+        unsupported.push("parcel_type");
+    }
+    if opts.top_m.is_some() {
+        unsupported.push("top_m");
+    }
+    if opts.lake_interp.is_some() {
+        unsupported.push("lake_interp");
+    }
+    if opts.parcel_pressure.is_some() {
+        unsupported.push("parcel_pressure");
+    }
+    if opts.parcel_temperature.is_some() {
+        unsupported.push("parcel_temperature");
+    }
+    if opts.parcel_dewpoint.is_some() {
+        unsupported.push("parcel_dewpoint");
+    }
+    if unsupported.is_empty() {
+        Ok(())
+    } else {
+        Err(WrfError::InvalidParam(format!(
+            "strict wrf-python CAPE fixes parcel semantics and does not accept: {}",
+            unsupported.join(", ")
+        )))
+    }
+}
+
+fn validate_strict_input_size(name: &str, actual: usize, expected: usize) -> WrfResult<()> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(WrfError::DimMismatch(format!(
+            "strict wrf-python CAPE expected {expected} values for {name}, got {actual}"
+        )))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fill_wrfpython_cape_column(
+    ij: usize,
+    nxy: usize,
+    nz: usize,
+    pressure_pa: &[f64],
+    theta_k: &[f64],
+    mixing_ratio: &[f64],
+    geopotential: &[f64],
+    pressure_hpa: &mut Vec<f64>,
+    temperature_k: &mut Vec<f64>,
+    column_mixing_ratio: &mut Vec<f64>,
+    height_msl: &mut Vec<f64>,
+) {
+    pressure_hpa.clear();
+    temperature_k.clear();
+    column_mixing_ratio.clear();
+    height_msl.clear();
+
+    // Standard WRF files are surface-first. Match wrf-python's vertical flip
+    // for an input whose pressure axis is already top-first.
+    let reverse = pressure_pa[ij] < pressure_pa[(nz - 1) * nxy + ij];
+    for output_level in 0..nz {
+        let input_level = if reverse {
+            nz - 1 - output_level
+        } else {
+            output_level
+        };
+        let index = input_level * nxy + ij;
+        let pressure = pressure_pa[index];
+        pressure_hpa.push(pressure / 100.0);
+        temperature_k.push(
+            theta_k[index]
+                * (pressure / 100_000.0).powf(crate::met::rip_cape::GAMMA),
+        );
+        column_mixing_ratio.push(mixing_ratio[index]);
+        height_msl.push(geopotential[index] / crate::met::rip_cape::G);
+    }
+}
+
+fn wrfpython_cape2d_stack(
+    f: &WrfFile,
+    t: usize,
+    opts: &ComputeOpts,
+) -> WrfResult<SharedField> {
+    validate_wrfpython_cape_opts(opts)?;
+    let cache_key = format!("cape2d_wrfpython_stack_{t}");
+    if let Some(cached) = f.cached_field(&cache_key) {
+        return Ok(cached);
+    }
+    crate::met::rip_cape::prepare_lookup_table().map_err(|error| {
+        WrfError::Compute(format!(
+            "strict wrf-python cape_2d lookup initialization failed: {error}"
+        ))
+    })?;
+
+    let nxy = f.nxy();
+    let nxyz = f.nxyz();
+    let nz = f.nz;
+    if nz < 2 {
+        return Err(WrfError::DimMismatch(
+            "strict wrf-python CAPE requires at least two vertical levels".into(),
+        ));
+    }
+    let pressure_pa = f.full_pressure(t)?;
+    let theta_k = f.full_theta(t)?;
+    let mixing_ratio = f.qvapor(t)?;
+    let geopotential = f.full_geopotential(t)?;
+    let terrain = f.terrain(t)?;
+    let surface_pressure_pa = f.psfc(t)?;
+    validate_strict_input_size("pressure", pressure_pa.len(), nxyz)?;
+    validate_strict_input_size("potential temperature", theta_k.len(), nxyz)?;
+    validate_strict_input_size("water-vapor mixing ratio", mixing_ratio.len(), nxyz)?;
+    validate_strict_input_size("geopotential", geopotential.len(), nxyz)?;
+    validate_strict_input_size("terrain", terrain.len(), nxy)?;
+    validate_strict_input_size("surface pressure", surface_pressure_pa.len(), nxy)?;
+
+    let columns: Result<Vec<crate::met::rip_cape::Cape2dColumn>, String> = (0..nxy)
+        .into_par_iter()
+        .map_init(
+            || {
+                (
+                    Vec::with_capacity(nz),
+                    Vec::with_capacity(nz),
+                    Vec::with_capacity(nz),
+                    Vec::with_capacity(nz),
+                    crate::met::rip_cape::CapeWorkspace::with_levels(nz),
+                )
+            },
+            |(pressure, temperature, moisture, height, workspace), ij| {
+                fill_wrfpython_cape_column(
+                    ij,
+                    nxy,
+                    nz,
+                    &pressure_pa,
+                    &theta_k,
+                    &mixing_ratio,
+                    &geopotential,
+                    pressure,
+                    temperature,
+                    moisture,
+                    height,
+                );
+                crate::met::rip_cape::cape2d_column_with_workspace(
+                    pressure,
+                    temperature,
+                    moisture,
+                    height,
+                    terrain[ij],
+                    surface_pressure_pa[ij] / 100.0,
+                    workspace,
+                )
+                .map_err(|error| format!("column {ij}: {error}"))
+            },
+        )
+        .collect();
+    let columns = columns.map_err(|error| {
+        WrfError::Compute(format!("strict wrf-python cape_2d failed: {error}"))
+    })?;
+
+    let mut stack = Vec::with_capacity(WRFPYTHON_CAPE2D_FIELDS * nxy);
+    stack.extend(columns.iter().map(|column| column.cape));
+    stack.extend(columns.iter().map(|column| column.cin));
+    stack.extend(columns.iter().map(|column| column.lcl_agl));
+    stack.extend(columns.iter().map(|column| column.lfc_agl));
+    Ok(f.store_cached_field(cache_key, stack))
+}
+
+fn wrfpython_cape3d_stack(
+    f: &WrfFile,
+    t: usize,
+    opts: &ComputeOpts,
+) -> WrfResult<SharedField> {
+    validate_wrfpython_cape_opts(opts)?;
+    let cache_key = format!("cape3d_wrfpython_stack_{t}");
+    if let Some(cached) = f.cached_field(&cache_key) {
+        return Ok(cached);
+    }
+    crate::met::rip_cape::prepare_lookup_table().map_err(|error| {
+        WrfError::Compute(format!(
+            "strict wrf-python cape_3d lookup initialization failed: {error}"
+        ))
+    })?;
+
+    let nxy = f.nxy();
+    let nxyz = f.nxyz();
+    let nz = f.nz;
+    if nz < 2 {
+        return Err(WrfError::DimMismatch(
+            "strict wrf-python CAPE requires at least two vertical levels".into(),
+        ));
+    }
+    let pressure_pa = f.full_pressure(t)?;
+    let theta_k = f.full_theta(t)?;
+    let mixing_ratio = f.qvapor(t)?;
+    let geopotential = f.full_geopotential(t)?;
+    validate_strict_input_size("pressure", pressure_pa.len(), nxyz)?;
+    validate_strict_input_size("potential temperature", theta_k.len(), nxyz)?;
+    validate_strict_input_size("water-vapor mixing ratio", mixing_ratio.len(), nxyz)?;
+    validate_strict_input_size("geopotential", geopotential.len(), nxyz)?;
+
+    let mut stack = vec![f64::NAN; WRFPYTHON_CAPE3D_FIELDS * nxyz];
+    let values_per_column = WRFPYTHON_CAPE3D_FIELDS * nz;
+    let bytes_per_column = values_per_column * std::mem::size_of::<f64>();
+    let batch_columns = (64 * 1024 * 1024 / bytes_per_column).max(1);
+
+    // CAPE3D is inherently O(nz^2). Compute parallel column-major batches,
+    // then scatter into the field-major API layout. The bounded 64 MiB
+    // staging buffer avoids doubling a domain-sized two-field result.
+    for batch_start in (0..nxy).step_by(batch_columns) {
+        let batch_end = (batch_start + batch_columns).min(nxy);
+        let mut columns = vec![0.0; (batch_end - batch_start) * values_per_column];
+        let column_results: Result<Vec<()>, String> = columns
+            .par_chunks_mut(values_per_column)
+            .enumerate()
+            .map_init(
+                || {
+                    (
+                        Vec::with_capacity(nz),
+                        Vec::with_capacity(nz),
+                        Vec::with_capacity(nz),
+                        Vec::with_capacity(nz),
+                        crate::met::rip_cape::CapeWorkspace::with_levels(nz),
+                    )
+                },
+                |(pressure, temperature, moisture, height, workspace),
+                 (batch_ij, column)| {
+                    let ij = batch_start + batch_ij;
+                    fill_wrfpython_cape_column(
+                        ij,
+                        nxy,
+                        nz,
+                        &pressure_pa,
+                        &theta_k,
+                        &mixing_ratio,
+                        &geopotential,
+                        pressure,
+                        temperature,
+                        moisture,
+                        height,
+                    );
+                    let (cape, cin) = column.split_at_mut(nz);
+                    crate::met::rip_cape::cape3d_column_into(
+                        pressure,
+                        temperature,
+                        moisture,
+                        height,
+                        cape,
+                        cin,
+                        workspace,
+                    )
+                    .map_err(|error| format!("column {ij}: {error}"))
+                },
+            )
+            .collect();
+        column_results.map_err(|error| {
+            WrfError::Compute(format!("strict wrf-python cape_3d failed: {error}"))
+        })?;
+
+        for batch_ij in 0..batch_end - batch_start {
+            let ij = batch_start + batch_ij;
+            let column = &columns
+                [batch_ij * values_per_column..(batch_ij + 1) * values_per_column];
+            let (cape, cin) = column.split_at(nz);
+            for level in 0..nz {
+                stack[level * nxy + ij] = cape[level];
+                stack[nxyz + level * nxy + ij] = cin[level];
+            }
+        }
+    }
+    Ok(f.store_cached_field(cache_key, stack))
+}
+
+fn wrfpython_cape2d_component(
+    f: &WrfFile,
+    t: usize,
+    opts: &ComputeOpts,
+    component: usize,
+) -> WrfResult<Vec<f64>> {
+    let stack = wrfpython_cape2d_stack(f, t, opts)?;
+    let nxy = f.nxy();
+    Ok(stack[component * nxy..(component + 1) * nxy].to_vec())
+}
+
+/// Exact wrf-python 1.3.4.1 `cape_2d` ordering:
+/// `[MCAPE, MCIN, LCL m AGL, LFC m AGL]`.
+///
+/// This mixed-unit aggregate does not accept a unit override; request one of
+/// the component diagnostics when conversion is needed.
+pub fn compute_cape2d_wrfpython(
+    f: &WrfFile,
+    t: usize,
+    opts: &ComputeOpts,
+) -> WrfResult<Vec<f64>> {
+    if opts.units.is_some() {
+        return Err(WrfError::InvalidParam(
+            "cape2d_wrfpython is a mixed-unit aggregate; request mcape_wrfpython, mcin_wrfpython, lcl_wrfpython, or lfc_wrfpython for unit conversion".into(),
+        ));
+    }
+    Ok(wrfpython_cape2d_stack(f, t, opts)?.to_vec())
+}
+
+pub fn compute_mcape_wrfpython(
+    f: &WrfFile,
+    t: usize,
+    opts: &ComputeOpts,
+) -> WrfResult<Vec<f64>> {
+    wrfpython_cape2d_component(f, t, opts, 0)
+}
+
+pub fn compute_mcin_wrfpython(
+    f: &WrfFile,
+    t: usize,
+    opts: &ComputeOpts,
+) -> WrfResult<Vec<f64>> {
+    wrfpython_cape2d_component(f, t, opts, 1)
+}
+
+pub fn compute_lcl_wrfpython(
+    f: &WrfFile,
+    t: usize,
+    opts: &ComputeOpts,
+) -> WrfResult<Vec<f64>> {
+    wrfpython_cape2d_component(f, t, opts, 2)
+}
+
+pub fn compute_lfc_wrfpython(
+    f: &WrfFile,
+    t: usize,
+    opts: &ComputeOpts,
+) -> WrfResult<Vec<f64>> {
+    wrfpython_cape2d_component(f, t, opts, 3)
+}
+
+/// Exact wrf-python 1.3.4.1 `cape_3d` ordering: `[CAPE, CIN]`.
+pub fn compute_cape3d_wrfpython(
+    f: &WrfFile,
+    t: usize,
+    opts: &ComputeOpts,
+) -> WrfResult<Vec<f64>> {
+    Ok(wrfpython_cape3d_stack(f, t, opts)?.to_vec())
+}
+
+pub fn compute_cape3d_only_wrfpython(
+    f: &WrfFile,
+    t: usize,
+    opts: &ComputeOpts,
+) -> WrfResult<Vec<f64>> {
+    let stack = wrfpython_cape3d_stack(f, t, opts)?;
+    Ok(stack[..f.nxyz()].to_vec())
+}
+
+pub fn compute_cin3d_wrfpython(
+    f: &WrfFile,
+    t: usize,
+    opts: &ComputeOpts,
+) -> WrfResult<Vec<f64>> {
+    let stack = wrfpython_cape3d_stack(f, t, opts)?;
+    Ok(stack[f.nxyz()..].to_vec())
+}
+
 // ── Custom parcel helper ──
 
 /// Compute CAPE fields using a custom parcel (user-specified pressure, temperature, dewpoint).
@@ -1090,6 +1456,26 @@ mod tests {
         let neg_key = cape_cache_key("sb", None, Some(-1.0));
         assert_eq!(none_key, zero_key);
         assert_eq!(none_key, neg_key);
+    }
+
+    #[test]
+    fn strict_wrfpython_cape_rejects_native_parcel_extensions() {
+        assert!(validate_wrfpython_cape_opts(&ComputeOpts::default()).is_ok());
+        assert!(validate_wrfpython_cape_opts(&ComputeOpts {
+            parcel_type: Some("mu".into()),
+            ..ComputeOpts::default()
+        })
+        .is_err());
+        assert!(validate_wrfpython_cape_opts(&ComputeOpts {
+            top_m: Some(3_000.0),
+            ..ComputeOpts::default()
+        })
+        .is_err());
+        assert!(validate_wrfpython_cape_opts(&ComputeOpts {
+            lake_interp: Some(0.0),
+            ..ComputeOpts::default()
+        })
+        .is_err());
     }
 
     #[test]

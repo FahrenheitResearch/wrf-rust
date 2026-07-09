@@ -1,6 +1,6 @@
 # wrf-python differential parity
 
-This directory is the first-stage acceptance framework for treating `wrf-rust`
+This directory is the differential acceptance framework for treating `wrf-rust`
 as a broad replacement for NCAR `wrf-python`. It deliberately separates three
 questions that are easy to conflate:
 
@@ -33,9 +33,13 @@ profile/recipe adapter is added.
   contract, including scalar/2-D `interplevel`, handle-based coordinate helpers,
   projection construction, and its literal `getvar` calls.
 
-The previously collected `tmp-wrfpy-audit/g_cape.py` source was used to retain
-the documented upstream `cape_2d` order (`MCAPE`, `MCIN`, `LCL`, `LFC`). That
-scratch directory is not a runtime input and is intentionally not copied here.
+The strict CAPE contracts are derived from pinned wrf-python 1.3.4.1
+`g_cape.py`, `rip_cape.f90`, and `psadilookup.dat`. The strict Rust names retain
+the upstream `cape_2d` order (`MCAPE`, `MCIN`, `LCL`, `LFC`), levelwise
+`cape_3d` order (`CAPE`, `CIN`), RIP missing values, and the pinned
+pseudoadiabat table. The configurable wrf-rust parcel diagnostics remain
+separate `contract_only` extensions rather than being compared to an
+incompatible upstream parcel.
 
 ## Separate environments are mandatory
 
@@ -132,7 +136,7 @@ processes, each constructing a fresh `WrfFile`; per-handle CAPE/EIL caches are
 not shared. A release benchmark must include the real product batch or a
 faithful multi-process call-sequence driver.
 
-## Resolved stage-one parity
+## Resolved parity
 
 - AVO and PVO directly mirror pinned wrf-python 1.3.4.1 commit
   `31c923335227b22fa656fd589a5342b91103e939`
@@ -150,10 +154,13 @@ faithful multi-process call-sequence driver.
   still applies `squeeze` and keeps NaN in masked output buffers so existing
   WRF-Runner `numpy.asarray`/`numpy.array` call paths remain safe.
 
-## Known stage-one gaps
+## Remaining gaps
 
 - `theta_w`, SB/ML parcel diagnostics, shear, Bunkers motion, SHIP, STP, and
   SCP need an independent profile or operational-recipe reference adapter.
+- Strict NCAR CAPE now has required component contracts, but those gates still
+  need multiple high-terrain, shallow-cap, no-EL, and elevated-parcel fixtures
+  in the pinned Linux reference environment.
 - NCAR SRH and WRF-Runner SRH remain distinct contracts. `srh_wrfpython`
   explicitly ports RIP `DCALRELHL`; the existing `srh`/`srh1`/`srh3` names
   retain WRF-Runner's Bunkers behavior. Southern-Hemisphere and threshold-level

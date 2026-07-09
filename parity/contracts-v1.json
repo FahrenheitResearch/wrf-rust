@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2026-07-09-stage1-strict-srh-vorticity",
+  "contract_version": "2026-07-09-stage2-strict-cape-srh-vorticity",
   "purpose": "Differential field contracts for replacing wrf-python without blindly preserving known scientific defects.",
   "axis_names": {
     "2d": ["south_north", "west_east"],
@@ -191,48 +191,120 @@
       "family": "cape",
       "priority": "P0",
       "wrf_rust": {"name": "cape", "aliases": ["mucape", "most_unstable_cape"], "options": {"parcel_type": "mu"}},
-      "wrf_python": {"extractor": "component", "name": "cape_2d", "aliases": ["mcape"], "options": {}, "component": {"axis": 0, "index": 0, "label": "MCAPE"}},
+      "wrf_python": {"extractor": "none", "name": null, "aliases": [], "options": {}, "reason": "wrf-rust MU CAPE is a configurable native-level parcel extension, not NCAR's max-theta-e 500 m parcel."},
       "units": "J/kg",
       "dimensions": ["south_north", "west_east"],
       "component_order": [],
-      "comparison": {"mode": "diagnostic", "tolerance": {"atol": 5.0, "rtol": 0.01, "relative_floor": 50.0}},
-      "intentional_deviations": ["Parcel selection algorithms are similar in purpose but not yet proven identical."]
+      "comparison": {"mode": "contract_only", "tolerance": {"atol": 5.0, "rtol": 0.01, "relative_floor": 50.0}},
+      "intentional_deviations": ["wrf-rust extension; validate its native-level most-unstable parcel against an independent parcel implementation."]
     },
     {
       "id": "mu_cin",
       "family": "cape",
       "priority": "P0",
       "wrf_rust": {"name": "cin", "aliases": ["mucin", "most_unstable_cin"], "options": {"parcel_type": "mu"}},
-      "wrf_python": {"extractor": "component", "name": "cape_2d", "aliases": ["mcin"], "options": {}, "component": {"axis": 0, "index": 1, "label": "MCIN"}},
+      "wrf_python": {"extractor": "none", "name": null, "aliases": [], "options": {}, "reason": "wrf-rust MU CIN does not use NCAR's 500 m parcel or RIP positive-magnitude/missing-value conventions."},
       "units": "J/kg",
       "dimensions": ["south_north", "west_east"],
       "component_order": [],
-      "comparison": {"mode": "diagnostic", "tolerance": {"atol": 3.0, "rtol": 0.02, "relative_floor": 25.0}},
-      "intentional_deviations": ["Do not promote to required until CIN integration conventions are reconciled."]
+      "comparison": {"mode": "contract_only", "tolerance": {"atol": 3.0, "rtol": 0.02, "relative_floor": 25.0}},
+      "intentional_deviations": ["wrf-rust extension with independently defined CIN sign and integration semantics."]
     },
     {
       "id": "mu_lcl",
       "family": "cape",
       "priority": "P0",
       "wrf_rust": {"name": "lcl", "aliases": ["lcl_height"], "options": {"parcel_type": "mu", "units": "m"}},
-      "wrf_python": {"extractor": "component", "name": "cape_2d", "aliases": ["lcl"], "options": {}, "component": {"axis": 0, "index": 2, "label": "LCL"}},
+      "wrf_python": {"extractor": "none", "name": null, "aliases": [], "options": {}, "reason": "The native wrf-rust MU parcel is not NCAR's pressure-averaged max-theta-e parcel."},
       "units": "m AGL",
       "dimensions": ["south_north", "west_east"],
       "component_order": [],
-      "comparison": {"mode": "diagnostic", "tolerance": {"atol": 10.0, "rtol": 0.002, "relative_floor": 100.0}},
-      "intentional_deviations": []
+      "comparison": {"mode": "contract_only", "tolerance": {"atol": 10.0, "rtol": 0.002, "relative_floor": 100.0}},
+      "intentional_deviations": ["wrf-rust extension tied to its configurable MU parcel contract."]
     },
     {
       "id": "mu_lfc",
       "family": "cape",
       "priority": "P0",
       "wrf_rust": {"name": "lfc", "aliases": ["lfc_height"], "options": {"parcel_type": "mu", "units": "m"}},
+      "wrf_python": {"extractor": "none", "name": null, "aliases": [], "options": {}, "reason": "The native wrf-rust MU parcel and LFC definition are not NCAR's RIP cape_2d contract."},
+      "units": "m AGL",
+      "dimensions": ["south_north", "west_east"],
+      "component_order": [],
+      "comparison": {"mode": "contract_only", "tolerance": {"atol": 20.0, "rtol": 0.005, "relative_floor": 100.0}},
+      "intentional_deviations": ["wrf-rust extension; multi-buoyant-layer behavior needs an independent native-parcel oracle."]
+    },
+    {
+      "id": "mcape_wrfpython_rip",
+      "family": "cape",
+      "priority": "P0",
+      "wrf_rust": {"name": "mcape_wrfpython", "aliases": ["mcape_ncar"], "options": {}},
+      "wrf_python": {"extractor": "component", "name": "cape_2d", "aliases": ["mcape"], "options": {}, "component": {"axis": 0, "index": 0, "label": "MCAPE"}},
+      "units": "J/kg",
+      "dimensions": ["south_north", "west_east"],
+      "component_order": [],
+      "comparison": {"mode": "required", "tolerance": {"atol": 5.0, "rtol": 0.01, "relative_floor": 50.0}},
+      "intentional_deviations": []
+    },
+    {
+      "id": "mcin_wrfpython_rip",
+      "family": "cape",
+      "priority": "P0",
+      "wrf_rust": {"name": "mcin_wrfpython", "aliases": ["mcin_ncar"], "options": {}},
+      "wrf_python": {"extractor": "component", "name": "cape_2d", "aliases": ["mcin"], "options": {}, "component": {"axis": 0, "index": 1, "label": "MCIN"}},
+      "units": "J/kg",
+      "dimensions": ["south_north", "west_east"],
+      "component_order": [],
+      "comparison": {"mode": "required", "tolerance": {"atol": 3.0, "rtol": 0.02, "relative_floor": 25.0}},
+      "intentional_deviations": []
+    },
+    {
+      "id": "lcl_wrfpython_rip",
+      "family": "cape",
+      "priority": "P0",
+      "wrf_rust": {"name": "lcl_wrfpython", "aliases": ["lcl_ncar"], "options": {"units": "m"}},
+      "wrf_python": {"extractor": "component", "name": "cape_2d", "aliases": ["lcl"], "options": {}, "component": {"axis": 0, "index": 2, "label": "LCL"}},
+      "units": "m AGL",
+      "dimensions": ["south_north", "west_east"],
+      "component_order": [],
+      "comparison": {"mode": "required", "tolerance": {"atol": 10.0, "rtol": 0.002, "relative_floor": 100.0}},
+      "intentional_deviations": []
+    },
+    {
+      "id": "lfc_wrfpython_rip",
+      "family": "cape",
+      "priority": "P0",
+      "wrf_rust": {"name": "lfc_wrfpython", "aliases": ["lfc_ncar"], "options": {"units": "m"}},
       "wrf_python": {"extractor": "component", "name": "cape_2d", "aliases": ["lfc"], "options": {}, "component": {"axis": 0, "index": 3, "label": "LFC"}},
       "units": "m AGL",
       "dimensions": ["south_north", "west_east"],
       "component_order": [],
-      "comparison": {"mode": "diagnostic", "tolerance": {"atol": 20.0, "rtol": 0.005, "relative_floor": 100.0}},
-      "intentional_deviations": ["First-LFC behavior must be validated on multi-buoyant-layer profiles."]
+      "comparison": {"mode": "required", "tolerance": {"atol": 20.0, "rtol": 0.005, "relative_floor": 100.0}},
+      "intentional_deviations": []
+    },
+    {
+      "id": "cape3d_wrfpython_rip",
+      "family": "cape",
+      "priority": "P0",
+      "wrf_rust": {"name": "cape3d_only_wrfpython", "aliases": ["cape_3d_only_wrfpython"], "options": {}},
+      "wrf_python": {"extractor": "component", "name": "cape_3d", "aliases": [], "options": {}, "component": {"axis": 0, "index": 0, "label": "CAPE"}},
+      "units": "J/kg",
+      "dimensions": ["bottom_top", "south_north", "west_east"],
+      "component_order": [],
+      "comparison": {"mode": "required", "tolerance": {"atol": 5.0, "rtol": 0.01, "relative_floor": 50.0}},
+      "intentional_deviations": []
+    },
+    {
+      "id": "cin3d_wrfpython_rip",
+      "family": "cape",
+      "priority": "P0",
+      "wrf_rust": {"name": "cin3d_wrfpython", "aliases": ["cin_3d_wrfpython"], "options": {}},
+      "wrf_python": {"extractor": "component", "name": "cape_3d", "aliases": [], "options": {}, "component": {"axis": 0, "index": 1, "label": "CIN"}},
+      "units": "J/kg",
+      "dimensions": ["bottom_top", "south_north", "west_east"],
+      "component_order": [],
+      "comparison": {"mode": "required", "tolerance": {"atol": 3.0, "rtol": 0.02, "relative_floor": 25.0}},
+      "intentional_deviations": []
     },
     {
       "id": "sb_cape_0_3km",

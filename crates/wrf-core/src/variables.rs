@@ -405,6 +405,70 @@ pub static VARS: &[VarDef] = &[
         dim: VarDim::ThreeD,
         compute: dcape::compute_cape3d,
     },
+    VarDef {
+        name: "cape2d_wrfpython",
+        aliases: &["cape_2d_wrfpython", "cape2d_ncar"],
+        description: "Strict NCAR wrf-python cape_2d [MCAPE, MCIN, LCL, LFC]",
+        default_units: "J/kg",
+        dim: VarDim::TwoD,
+        compute: dcape::compute_cape2d_wrfpython,
+    },
+    VarDef {
+        name: "mcape_wrfpython",
+        aliases: &["mcape_ncar"],
+        description: "Strict NCAR wrf-python maximum-parcel CAPE",
+        default_units: "J/kg",
+        dim: VarDim::TwoD,
+        compute: dcape::compute_mcape_wrfpython,
+    },
+    VarDef {
+        name: "mcin_wrfpython",
+        aliases: &["mcin_ncar"],
+        description: "Strict NCAR wrf-python maximum-parcel CIN magnitude",
+        default_units: "J/kg",
+        dim: VarDim::TwoD,
+        compute: dcape::compute_mcin_wrfpython,
+    },
+    VarDef {
+        name: "lcl_wrfpython",
+        aliases: &["lcl_ncar"],
+        description: "Strict NCAR wrf-python maximum-parcel LCL height AGL",
+        default_units: "m",
+        dim: VarDim::TwoD,
+        compute: dcape::compute_lcl_wrfpython,
+    },
+    VarDef {
+        name: "lfc_wrfpython",
+        aliases: &["lfc_ncar"],
+        description: "Strict NCAR wrf-python maximum-parcel LFC height AGL",
+        default_units: "m",
+        dim: VarDim::TwoD,
+        compute: dcape::compute_lfc_wrfpython,
+    },
+    VarDef {
+        name: "cape3d_wrfpython",
+        aliases: &["cape_3d_wrfpython", "cape3d_ncar"],
+        description: "Strict NCAR wrf-python levelwise [CAPE, CIN]",
+        default_units: "J/kg",
+        dim: VarDim::ThreeD,
+        compute: dcape::compute_cape3d_wrfpython,
+    },
+    VarDef {
+        name: "cape3d_only_wrfpython",
+        aliases: &["cape_3d_only_wrfpython"],
+        description: "Strict NCAR wrf-python levelwise CAPE component",
+        default_units: "J/kg",
+        dim: VarDim::ThreeD,
+        compute: dcape::compute_cape3d_only_wrfpython,
+    },
+    VarDef {
+        name: "cin3d_wrfpython",
+        aliases: &["cin_3d_wrfpython"],
+        description: "Strict NCAR wrf-python levelwise CIN component",
+        default_units: "J/kg",
+        dim: VarDim::ThreeD,
+        compute: dcape::compute_cin3d_wrfpython,
+    },
     // ── Phase 4: Wind & SRH ──
     VarDef {
         name: "wspd",
@@ -1020,6 +1084,20 @@ mod tests {
         assert_eq!(get_var_def("downdraft_cape").unwrap().name, "dcape");
         assert_eq!(get_var_def("tot_tots").unwrap().name, "total_totals");
         assert_eq!(get_var_def("dgz_rh").unwrap().name, "dgz_rh");
+    }
+
+    #[test]
+    fn strict_cape_names_do_not_replace_extension_aliases() {
+        assert_eq!(get_var_def("cape_2d").unwrap().name, "cape2d");
+        assert_eq!(
+            get_var_def("cape_2d_wrfpython").unwrap().name,
+            "cape2d_wrfpython"
+        );
+        assert_eq!(get_var_def("mcape_ncar").unwrap().name, "mcape_wrfpython");
+        assert_eq!(
+            get_var_def("cape_3d_wrfpython").unwrap().name,
+            "cape3d_wrfpython"
+        );
     }
 
     #[test]

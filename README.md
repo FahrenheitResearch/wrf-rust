@@ -363,7 +363,7 @@ derived diagnostics. Major groups include:
 
 - Temperature, pressure, height, terrain, humidity, moisture, and wind.
 - CAPE/CIN with surface-based, mixed-layer, most-unstable, generic, and custom
-  parcel paths.
+  parcel paths, plus separately named strict NCAR/RIP compatibility paths.
 - ECAPE-family diagnostics with parcel selection and storm-motion options.
 - Bunkers storm-relative helicity for operational products, plus the explicit
   `srh_wrfpython` legacy RIP compatibility path; bulk shear, mean wind, lapse
@@ -385,6 +385,26 @@ Common options:
 | `storm_motion_type` | ECAPE storm-motion type such as `"bunkers_rm"`. |
 | `layer_type` | STP layer type, usually `"fixed"` or `"effective"`. |
 | `lake_interp` | Interpolate 2 m fields over small water bodies. |
+
+### Native CAPE versus strict wrf-python CAPE
+
+The existing `cape`, `cin`, `cape2d`/`cape_2d`, and `cape3d`/`cape_3d`
+variables retain wrf-rust's configurable parcel semantics. They are not aliases
+for NCAR's historical RIP algorithm.
+
+Use `cape2d_wrfpython` (alias `cape_2d_wrfpython`) for the exact four-component
+NCAR order `[MCAPE, MCIN, LCL, LFC]`, or request the single-unit components
+`mcape_wrfpython`, `mcin_wrfpython`, `lcl_wrfpython`, and `lfc_wrfpython`.
+Use `cape3d_wrfpython` (alias `cape_3d_wrfpython`) for the strict two-component
+levelwise `[CAPE, CIN]` result. These strict diagnostics preserve the
+wrf-python 1.3.4.1/RIP parcel selection, 500 m pressure average,
+pseudoadiabat table, positive CIN magnitude, missing-value rules, and output
+ordering. Parcel overrides, CAPE truncation, and lake interpolation are
+rejected on the strict paths; use the native diagnostics when those extensions
+are desired.
+Malformed columns (non-finite values, invalid moisture, or non-monotonic
+pressure/height) and lookup-table missing states return a computation error
+rather than indexing or aborting the process.
 
 ## Unit Strings
 
