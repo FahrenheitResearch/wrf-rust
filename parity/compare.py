@@ -121,7 +121,7 @@ def validate_bundle_pair(
     reference_metadata: dict[str, Any],
     candidate_metadata: dict[str, Any],
     contract_hash: str,
-) -> None:
+) -> list[str]:
     expected_implementations = ("wrf-python", "wrf-rust")
     actual = (
         reference_metadata.get("implementation"),
@@ -141,16 +141,48 @@ def validate_bundle_pair(
         if metadata.get("contract_sha256") != contract_hash:
             raise ParityError(f"{name} was extracted with a different contract document")
 
+    selections: list[list[str]] = []
+    for name, metadata in (
+        ("reference", reference_metadata),
+        ("candidate", candidate_metadata),
+    ):
+        raw = metadata.get("selected_contract_ids")
+        if not isinstance(raw, list) or not raw or not all(
+            isinstance(identifier, str) and identifier for identifier in raw
+        ):
+            raise ParityError(f"{name} bundle has an invalid contract selection")
+        if len(raw) != len(set(raw)):
+            raise ParityError(f"{name} bundle contract selection contains duplicates")
+        selections.append(raw)
+    if selections[0] != selections[1]:
+        raise ParityError("reference and candidate bundles selected different contracts")
+    return selections[0]
+
 
 def main() -> None:
     args = parse_args()
     contract, contract_hash = load_contract(args.contract)
-    selected = select_contracts(
-        contract, csv_values(args.variables), csv_values(args.families)
-    )
+    requested_variables = csv_values(args.variables)
+    requested_families = csv_values(args.families)
     reference, ref_metadata, ref_hash = load_bundle(args.reference)
     candidate, cand_metadata, cand_hash = load_bundle(args.candidate)
-    validate_bundle_pair(ref_metadata, cand_metadata, contract_hash)
+    bundle_ids = validate_bundle_pair(ref_metadata, cand_metadata, contract_hash)
+
+    if requested_variables or requested_families:
+        selected = select_contracts(contract, requested_variables, requested_families)
+        requested_ids = [item["id"] for item in selected]
+        if requested_ids != bundle_ids:
+            raise ParityError(
+                "comparator selection does not match the contracts recorded in both bundles"
+            )
+    else:
+        contracts_by_id = {item["id"]: item for item in contract["variables"]}
+        unknown = [identifier for identifier in bundle_ids if identifier not in contracts_by_id]
+        if unknown:
+            raise ParityError(
+                f"bundle contains unknown contract ids: {', '.join(unknown)}"
+            )
+        selected = [contracts_by_id[identifier] for identifier in bundle_ids]
 
     rows: list[dict[str, Any]] = []
     failures = 0
