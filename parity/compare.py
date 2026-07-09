@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""Compare wrf-rust and wrf-python parity bundles against explicit contracts."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from _common import (
+    ParityError,
+    canonical_json_bytes,
+    csv_values,
+    load_bundle,
+    load_contract,
+    print_error_and_exit,
+    select_contracts,
+    sha256_file,
+)
+
+
+def parse_args() -> argparse.Namespace:
+    here = Path(__file__).resolve().parent
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--contract", type=Path, default=here / "contracts-v1.json")
+    parser.add_argument("--reference", type=Path, required=True)
+    parser.add_argument("--candidate", type=Path, required=True)
+    parser.add_argument("--variables", action="append", help="comma-separated contract ids")
+    parser.add_argument("--families", action="append", help="comma-separated families")
+    parser.add_argument("--strict-diagnostic", action="store_true")
+    parser.add_argument("--json-output", type=Path)
+    return parser.parse_args()
+
+
+def _finite_number(value: float) -> float | None:
+    return float(value) if math.isfinite(float(value)) else None
+
+
+def compare_array(
+    candidate: np.ndarray,
+    reference: np.ndarray,
+    contract: dict[str, Any],
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "candidate_shape": list(candidate.shape),
+        "reference_shape": list(reference.shape),
+        "passed": False,
+    }
+    if candidate.shape != reference.shape:
+        result["reason"] = "shape_mismatch"
+        return result
+
+    candidate_missing = ~np.isfinite(candidate)
+    reference_missing = ~np.isfinite(reference)
+    missing_mismatch = candidate_missing ^ reference_missing
+    overlap = ~(candidate_missing | reference_missing)
+    count = int(candidate.size)
+    overlap_count = int(np.count_nonzero(overlap))
+    mismatch_count = int(np.count_nonzero(missing_mismatch))
+    result.update(
+        {
+            "count": count,
+            "finite_overlap_count": overlap_count,
+            "candidate_missing_count": int(np.count_nonzero(candidate_missing)),
+            "reference_missing_count": int(np.count_nonzero(reference_missing)),
+            "missing_mismatch_count": mismatch_count,
+        }
+    )
+
+    missing_policy = contract["missing_values"]
+    missing_pass = (
+        mismatch_count == 0
+        if missing_policy["mask_must_match"]
+        else mismatch_count / max(count, 1) <= missing_policy["max_mask_mismatch_fraction"]
+    )
+
+    if overlap_count:
+        cand = candidate[overlap]
+        ref = reference[overlap]
+        absolute = np.abs(cand - ref)
+        tolerance = contract["comparison"]["tolerance"]
+        allowed = float(tolerance["atol"]) + float(tolerance["rtol"]) * np.abs(ref)
+        within = absolute <= allowed
+        denominator = np.maximum(np.abs(ref), float(tolerance.get("relative_floor", 0.0)))
+        relative = np.divide(
+            absolute,
+            denominator,
+            out=np.zeros_like(absolute),
+            where=denominator > 0.0,
+        )
+        numeric_pass = bool(np.all(within))
+        result.update(
+            {
+                "within_tolerance_count": int(np.count_nonzero(within)),
+                "within_tolerance_fraction": float(np.mean(within)),
+                "max_absolute_error": _finite_number(np.max(absolute)),
+                "mean_absolute_error": _finite_number(np.mean(absolute)),
+                "root_mean_square_error": _finite_number(
+                    np.sqrt(np.mean(np.square(absolute)))
+                ),
+                "max_relative_error": _finite_number(np.max(relative)),
+            }
+        )
+    else:
+        numeric_pass = bool(missing_policy["allow_all_missing"])
+        result["reason"] = "no_finite_overlap"
+
+    result["passed"] = bool(missing_pass and numeric_pass)
+    if not missing_pass:
+        result["reason"] = "missing_mask_mismatch"
+    elif not numeric_pass and "reason" not in result:
+        result["reason"] = "outside_tolerance"
+    return result
+
+
+def validate_bundle_pair(
+    reference_metadata: dict[str, Any],
+    candidate_metadata: dict[str, Any],
+    contract_hash: str,
+) -> None:
+    expected_implementations = ("wrf-python", "wrf-rust")
+    actual = (
+        reference_metadata.get("implementation"),
+        candidate_metadata.get("implementation"),
+    )
+    if actual != expected_implementations:
+        raise ParityError(
+            f"expected reference/candidate implementations {expected_implementations}, got {actual}"
+        )
+    for key in ("fixture_id", "fixture_sha256", "timeidx"):
+        if reference_metadata.get(key) != candidate_metadata.get(key):
+            raise ParityError(f"bundle provenance differs for {key}")
+    for name, metadata in (
+        ("reference", reference_metadata),
+        ("candidate", candidate_metadata),
+    ):
+        if metadata.get("contract_sha256") != contract_hash:
+            raise ParityError(f"{name} was extracted with a different contract document")
+
+
+def main() -> None:
+    args = parse_args()
+    contract, contract_hash = load_contract(args.contract)
+    selected = select_contracts(
+        contract, csv_values(args.variables), csv_values(args.families)
+    )
+    reference, ref_metadata, ref_hash = load_bundle(args.reference)
+    candidate, cand_metadata, cand_hash = load_bundle(args.candidate)
+    validate_bundle_pair(ref_metadata, cand_metadata, contract_hash)
+
+    rows: list[dict[str, Any]] = []
+    failures = 0
+    for item in selected:
+        identifier = item["id"]
+        mode = item["comparison"]["mode"]
+        if mode == "contract_only":
+            rows.append({"id": identifier, "mode": mode, "status": "not_compared"})
+            continue
+        if identifier not in reference or identifier not in candidate:
+            row = {
+                "id": identifier,
+                "mode": mode,
+                "status": "missing_array",
+                "reference_present": identifier in reference,
+                "candidate_present": identifier in candidate,
+            }
+            rows.append(row)
+            if mode == "required" or args.strict_diagnostic:
+                failures += 1
+            continue
+
+        metrics = compare_array(candidate[identifier], reference[identifier], item)
+        status = "pass" if metrics["passed"] else "difference"
+        row = {"id": identifier, "mode": mode, "status": status, **metrics}
+        rows.append(row)
+        if not metrics["passed"] and (mode == "required" or args.strict_diagnostic):
+            failures += 1
+
+    report = {
+        "report_schema_version": 1,
+        "contract_sha256": contract_hash,
+        "fixture_id": ref_metadata["fixture_id"],
+        "fixture_sha256": ref_metadata["fixture_sha256"],
+        "timeidx": ref_metadata["timeidx"],
+        "reference_bundle_sha256": ref_hash,
+        "candidate_bundle_sha256": cand_hash,
+        "reference_version": ref_metadata["implementation_version"],
+        "candidate_version": cand_metadata["implementation_version"],
+        "strict_diagnostic": args.strict_diagnostic,
+        "failures": failures,
+        "variables": rows,
+    }
+
+    print("id                             mode           status       max_abs       within")
+    print("------------------------------ -------------- ------------ ------------- --------")
+    for row in rows:
+        max_abs = row.get("max_absolute_error")
+        fraction = row.get("within_tolerance_fraction")
+        max_text = "-" if max_abs is None else f"{max_abs:.6g}"
+        fraction_text = "-" if fraction is None else f"{fraction:.3%}"
+        print(
+            f"{row['id']:<30} {row['mode']:<14} {row['status']:<12} "
+            f"{max_text:<13} {fraction_text}"
+        )
+
+    if args.json_output:
+        output = args.json_output.expanduser().resolve()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(canonical_json_bytes(report) + b"\n")
+        digest = sha256_file(output)
+        output.with_name(output.name + ".sha256").write_text(
+            f"{digest}  {output.name}\n", encoding="ascii"
+        )
+        print(f"wrote {output} ({digest})")
+    if failures:
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (ParityError, OSError, RuntimeError, ValueError) as exc:
+        print_error_and_exit(exc)

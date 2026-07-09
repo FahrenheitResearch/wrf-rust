@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "enderlin-d03-20230105-0900",
+      "description": "Existing 2.39 GB real WRF output used by the severe-suite performance audit; not stored in Git.",
+      "path_env": "WRF_PARITY_FIXTURE_D03",
+      "filename": "wrfout_d03_2023-01-05_09_00_00",
+      "size_bytes": 2388958814,
+      "sha256": "0d9507867db691074226ca54827d1e9eddc5848af47b3baf27de451e828a77e6",
+      "legacy_md5": "3ea0f42669985bbdf4d24721ddc45aa8",
+      "default_timeidx": 0,
+      "provenance": "Pre-existing local research fixture. SHA-256 independently recomputed on node1 on 2026-07-09. Distribution and retention remain outside this repository."
+    }
+  ]
+}

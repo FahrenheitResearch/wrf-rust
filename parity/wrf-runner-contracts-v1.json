@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "contract_version": "2026-07-09-wrf-runner-fe2e540",
+  "consumer": {
+    "name": "WRF-Runner",
+    "branch": "New-PC-Updates",
+    "observed_commit": "fe2e5405ce818824a50c4bc4ef2b506ec07dc41e",
+    "migration_merge": "c4e676e",
+    "migration_start": "8082ac8",
+    "files": [
+      {"path": "plot_helper.py", "sha256": "e8119f04cad3d3cbdeba0f844d28e3a5b7ed3f6a17d18ffb359f058c1f49d86b"},
+      {"path": "plot_functions.py", "sha256": "14b4e458166ba38016930befea036b99835ce998a85a337a3593b55589f2cb4f"},
+      {"path": "run_viewer.py", "sha256": "eefbef0365dd00d795fe133382bf68a1262e9e8012449284a3ee79aa1c2a8064"}
+    ],
+    "inventory": {"interplevel_call_sites": 26, "ll_to_xy_call_sites": 3, "wrf_api_calls_approx": 70}
+  },
+  "contract_layers": {
+    "strict_upstream": "Behavior that must match the public NCAR wrf-python API and numerical semantics.",
+    "runner_extension": "Deliberate wrf-rust APIs/options adopted by WRF-Runner; upstream is not necessarily the oracle."
+  },
+  "api_contracts": [
+    {
+      "id": "interplevel_scalar",
+      "priority": "P0",
+      "layer": "strict_upstream",
+      "signature": "interplevel(field_3d, vert_coord_3d, target_level)",
+      "runner_usage": "Pressure and height surfaces throughout plot_helper.py.",
+      "expected": "Linear interpolation in the supplied vertical coordinate; output (ny,nx); outside-domain values missing.",
+      "probe": "interplevel_scalar"
+    },
+    {
+      "id": "interplevel_2d_target",
+      "priority": "P0",
+      "layer": "runner_extension",
+      "signature": "interplevel(field_3d, vert_coord_3d, target_level_2d)",
+      "runner_usage": "run_viewer.py sounding boxes pass one (ny,nx) pressure target per standard level.",
+      "expected": "One target per horizontal column; output (ny,nx), linear in pressure.",
+      "probe": "interplevel_2d_target"
+    },
+    {
+      "id": "interplevel_full_upstream_signature",
+      "priority": "P1",
+      "layer": "strict_upstream",
+      "signature": "interplevel(field3d, vert, desiredlev, missing=..., squeeze=True, meta=True)",
+      "expected": "Supports left dimensions, scalar or 1-D desired-level sequences, metadata and caller-selected missing values.",
+      "status": "gap",
+      "gap": "wrf-rust currently supports exact 3-D inputs and scalar/2-D target levels only."
+    },
+    {
+      "id": "wrffile_handle",
+      "priority": "P0",
+      "layer": "runner_extension",
+      "signature": "WrfFile(path)",
+      "expected": "Exposes nx, ny, nz, nt, dx, dy, path and times(); accepted by getvar and runner helper APIs.",
+      "probe": "wrffile_handle"
+    },
+    {
+      "id": "latlon_coords_handle",
+      "priority": "P0",
+      "layer": "runner_extension",
+      "signature": "latlon_coords(WrfFile, timeidx=0)",
+      "expected": "Tuple (lat,lon), each float array shaped (ny,nx), degrees.",
+      "probe": "latlon_coords"
+    },
+    {
+      "id": "get_cartopy_handle",
+      "priority": "P0",
+      "layer": "runner_extension",
+      "signature": "get_cartopy(WrfFile)",
+      "expected": "Cartopy Projection suitable for axes creation and geographically aligned overlays.",
+      "probe": "get_cartopy",
+      "known_gap": "Strict NCAR projection construction uses STAND_LON, MOAD_CEN_LAT, TRUELAT1/2 and a spherical 6370000 m Globe; current shim uses CEN_LAT/CEN_LON and Cartopy defaults. MAP_PROJ=6 rotated-pole handling is also incomplete."
+    },
+    {
+      "id": "ll_to_xy_runner_path",
+      "priority": "P0",
+      "layer": "runner_extension",
+      "signature": "ll_to_xy(netCDF4.Dataset, latitude, longitude, timeidx=0)",
+      "expected": "Two x/y values usable by int() for point and box sounding slices.",
+      "probe": "ll_to_xy_center"
+    },
+    {
+      "id": "ll_to_xy_full_upstream_signature",
+      "priority": "P1",
+      "layer": "strict_upstream",
+      "signature": "ll_to_xy(wrfin, latitude, longitude, timeidx=0, squeeze=True, meta=True, stagger=None, as_int=True)",
+      "expected": "Default integer ndarray/DataArray with leftmost x/y dimension; supports sequences, staggering and longitude wrapping.",
+      "status": "gap",
+      "gap": "Current shim returns a fractional-float tuple and performs a brute-force lat/lon scan without sequence, stagger, metadata, as_int or dateline contracts."
+    }
+  ],
+  "getvar_calls": [
+    {"id": "pressure_hpa", "priority": "P0", "name": "pressure", "options": {"units": "hPa"}, "shape": ["nz", "ny", "nx"], "units": "hPa"},
+    {"id": "uvmet_knots", "priority": "P0", "name": "uvmet", "options": {"units": "kt"}, "shape": [2, "nz", "ny", "nx"], "component_order": ["u", "v"], "units": "kt"},
+    {"id": "uvmet10_knots", "priority": "P0", "name": "uvmet10", "options": {"units": "kt"}, "shape": [2, "ny", "nx"], "component_order": ["u", "v"], "units": "kt"},
+    {"id": "wspd_knots", "priority": "P0", "name": "wspd", "options": {"units": "kt"}, "shape": ["nz", "ny", "nx"], "units": "kt"},
+    {"id": "wspd10_knots", "priority": "P0", "name": "wspd10", "options": {"units": "kt"}, "shape": ["ny", "nx"], "units": "kt"},
+    {"id": "height_agl_m", "priority": "P0", "name": "height_agl", "options": {"units": "m"}, "shape": ["nz", "ny", "nx"], "units": "m"},
+    {"id": "height_msl_m", "priority": "P0", "name": "z", "options": {"units": "m"}, "shape": ["nz", "ny", "nx"], "units": "m"},
+    {"id": "t2_degc_lakes", "priority": "P0", "name": "t2", "options": {"units": "degC", "lake_interp": 1000.0}, "shape": ["ny", "nx"], "units": "degC"},
+    {"id": "temp_degc", "priority": "P0", "name": "temp", "options": {"units": "degC"}, "shape": ["nz", "ny", "nx"], "units": "degC"},
+    {"id": "td2_degc_lakes", "priority": "P0", "name": "td2", "options": {"units": "degC", "lake_interp": 1000.0}, "shape": ["ny", "nx"], "units": "degC"},
+    {"id": "td_degc", "priority": "P0", "name": "td", "options": {"units": "degC"}, "shape": ["nz", "ny", "nx"], "units": "degC"},
+    {"id": "psfc_hpa", "priority": "P0", "name": "PSFC", "options": {"units": "hPa"}, "shape": ["ny", "nx"], "units": "hPa"},
+    {"id": "rh2_lakes", "priority": "P0", "name": "rh2", "options": {"units": "%", "lake_interp": 1000.0}, "shape": ["ny", "nx"], "units": "%"},
+    {"id": "rh", "priority": "P0", "name": "rh", "options": {"units": "%"}, "shape": ["nz", "ny", "nx"], "units": "%"},
+    {"id": "avo_display", "priority": "P0", "name": "avo", "options": {}, "shape": ["nz", "ny", "nx"], "units": "10-5 s-1"},
+    {"id": "slp_hpa", "priority": "P0", "name": "slp", "options": {"units": "hPa"}, "shape": ["ny", "nx"], "units": "hPa"},
+    {"id": "brightness_inputs_tc", "priority": "P1", "name": "tc", "options": {"units": "K"}, "shape": ["nz", "ny", "nx"], "units": "K"},
+    {"id": "brightness_inputs_tsk", "priority": "P1", "name": "TSK", "options": {"units": "K"}, "shape": ["ny", "nx"], "units": "K"},
+    {"id": "brightness_inputs_qcloud", "priority": "P1", "name": "QCLOUD", "options": {}, "shape": ["nz", "ny", "nx"], "units": "source"},
+    {"id": "brightness_inputs_qice", "priority": "P1", "name": "QICE", "options": {}, "shape": ["nz", "ny", "nx"], "units": "source"},
+    {"id": "full_pressure_pa", "priority": "P0", "name": "p", "options": {}, "shape": ["nz", "ny", "nx"], "units": "Pa"},
+    {"id": "virtual_temperature_k", "priority": "P0", "name": "tv", "options": {"units": "K"}, "shape": ["nz", "ny", "nx"], "units": "K"},
+    {"id": "uhel_2_5km", "priority": "P0", "name": "uhel", "options": {"bottom_m": 2000.0, "top_m": 5000.0}, "shape": ["ny", "nx"], "units": "m2/s2"},
+    {"id": "rainnc_inches", "priority": "P0", "name": "RAINNC", "options": {"units": "in"}, "shape": ["ny", "nx"], "units": "in"},
+    {"id": "rainc_inches", "priority": "P0", "name": "RAINC", "options": {"units": "in"}, "shape": ["ny", "nx"], "units": "in"},
+    {"id": "rainnc_centimeters", "priority": "P0", "name": "RAINNC", "options": {"units": "cm"}, "shape": ["ny", "nx"], "units": "cm"},
+    {"id": "terrain_m", "priority": "P0", "name": "ter", "options": {"units": "m"}, "shape": ["ny", "nx"], "units": "m"},
+    {"id": "sb_cape_lakes", "priority": "P0", "name": "cape", "options": {"parcel_type": "sb", "lake_interp": 1000.0}, "shape": ["ny", "nx"], "units": "J/kg"},
+    {"id": "ml_cape_lakes", "priority": "P0", "name": "cape", "options": {"parcel_type": "ml", "lake_interp": 1000.0}, "shape": ["ny", "nx"], "units": "J/kg"},
+    {"id": "mu_cape_lakes", "priority": "P0", "name": "cape", "options": {"parcel_type": "mu", "lake_interp": 1000.0}, "shape": ["ny", "nx"], "units": "J/kg"},
+    {"id": "sb_cape_3km_lakes", "priority": "P0", "name": "cape", "options": {"parcel_type": "sb", "top_m": 3000.0, "lake_interp": 1000.0}, "shape": ["ny", "nx"], "units": "J/kg"},
+    {"id": "sb_lfc_m", "priority": "P0", "name": "lfc", "options": {"units": "m", "parcel_type": "sb"}, "shape": ["ny", "nx"], "units": "m"},
+    {"id": "maxdbz", "priority": "P0", "name": "maxdbz", "options": {}, "shape": ["ny", "nx"], "units": "dBZ"},
+    {"id": "dbz", "priority": "P0", "name": "dbz", "options": {}, "shape": ["nz", "ny", "nx"], "units": "dBZ"},
+    {"id": "ehi_1km_lakes", "priority": "P1", "name": "ehi", "options": {"depth_m": 1000.0, "lake_interp": 1000.0}, "shape": ["ny", "nx"], "units": "dimensionless"},
+    {"id": "srh_1km", "priority": "P0", "name": "srh", "options": {"depth_m": 1000.0}, "shape": ["ny", "nx"], "units": "m2/s2", "semantic_mode": "pressure_weighted_bunkers"},
+    {"id": "srh_3km", "priority": "P0", "name": "srh", "options": {"depth_m": 3000.0}, "shape": ["ny", "nx"], "units": "m2/s2", "semantic_mode": "pressure_weighted_bunkers"},
+    {"id": "effective_srh", "priority": "P1", "name": "effective_srh", "options": {}, "shape": ["ny", "nx"], "units": "m2/s2"},
+    {"id": "stp_fixed_lakes", "priority": "P0", "name": "stp", "options": {"layer_type": "fixed", "lake_interp": 1000.0}, "shape": ["ny", "nx"], "units": "dimensionless"},
+    {"id": "stp_effective_lakes", "priority": "P0", "name": "stp", "options": {"layer_type": "effective", "lake_interp": 1000.0}, "shape": ["ny", "nx"], "units": "dimensionless"},
+    {"id": "lapse_rate_0_3km", "priority": "P1", "name": "lapse_rate", "options": {"bottom_m": 0.0, "top_m": 3000.0, "use_virtual": true, "lake_interp": 1000.0}, "shape": ["ny", "nx"], "units": "K/km"},
+    {"id": "lapse_rate_700_500", "priority": "P1", "name": "lapse_rate", "options": {"bottom_p": 700.0, "top_p": 500.0, "use_virtual": true}, "shape": ["ny", "nx"], "units": "K/km"},
+    {"id": "omega", "priority": "P0", "name": "omega", "options": {}, "shape": ["nz", "ny", "nx"], "units": "Pa/s"},
+    {"id": "u10_knots", "priority": "P0", "name": "U10", "options": {"units": "kt"}, "shape": ["ny", "nx"], "units": "kt"}
+  ],
+  "performance_contract": {
+    "priority": "P1",
+    "description": "WRF-Runner submits products separately to a ProcessPool and constructs a fresh WrfFile per Plot. Per-handle caches are not shared across SBCAPE/MUCAPE/MLCAPE/EHI/STP workers.",
+    "acceptance": "Benchmark a representative generate_plots_for_timestep product batch or a faithful multi-process call-sequence driver in addition to the single-process 79-product suite."
+  }
+}

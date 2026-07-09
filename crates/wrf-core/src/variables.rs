@@ -523,7 +523,7 @@ pub static VARS: &[VarDef] = &[
         name: "avo",
         aliases: &["absolute_vorticity"],
         description: "Absolute vorticity",
-        default_units: "s-1",
+        default_units: "10-5 s-1",
         dim: VarDim::ThreeD,
         compute: dvort::compute_avo,
     },

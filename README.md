@@ -115,6 +115,15 @@ u10 = getvar(f, "U10", units="kt")
 v10 = getvar(f, "V10", units="kt")
 ```
 
+## wrf-python parity
+
+The staged differential framework in [`parity/README.md`](parity/README.md)
+compares exact, hash-registered WRF fixtures in separate `wrf-python` and
+`wrf-rust` environments. Its contracts cover API names/options, units, axes,
+component ordering, missing values, tolerances, and documented scientific
+forks. A separate WRF-Runner manifest protects the real migration workflow
+without treating every wrf-rust extension as upstream behavior.
+
 `netCDF4.Dataset` and xarray-like inputs are accepted when a source filepath is
 available, but `wrf-rust` reopens the file natively. On Windows, close an open
 `netCDF4.Dataset` before passing the same file to `wrf-rust`.

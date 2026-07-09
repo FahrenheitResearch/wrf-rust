@@ -208,7 +208,6 @@ _GETVAR_NAME_ALIASES = {
     "cape_2d": "cape2d",
     "cape_3d": "cape3d",
     "mdbz": "maxdbz",
-    "helicity": "uhel",
 }
 
 
@@ -519,9 +518,8 @@ def interplevel(field_3d, vert_coord_3d, target_level):
 
     Drop-in replacement for ``wrf.interplevel()`` from wrf-python.
 
-    Automatically detects whether the vertical coordinate is pressure
-    (decreasing with height -> log-pressure interpolation) or height
-    (increasing with height -> linear interpolation).
+    Linearly interpolates in the supplied vertical coordinate, matching
+    wrf-python's ``DINTERP3DZ`` behavior for both pressure and height.
 
     Parameters
     ----------
@@ -578,58 +576,40 @@ def interplevel(field_3d, vert_coord_3d, target_level):
             "target_level must be a scalar or 2D array (ny, nx)"
         )
 
-    # Determine direction: if the coordinate generally decreases along the
-    # first axis it is pressure-like (use log interpolation); otherwise it
-    # is height-like (use linear interpolation).
+    # WRF vertical coordinates are monotonic in a column. Determine their
+    # direction once, then interpolate linearly in the coordinate itself.
+    # In particular, wrf-python does not use log-pressure interpolation here.
     mid_j, mid_i = ny // 2, nx // 2
-    is_pressure = vert_coord_3d[0, mid_j, mid_i] > vert_coord_3d[-1, mid_j, mid_i]
+    is_descending = (
+        vert_coord_3d[0, mid_j, mid_i] > vert_coord_3d[-1, mid_j, mid_i]
+    )
 
     result = np.full((ny, nx), np.nan, dtype=np.float64)
 
-    if is_pressure:
-        # Log-pressure interpolation
-        log_vert = np.log(np.clip(vert_coord_3d, 1e-10, None))
-        log_target = np.log(target_2d)
+    for k in range(nz - 1):
+        if is_descending:
+            first_bound = vert_coord_3d[k, :, :] >= target_2d
+            second_bound = vert_coord_3d[k + 1, :, :] <= target_2d
+        else:
+            first_bound = vert_coord_3d[k, :, :] <= target_2d
+            second_bound = vert_coord_3d[k + 1, :, :] >= target_2d
+        mask = first_bound & second_bound & np.isnan(result)
 
-        for k in range(nz - 1):
-            # Find grid cells where target is bracketed by levels k and k+1
-            # (pressure decreases upward, so vert[k] >= target >= vert[k+1])
-            above = vert_coord_3d[k, :, :] >= target_level
-            below = vert_coord_3d[k + 1, :, :] <= target_level
-            mask = above & below & np.isnan(result)
+        denom = vert_coord_3d[k + 1, :, :] - vert_coord_3d[k, :, :]
+        valid_denom = np.abs(denom) >= 1e-12
+        mask &= valid_denom
+        if not np.any(mask):
+            continue
 
-            if not np.any(mask):
-                continue
+        safe_denom = np.where(valid_denom, denom, 1.0)
+        frac = (target_2d - vert_coord_3d[k, :, :]) / safe_denom
+        interped = field_3d[k, :, :] + frac * (
+            field_3d[k + 1, :, :] - field_3d[k, :, :]
+        )
+        result = np.where(mask, interped, result)
 
-            denom = log_vert[k + 1, :, :] - log_vert[k, :, :]
-            # Avoid division by zero
-            safe_denom = np.where(np.abs(denom) < 1e-12, 1.0, denom)
-            frac = (log_target - log_vert[k, :, :]) / safe_denom
-            interped = field_3d[k, :, :] + frac * (
-                field_3d[k + 1, :, :] - field_3d[k, :, :]
-            )
-            result = np.where(mask, interped, result)
-
-        # Points still NaN are underground or above model top -- leave as NaN
-    else:
-        # Linear height interpolation
-        for k in range(nz - 1):
-            above = vert_coord_3d[k, :, :] <= target_2d
-            below = vert_coord_3d[k + 1, :, :] >= target_2d
-            mask = above & below & np.isnan(result)
-
-            if not np.any(mask):
-                continue
-
-            denom = vert_coord_3d[k + 1, :, :] - vert_coord_3d[k, :, :]
-            safe_denom = np.where(np.abs(denom) < 1e-12, 1.0, denom)
-            frac = (target_2d - vert_coord_3d[k, :, :]) / safe_denom
-            interped = field_3d[k, :, :] + frac * (
-                field_3d[k + 1, :, :] - field_3d[k, :, :]
-            )
-            result = np.where(mask, interped, result)
-
-        # Points still NaN are underground or above model top -- leave as NaN
+    # Points underground, above model top, or bracketed by duplicate
+    # coordinate values retain the missing-value sentinel (NaN).
 
     return result
 

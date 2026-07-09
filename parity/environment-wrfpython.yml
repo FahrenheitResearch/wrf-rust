@@ -1,0 +1,8 @@
+name: wrf-python-reference
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy=1.26.4
+  - netcdf4=1.7.2
+  - wrf-python=1.3.4.1

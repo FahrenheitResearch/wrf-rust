@@ -41,10 +41,12 @@ pub enum WrfUnits {
     M2PerS2,
     // Vorticity
     PerSecond,
+    TenToMinusFivePerSecond,
     // Dimensionless (STP, SCP, etc.)
     Dimensionless,
     // Precipitable water
     Millimeters,
+    Centimeters,
     Inches,
 }
 
@@ -91,10 +93,14 @@ pub fn parse_units(s: &str) -> WrfResult<WrfUnits> {
         "m2/s2" | "m2 s-2" | "m^2/s^2" => Ok(WrfUnits::M2PerS2),
         // Vorticity
         "s-1" | "1/s" | "/s" => Ok(WrfUnits::PerSecond),
+        "10-5 s-1" | "10^-5 s^-1" | "10^-5 s-1" | "10-5 s^-1" => {
+            Ok(WrfUnits::TenToMinusFivePerSecond)
+        }
         // Dimensionless
         "" | "dimensionless" | "none" | "unitless" => Ok(WrfUnits::Dimensionless),
         // Precipitable water / depth
         "mm" | "millimeters" => Ok(WrfUnits::Millimeters),
+        "cm" | "centimeters" | "centimeter" => Ok(WrfUnits::Centimeters),
         "in" | "inches" => Ok(WrfUnits::Inches),
         other => Err(WrfError::UnitConversion(format!(
             "unrecognized unit string: '{other}'"
@@ -173,8 +179,14 @@ pub fn convert_value(value: f64, from: WrfUnits, to: WrfUnits) -> WrfResult<f64>
         // ── Depth (precipitable water) ──
         (WrfUnits::Millimeters, WrfUnits::Inches) => Ok(value / 25.4),
         (WrfUnits::Inches, WrfUnits::Millimeters) => Ok(value * 25.4),
+        (WrfUnits::Millimeters, WrfUnits::Centimeters) => Ok(value / 10.0),
+        (WrfUnits::Centimeters, WrfUnits::Millimeters) => Ok(value * 10.0),
+        (WrfUnits::Centimeters, WrfUnits::Inches) => Ok(value / 2.54),
+        (WrfUnits::Inches, WrfUnits::Centimeters) => Ok(value * 2.54),
         (WrfUnits::Meters, WrfUnits::Millimeters) => Ok(value * 1000.0),
         (WrfUnits::Millimeters, WrfUnits::Meters) => Ok(value / 1000.0),
+        (WrfUnits::Meters, WrfUnits::Centimeters) => Ok(value * 100.0),
+        (WrfUnits::Centimeters, WrfUnits::Meters) => Ok(value / 100.0),
 
         // ── Angular ──
         (WrfUnits::Degrees, WrfUnits::Radians) => Ok(value * std::f64::consts::PI / 180.0),
@@ -183,6 +195,10 @@ pub fn convert_value(value: f64, from: WrfUnits, to: WrfUnits) -> WrfResult<f64>
         // ── Vertical velocity ──
         (WrfUnits::PascalPerSecond, WrfUnits::MicrobarsPerSecond) => Ok(value * 10.0),
         (WrfUnits::MicrobarsPerSecond, WrfUnits::PascalPerSecond) => Ok(value / 10.0),
+
+        // ── Vorticity ──
+        (WrfUnits::PerSecond, WrfUnits::TenToMinusFivePerSecond) => Ok(value * 1.0e5),
+        (WrfUnits::TenToMinusFivePerSecond, WrfUnits::PerSecond) => Ok(value * 1.0e-5),
 
         _ => Err(WrfError::UnitConversion(format!(
             "cannot convert {from:?} to {to:?}"
@@ -202,4 +218,29 @@ pub fn convert_array(values: &mut [f64], from: WrfUnits, to: WrfUnits) -> WrfRes
         *v = convert_value(*v, from, to).unwrap();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{convert_value, parse_units, WrfUnits};
+
+    #[test]
+    fn converts_precipitation_depth_to_centimeters() {
+        assert_eq!(parse_units("cm").unwrap(), WrfUnits::Centimeters);
+        assert!((convert_value(25.0, WrfUnits::Millimeters, WrfUnits::Centimeters)
+            .unwrap()
+            - 2.5)
+            .abs()
+            < 1.0e-12);
+    }
+
+    #[test]
+    fn converts_absolute_vorticity_display_units() {
+        let display = parse_units("10-5 s-1").unwrap();
+        assert_eq!(display, WrfUnits::TenToMinusFivePerSecond);
+        assert!((convert_value(1.5e-4, WrfUnits::PerSecond, display).unwrap() - 15.0).abs()
+            < 1.0e-12);
+        assert!((convert_value(15.0, display, WrfUnits::PerSecond).unwrap() - 1.5e-4).abs()
+            < 1.0e-12);
+    }
 }

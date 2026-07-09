@@ -248,8 +248,8 @@ fn getvar_raw(file: &WrfFile, name: &str, t: usize, opts: &ComputeOpts) -> WrfRe
         .filter(|shape| !shape.is_empty() && shape.iter().product::<usize>() == data.len())
         .unwrap_or_else(|| vec![data.len()]);
 
-    // Raw variables don't have a known default unit, but if the user
-    // requests a conversion from/to a specific pair we can try.
+    // Raw variables don't all have a known default unit. Only claim requested
+    // units when a known, supported conversion actually succeeds.
     // Common WRF raw variables and their units:
     let default_unit = match upper_name.as_str() {
         "RAINNC" | "RAINC" | "RAINSH" | "SNOWNC" | "GRAUPELNC" => "mm",
@@ -266,11 +266,14 @@ fn getvar_raw(file: &WrfFile, name: &str, t: usize, opts: &ComputeOpts) -> WrfRe
 
     let mut data = data;
     let actual_units = if let Some(ref req_units) = opts.units {
-        if !default_unit.is_empty() {
-            if let (Ok(from), Ok(to)) = (parse_units(default_unit), parse_units(req_units)) {
-                let _ = convert_array(&mut data, from, to);
-            }
+        if default_unit.is_empty() {
+            return Err(WrfError::UnitConversion(format!(
+                "cannot convert raw variable '{name}' to '{req_units}': source units are unknown"
+            )));
         }
+        let from = parse_units(default_unit)?;
+        let to = parse_units(req_units)?;
+        convert_array(&mut data, from, to)?;
         req_units.clone()
     } else {
         default_unit.to_string()

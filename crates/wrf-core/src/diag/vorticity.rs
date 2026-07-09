@@ -5,6 +5,7 @@ use crate::error::WrfResult;
 use crate::file::WrfFile;
 
 const OMEGA: f64 = 7.2921159e-5; // Earth's angular velocity (rad/s)
+const AVO_DISPLAY_SCALE: f64 = 1.0e5; // wrf-python reports 10^-5 s^-1
 
 fn relative_vorticity_from_uv(
     u: &[f64],
@@ -17,7 +18,7 @@ fn relative_vorticity_from_uv(
     crate::met::dynamics::vorticity(u, v, nx, ny, dx, dy)
 }
 
-/// Absolute vorticity (s^-1). `[nz, ny, nx]`
+/// Absolute vorticity (10^-5 s^-1). `[nz, ny, nx]`
 ///
 /// AVO = relative_vorticity + coriolis_parameter
 /// = (dv/dx - du/dy) + 2*Omega*sin(lat)
@@ -44,7 +45,7 @@ pub fn compute_avo(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<
 
         for ij in 0..nxy {
             let f_cor = 2.0 * OMEGA * (lat[ij].to_radians()).sin();
-            plane[ij] = rel_vort[ij] + f_cor;
+            plane[ij] = (rel_vort[ij] + f_cor) * AVO_DISPLAY_SCALE;
         }
     });
 

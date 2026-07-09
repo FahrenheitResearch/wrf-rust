@@ -10,6 +10,7 @@ dist/
 showcase/
 outputs/
 proof-plots/
+parity-results/
 data/
 wrfout_*
 wrfrst_*
