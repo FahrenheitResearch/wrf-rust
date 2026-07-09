@@ -62,13 +62,15 @@ def verify_consumer_files(contract: dict[str, Any], root: Path) -> list[dict[str
 def probe_helpers(wrf: Any, handle: Any) -> list[dict[str, Any]]:
     rows = []
 
-    coordinate = np.array([1000.0, 500.0])[:, None, None]
-    field = np.array([0.0, 100.0])[:, None, None]
+    coordinate = np.broadcast_to(
+        np.array([1000.0, 500.0])[:, None, None], (2, 2, 2)
+    )
+    field = np.broadcast_to(np.array([0.0, 100.0])[:, None, None], (2, 2, 2))
     scalar = np.asarray(wrf.interplevel(field, coordinate, 750.0))
     rows.append(
         {
             "id": "interplevel_scalar",
-            "passed": scalar.shape == (1, 1) and np.allclose(scalar, [[50.0]]),
+            "passed": scalar.shape == (2, 2) and np.allclose(scalar, 50.0),
             "shape": list(scalar.shape),
             "value": float(scalar[0, 0]),
         }
