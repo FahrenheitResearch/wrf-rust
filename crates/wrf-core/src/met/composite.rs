@@ -323,6 +323,7 @@ pub fn compute_srh_with_pressure(
 /// the hemispheric sign convention used by wrf-python, while retaining this
 /// crate's Bunkers storm-motion algorithm (wrf-python uses a different
 /// 3--10-km mean-wind motion internally).
+#[allow(clippy::too_many_arguments)]
 pub fn compute_srh_with_pressure_and_latitude(
     u_3d: &[f64],
     v_3d: &[f64],
@@ -349,6 +350,7 @@ pub fn compute_srh_with_pressure_and_latitude(
 }
 
 /// Compute signed SRH with SHARPpy's 1-hPa-resampled NPW Bunkers means.
+#[allow(clippy::too_many_arguments)]
 pub fn compute_srh_with_npw_bunkers_and_latitude(
     u_3d: &[f64],
     v_3d: &[f64],

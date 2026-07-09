@@ -99,8 +99,8 @@ fn wrfpython_rip_level_bounds(
     // The upstream Fortran receives a top-to-surface array and scans it in
     // reverse. WRF data here are surface-to-top, so this is the same traversal.
     // The last mass level is excluded exactly as in `DO k = mkzh, 2, -1`.
-    for k in 0..n - 1 {
-        let height_agl = height_msl[k] - terrain_m;
+    for (k, height) in height_msl.iter().take(n - 1).enumerate() {
+        let height_agl = *height - terrain_m;
         if height_agl > WRFPYTHON_MEAN_TOP_M {
             level_10km = Some(k);
             break;
