@@ -53,6 +53,7 @@ struct LiftResult {
     cin: f64,
     lcl_zrel: f64,
     lfc_zrel: f64,
+    #[cfg(test)]
     lfc_index: usize,
 }
 
@@ -526,6 +527,7 @@ fn finish_buoyancy_profile(scratch: &mut CapeWorkspace, lcl_index: usize) -> Lif
             cin: f64::NAN,
             lcl_zrel: scratch.relative_height[lcl_index],
             lfc_zrel: scratch.relative_height[top],
+            #[cfg(test)]
             lfc_index: top,
         };
     };
@@ -550,6 +552,7 @@ fn finish_buoyancy_profile(scratch: &mut CapeWorkspace, lcl_index: usize) -> Lif
         cin,
         lcl_zrel: scratch.relative_height[lcl_index],
         lfc_zrel: scratch.relative_height[lfc_index],
+        #[cfg(test)]
         lfc_index,
     }
 }
@@ -661,6 +664,7 @@ fn lift_parcel(
 ///
 /// Inputs are surface-first; pressure is hPa, temperature is K, mixing ratio
 /// is kg/kg, and heights are m MSL. Missing outputs use NaN.
+#[cfg(test)]
 pub(crate) fn cape2d_column(
     pressure_hpa: &[f64],
     temperature_k: &[f64],
@@ -734,6 +738,7 @@ pub(crate) fn cape2d_column_with_workspace(
 ///
 /// The returned arrays are surface-first. As in `DCAPECALC3D`, the topmost
 /// model level is exactly zero for both CAPE and CIN.
+#[cfg(test)]
 pub(crate) fn cape3d_column(
     pressure_hpa: &[f64],
     temperature_k: &[f64],
@@ -750,6 +755,7 @@ pub(crate) fn cape3d_column(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn cape3d_column_with_workspace(
     pressure_hpa: &[f64],
     temperature_k: &[f64],
