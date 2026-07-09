@@ -473,10 +473,18 @@ pub static VARS: &[VarDef] = &[
     VarDef {
         name: "srh",
         aliases: &["storm_relative_helicity", "helicity"],
-        description: "Storm-relative helicity (configurable depth)",
+        description: "Storm-relative helicity (configurable depth, Bunkers)",
         default_units: "m2/s2",
         dim: VarDim::TwoD,
         compute: dsrh::compute_srh,
+    },
+    VarDef {
+        name: "srh_wrfpython",
+        aliases: &["srh_ncar", "srh_rip", "srh_wrfpython_rip"],
+        description: "Storm-relative helicity (strict NCAR wrf-python RIP algorithm)",
+        default_units: "m2/s2",
+        dim: VarDim::TwoD,
+        compute: dsrh::compute_srh_wrfpython,
     },
     VarDef {
         name: "shear_0_1km",
@@ -1018,5 +1026,12 @@ mod tests {
     fn bare_helicity_alias_resolves_to_storm_relative_helicity() {
         assert_eq!(get_var_def("helicity").unwrap().name, "srh");
         assert_eq!(get_var_def("updraft_helicity").unwrap().name, "uhel");
+    }
+
+    #[test]
+    fn strict_wrfpython_srh_names_do_not_replace_bunkers_srh() {
+        assert_eq!(get_var_def("srh").unwrap().name, "srh");
+        assert_eq!(get_var_def("srh_rip").unwrap().name, "srh_wrfpython");
+        assert_eq!(get_var_def("srh_ncar").unwrap().name, "srh_wrfpython");
     }
 }

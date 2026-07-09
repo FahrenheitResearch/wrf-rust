@@ -1,9 +1,9 @@
 """
 wrf-rust: Fast WRF post-processing powered by Rust.
 
-Fixes wrf-python's broken CAPE (proper SBCAPE/MLCAPE/MUCAPE parcel selection),
-wrong SRH (Bunkers storm motion), adds 65+ variables with universal unit
-support, and runs 5-30x faster.
+Adds parcel-explicit SBCAPE/MLCAPE/MUCAPE, modern Bunkers SRH for operational
+workflows, an explicitly named ``srh_wrfpython`` compatibility path for NCAR's
+legacy RIP algorithm, 65+ variables, and universal unit support.
 
 Usage:
     from wrf import WrfFile, getvar
@@ -12,6 +12,7 @@ Usage:
     temp = getvar(f, "temp", timeidx=0, units="degC")
     cape = getvar(f, "sbcape", timeidx=0)
     srh  = getvar(f, "srh1", timeidx=0)
+    srh_ncar = getvar(f, "srh_wrfpython", timeidx=0, depth_m=3000)
     ecape = getvar(f, "ecape", timeidx=0, storm_motion_type="bunkers_rm")
 
     # All timesteps at once

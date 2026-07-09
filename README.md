@@ -89,6 +89,8 @@ mlcape = getvar(f, "mlcape")
 mucape = getvar(f, "mucape")
 srh1 = getvar(f, "srh1")
 srh3 = getvar(f, "srh3")
+# Explicit NCAR wrf-python/RIP compatibility; regular SRH remains Bunkers.
+srh3_ncar = getvar(f, "srh_wrfpython", depth_m=3000)
 stp = getvar(f, "stp", layer_type="effective")
 scp = getvar(f, "scp")
 ```
@@ -361,7 +363,8 @@ derived diagnostics. Major groups include:
 - CAPE/CIN with surface-based, mixed-layer, most-unstable, generic, and custom
   parcel paths.
 - ECAPE-family diagnostics with parcel selection and storm-motion options.
-- Storm-relative helicity, Bunkers storm motion, bulk shear, mean wind, lapse
+- Bunkers storm-relative helicity for operational products, plus the explicit
+  `srh_wrfpython` legacy RIP compatibility path; bulk shear, mean wind, lapse
   rates, and severe composite parameters.
 - Reflectivity, cloud-top temperature, updraft helicity, vorticity, and fire
   weather indices.

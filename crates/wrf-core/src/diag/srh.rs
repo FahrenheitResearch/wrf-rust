@@ -1,16 +1,22 @@
 //! Storm-relative helicity and bulk shear diagnostics.
 //!
-//! Uses proper Bunkers storm motion (crate::met), NOT wrf-python's
-//! broken 0.75*(3-10km mean wind) rotated 30 degrees.
+//! The default public SRH variables retain BowEcho/WRF-Runner's Bunkers
+//! semantics. `srh_wrfpython` is a separate, explicitly named compatibility
+//! path for NCAR wrf-python's legacy RIP `DCALRELHL` algorithm.
 
 use crate::compute::{ComputeOpts, StormMotionMethod};
 use crate::diag::cape::{build_surface_augmented_thermo_column, effective_inflow_layer_grid};
-use crate::error::WrfResult;
+use crate::error::{WrfError, WrfResult};
 use crate::file::WrfFile;
 use rayon::prelude::*;
 
 const SURFACE_LAYER_HEIGHT_M: f64 = 0.0;
 const BUNKERS_STACK_FIELDS: usize = 6;
+const WRFPYTHON_GRAVITY_M_S2: f64 = 9.81;
+const WRFPYTHON_MEAN_BOTTOM_M: f64 = 3_000.0;
+const WRFPYTHON_MEAN_TOP_M: f64 = 10_000.0;
+const WRFPYTHON_STORM_SPEED_FACTOR: f64 = 0.75;
+const WRFPYTHON_STORM_TURN_DEG: f64 = 30.0;
 
 fn resolved_storm_motion_method(opts: &ComputeOpts) -> StormMotionMethod {
     opts.storm_motion_method
@@ -59,6 +65,241 @@ fn unpack_bunkers_stack(
         stacked[4 * nxy..5 * nxy].to_vec(),
         stacked[5 * nxy..6 * nxy].to_vec(),
     ))
+}
+
+/// Locate the model levels used by NCAR wrf-python's RIP `DCALRELHL` routine.
+///
+/// Heights are surface-to-top mass-level heights MSL. The returned indices are
+/// the first level above 3 km AGL, the first level above 10 km AGL (or the
+/// penultimate model level), and the first level above the requested SRH top.
+/// The strict `>` comparisons and the early stop at 10 km reproduce the
+/// Fortran loop rather than interpolating exact layer endpoints.
+fn wrfpython_rip_level_bounds(
+    height_msl: &[f64],
+    terrain_m: f64,
+    top_m: f64,
+) -> Option<(usize, usize, usize)> {
+    let n = height_msl.len();
+    if n < 3 || !terrain_m.is_finite() || !top_m.is_finite() {
+        return None;
+    }
+
+    let heights_are_usable = height_msl
+        .iter()
+        .enumerate()
+        .all(|(k, height)| height.is_finite() && (k == 0 || *height > height_msl[k - 1]));
+    if !heights_are_usable {
+        return None;
+    }
+
+    let mut level_3km = None;
+    let mut level_10km = None;
+    let mut level_top = None;
+
+    // The upstream Fortran receives a top-to-surface array and scans it in
+    // reverse. WRF data here are surface-to-top, so this is the same traversal.
+    // The last mass level is excluded exactly as in `DO k = mkzh, 2, -1`.
+    for k in 0..n - 1 {
+        let height_agl = height_msl[k] - terrain_m;
+        if height_agl > WRFPYTHON_MEAN_TOP_M {
+            level_10km = Some(k);
+            break;
+        }
+        if height_agl > top_m && level_top.is_none() {
+            level_top = Some(k);
+        }
+        if height_agl > WRFPYTHON_MEAN_BOTTOM_M && level_3km.is_none() {
+            level_3km = Some(k);
+        }
+    }
+
+    let level_10km = level_10km.unwrap_or(n - 2);
+    let level_3km = level_3km?;
+    let level_top = level_top?;
+    (level_3km <= level_10km).then_some((level_3km, level_10km, level_top))
+}
+
+/// Legacy RIP storm motion used by NCAR wrf-python `DCALRELHL`.
+fn wrfpython_rip_storm_motion(
+    u_prof: &[f64],
+    v_prof: &[f64],
+    height_msl: &[f64],
+    level_3km: usize,
+    level_10km: usize,
+    latitude_deg: f64,
+) -> Option<(f64, f64)> {
+    let n = u_prof.len();
+    if n < 3
+        || v_prof.len() != n
+        || height_msl.len() != n
+        || level_3km > level_10km
+        || level_10km + 1 >= n
+        || !latitude_deg.is_finite()
+    {
+        return None;
+    }
+
+    let mut depth_sum = 0.0;
+    let mut u_sum = 0.0;
+    let mut v_sum = 0.0;
+    for k in level_3km..=level_10km {
+        let depth = height_msl[k + 1] - height_msl[k];
+        depth_sum += depth;
+        u_sum += 0.5 * depth * (u_prof[k + 1] + u_prof[k]);
+        v_sum += 0.5 * depth * (v_prof[k + 1] + v_prof[k]);
+    }
+    if !depth_sum.is_finite() || depth_sum <= 0.0 {
+        return None;
+    }
+
+    let mean_u = u_sum / depth_sum;
+    let mean_v = v_sum / depth_sum;
+    if !mean_u.is_finite() || !mean_v.is_finite() {
+        return None;
+    }
+
+    // Preserve the meteorological-direction conversion and branch order from
+    // wrf_relhl.f90 instead of replacing it with a modern Bunkers deviation.
+    let mean_speed = mean_u.hypot(mean_v);
+    let mean_direction_deg = if mean_u == 0.0 && mean_v == 0.0 {
+        0.0
+    } else {
+        180.0 / std::f64::consts::PI
+            * (std::f64::consts::PI + mean_u.atan2(mean_v))
+    };
+    let storm_speed = WRFPYTHON_STORM_SPEED_FACTOR * mean_speed;
+    let mut storm_direction_deg = if latitude_deg >= 0.0 {
+        mean_direction_deg + WRFPYTHON_STORM_TURN_DEG
+    } else {
+        mean_direction_deg - WRFPYTHON_STORM_TURN_DEG
+    };
+    if storm_direction_deg > 360.0 {
+        storm_direction_deg -= 360.0;
+    }
+
+    let storm_direction_rad = storm_direction_deg * std::f64::consts::PI / 180.0;
+    Some((
+        -storm_speed * storm_direction_rad.sin(),
+        -storm_speed * storm_direction_rad.cos(),
+    ))
+}
+
+/// One-column port of NCAR wrf-python 1.3.4.1 `DCALRELHL`.
+fn wrfpython_rip_srh_column(
+    u_prof: &[f64],
+    v_prof: &[f64],
+    height_msl: &[f64],
+    terrain_m: f64,
+    latitude_deg: f64,
+    top_m: f64,
+) -> f64 {
+    let n = u_prof.len();
+    if n < 3
+        || v_prof.len() != n
+        || height_msl.len() != n
+        || u_prof.iter().any(|value| !value.is_finite())
+        || v_prof.iter().any(|value| !value.is_finite())
+    {
+        return 0.0;
+    }
+
+    let (level_3km, level_10km, level_top) =
+        match wrfpython_rip_level_bounds(height_msl, terrain_m, top_m) {
+            Some(bounds) => bounds,
+            None => return 0.0,
+        };
+    let (storm_u, storm_v) = match wrfpython_rip_storm_motion(
+        u_prof,
+        v_prof,
+        height_msl,
+        level_3km,
+        level_10km,
+        latitude_deg,
+    ) {
+        Some(motion) => motion,
+        None => return 0.0,
+    };
+
+    // Upstream starts with the second-lowest mass level and includes the first
+    // model level strictly above `top_m`; it does not prepend U10 or interpolate.
+    if level_top == 0 {
+        return 0.0;
+    }
+    let mut sum = 0.0;
+    for k in 1..=level_top {
+        let contribution = (u_prof[k] - storm_u) * (v_prof[k] - v_prof[k - 1])
+            - (v_prof[k] - storm_v) * (u_prof[k] - u_prof[k - 1]);
+        sum += contribution;
+    }
+    -sum
+}
+
+/// Strict NCAR wrf-python/RIP SRH compatibility path. `[ny, nx]`
+///
+/// This intentionally does **not** share the Bunkers preparation path:
+/// wrf-python uses grid-relative destaggered mass-level winds, no U10 surface
+/// anchor, geopotential height divided by its 9.81 m/s^2 constant, a discrete
+/// 3--10-km mean, 0.75 storm speed, and a latitude-dependent 30-degree turn.
+/// `depth_m` defaults to 3000 m. `storm_motion` and `storm_motion_method` are
+/// rejected because accepting them would no longer be strict compatibility.
+pub fn compute_srh_wrfpython(
+    f: &WrfFile,
+    t: usize,
+    opts: &ComputeOpts,
+) -> WrfResult<Vec<f64>> {
+    if opts.storm_motion.is_some() || opts.storm_motion_method.is_some() {
+        return Err(WrfError::InvalidParam(
+            "srh_wrfpython has fixed NCAR RIP storm-motion semantics; use srh for custom or Bunkers motion"
+                .to_string(),
+        ));
+    }
+
+    let top_m = opts.depth_m.unwrap_or(3_000.0);
+    if !top_m.is_finite() || top_m <= 0.0 || top_m >= WRFPYTHON_MEAN_TOP_M {
+        return Err(WrfError::InvalidParam(format!(
+            "srh_wrfpython depth_m must be finite and in (0, 10000) m, got {top_m}"
+        )));
+    }
+
+    let u = f.u_destag(t)?;
+    let v = f.v_destag(t)?;
+    let geopotential = f.full_geopotential(t)?;
+    let terrain = f.terrain(t)?;
+    let latitude = f.xlat(t)?;
+    let nz = f.nz;
+    let nxy = f.nxy();
+
+    Ok((0..nxy)
+        .into_par_iter()
+        .map_init(
+            || {
+                (
+                    Vec::with_capacity(nz),
+                    Vec::with_capacity(nz),
+                    Vec::with_capacity(nz),
+                )
+            },
+            |(u_prof, v_prof, height_prof), ij| {
+                u_prof.clear();
+                v_prof.clear();
+                height_prof.clear();
+                for k in 0..nz {
+                    let idx = k * nxy + ij;
+                    u_prof.push(u[idx]);
+                    v_prof.push(v[idx]);
+                    height_prof.push(geopotential[idx] / WRFPYTHON_GRAVITY_M_S2);
+                }
+                wrfpython_rip_srh_column(
+                    u_prof,
+                    v_prof,
+                    height_prof,
+                    terrain[ij],
+                    latitude[ij],
+                    top_m,
+                )
+            },
+        )
+        .collect())
 }
 
 /// Canonical SRH entry point for all grid-based SRH computations.
@@ -552,8 +793,16 @@ pub fn compute_mean_wind(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult
 mod tests {
     use super::{
         bunkers_cache_key, pack_bunkers_stack, surface_augmented_shear_from_profile,
-        unpack_bunkers_stack, StormMotionMethod, SURFACE_LAYER_HEIGHT_M,
+        unpack_bunkers_stack, wrfpython_rip_level_bounds, wrfpython_rip_srh_column,
+        wrfpython_rip_storm_motion, StormMotionMethod, SURFACE_LAYER_HEIGHT_M,
     };
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1.0e-12,
+            "expected {expected}, got {actual}"
+        );
+    }
 
     #[test]
     fn surface_augmentation_anchors_10m_winds_at_zero_agl() {
@@ -569,6 +818,54 @@ mod tests {
         let shear = surface_augmented_shear_from_profile(&u, &v, &h, 0.0, 1_000.0);
 
         assert!((shear - 20.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn wrfpython_rip_motion_uses_three_to_ten_km_mean_and_hemisphere_turn() {
+        let heights = [100.0, 1_000.0, 3_001.0, 5_000.0, 8_000.0, 10_001.0, 12_000.0];
+        let u = [10.0; 7];
+        let v = [0.0; 7];
+        let (level_3km, level_10km, _) =
+            wrfpython_rip_level_bounds(&heights, 0.0, 3_000.0).unwrap();
+
+        let north =
+            wrfpython_rip_storm_motion(&u, &v, &heights, level_3km, level_10km, 35.0)
+                .unwrap();
+        let south =
+            wrfpython_rip_storm_motion(&u, &v, &heights, level_3km, level_10km, -35.0)
+                .unwrap();
+
+        assert_close(north.0, 6.495_190_528_383_29);
+        assert_close(north.1, -3.75);
+        assert_close(south.0, 6.495_190_528_383_29);
+        assert_close(south.1, 3.75);
+    }
+
+    #[test]
+    fn wrfpython_rip_srh_reproduces_signed_mirrored_golden_columns() {
+        let heights = [100.0, 1_000.0, 3_001.0, 5_000.0, 8_000.0, 10_001.0, 12_000.0];
+        let u = [0.0, 5.0, 10.0, 10.0, 10.0, 10.0, 10.0];
+        let v_north = [0.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let v_south = [0.0, -5.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+
+        let north =
+            wrfpython_rip_srh_column(&u, &v_north, &heights, 0.0, 35.0, 3_000.0);
+        let south =
+            wrfpython_rip_srh_column(&u, &v_south, &heights, 0.0, -35.0, 3_000.0);
+
+        assert_close(north, 87.5);
+        assert_close(south, -87.5);
+    }
+
+    #[test]
+    fn wrfpython_rip_srh_uses_first_model_level_strictly_above_top() {
+        let heights = [100.0, 1_000.0, 3_000.0, 3_500.0, 8_000.0, 10_001.0, 12_000.0];
+        let u = [0.0, 5.0, 10.0, 20.0, 10.0, 10.0, 10.0];
+        let v = [0.0, 5.0, 0.0, 10.0, 0.0, 0.0, 0.0];
+        let (_, _, level_top) =
+            wrfpython_rip_level_bounds(&heights, 0.0, 3_000.0).unwrap();
+
+        assert_eq!(level_top, 3);
     }
 
     #[test]

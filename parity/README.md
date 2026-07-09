@@ -136,8 +136,10 @@ faithful multi-process call-sequence driver.
 
 - `theta_w`, SB/ML parcel diagnostics, shear, Bunkers motion, SHIP, STP, and
   SCP need an independent profile or operational-recipe reference adapter.
-- NCAR SRH uses RIP `DCALRELHL` storm motion, whereas WRF-Runner wants Bunkers.
-  They are distinct contracts, not values expected to converge by tolerance.
+- NCAR SRH and WRF-Runner SRH remain distinct contracts. `srh_wrfpython`
+  explicitly ports RIP `DCALRELHL`; the existing `srh`/`srh1`/`srh3` names
+  retain WRF-Runner's Bunkers behavior. Southern-Hemisphere and threshold-level
+  fixtures are still needed to exercise the strict path end to end.
 - PVO is still a vertical-stretching approximation. AVO now uses upstream
   display scaling but still lacks WRF map-factor terms.
 - Full upstream `interplevel` supports left dimensions, 1-D level sequences,
