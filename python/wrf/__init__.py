@@ -30,6 +30,14 @@ import warnings
 
 import numpy as np
 
+from ._coord_transform import (
+    ProjectionParams as _ProjectionParams,
+    WRF_EARTH_RADIUS as _COORD_EARTH_RADIUS,
+    ll_to_xy as _project_ll_to_xy,
+    longitude_delta as _longitude_delta,
+    xy_to_ll as _project_xy_to_ll,
+)
+
 # On Windows, NetCDF/HDF5 DLLs may not be on PATH. Try common conda locations.
 if sys.platform == "win32":
     _dll_dirs = [
@@ -63,6 +71,8 @@ __all__ = [
     "get_cartopy",
     "latlon_coords",
     "ll_to_xy",
+    "xy_to_ll",
+    "CoordPair",
 ]
 __version__ = "0.2.34"
 
@@ -98,6 +108,28 @@ def __getattr__(name):
 # Sentinel for "all time steps"
 ALL_TIMES = None
 _WARNED_DATASET_REOPEN = False
+
+
+class CoordPair:
+    """Coordinate-pair metadata compatible with wrf-python results."""
+
+    __slots__ = ("x", "y", "lat", "lon")
+
+    def __init__(self, x=None, y=None, lat=None, lon=None):
+        self.x = x
+        self.y = y
+        self.lat = lat
+        self.lon = lon
+
+    def __repr__(self):
+        values = []
+        if self.x is not None:
+            values.extend((f"x={self.x}", f"y={self.y}"))
+        if self.lat is not None:
+            values.extend((f"lat={self.lat}", f"lon={self.lon}"))
+        return f"CoordPair({', '.join(values)})"
+
+    __str__ = __repr__
 
 
 def _warn_dataset_reopen():
@@ -918,186 +950,329 @@ def latlon_coords(wrffile, timeidx=0):
 
 
 # =========================================================================
-# ll_to_xy -- lat/lon to grid indices (fractional)
+# ll_to_xy / xy_to_ll -- analytic WRF projection coordinates
 # =========================================================================
 
-def _ll_to_xy_scalar(lat2d, lon2d, latitude, longitude):
-    """Convert one lat/lon pair to fractional grid coordinates."""
-    latitude = float(latitude)
-    longitude = float(longitude)
-    if not np.isfinite(latitude) or not np.isfinite(longitude):
-        raise ValueError("latitude and longitude must be finite")
-
-    if lat2d.ndim != 2 or lon2d.ndim != 2 or lat2d.shape != lon2d.shape:
-        raise ValueError("latitude and longitude grids must be matching 2-D arrays")
-    if lat2d.size == 0:
-        raise ValueError("latitude and longitude grids must not be empty")
-
-    valid = np.isfinite(lat2d) & np.isfinite(lon2d)
-    if not np.any(valid):
-        raise ValueError("latitude and longitude grids contain no finite points")
-
-    # This intentionally retains the existing local-grid approximation.
-    # Longitudes that cross the antimeridian need unwrapping in a future
-    # projection-aware implementation.
-    dist = (lat2d - latitude) ** 2 + (lon2d - longitude) ** 2
-    dist = np.where(valid, dist, np.inf)
-    jn, in_ = np.unravel_index(np.argmin(dist), dist.shape)
-
-    # Refine to fractional indices using bilinear interpolation in the cells
-    # adjacent to the nearest point.
-    ny, nx = lat2d.shape
-    best_x = float(in_)
-    best_y = float(jn)
-
-    for j0 in range(max(0, jn - 1), min(ny - 1, jn + 1)):
-        for i0 in range(max(0, in_ - 1), min(nx - 1, in_ + 1)):
-            lat00 = lat2d[j0, i0]
-            lat10 = lat2d[j0, i0 + 1]
-            lat01 = lat2d[j0 + 1, i0]
-            lat11 = lat2d[j0 + 1, i0 + 1]
-            lon00 = lon2d[j0, i0]
-            lon10 = lon2d[j0, i0 + 1]
-            lon01 = lon2d[j0 + 1, i0]
-            lon11 = lon2d[j0 + 1, i0 + 1]
-            corners = (
-                lat00, lat10, lat01, lat11,
-                lon00, lon10, lon01, lon11,
-            )
-            if not np.all(np.isfinite(corners)):
-                continue
-
-            s, t = 0.5, 0.5
-            for _ in range(10):
-                lat_est = (
-                    (1 - s) * (1 - t) * lat00
-                    + s * (1 - t) * lat10
-                    + (1 - s) * t * lat01
-                    + s * t * lat11
-                )
-                lon_est = (
-                    (1 - s) * (1 - t) * lon00
-                    + s * (1 - t) * lon10
-                    + (1 - s) * t * lon01
-                    + s * t * lon11
-                )
-                dlat = latitude - lat_est
-                dlon = longitude - lon_est
-
-                dlat_ds = (
-                    -(1 - t) * lat00 + (1 - t) * lat10
-                    - t * lat01 + t * lat11
-                )
-                dlat_dt = (
-                    -(1 - s) * lat00 - s * lat10
-                    + (1 - s) * lat01 + s * lat11
-                )
-                dlon_ds = (
-                    -(1 - t) * lon00 + (1 - t) * lon10
-                    - t * lon01 + t * lon11
-                )
-                dlon_dt = (
-                    -(1 - s) * lon00 - s * lon10
-                    + (1 - s) * lon01 + s * lon11
-                )
-                det = dlat_ds * dlon_dt - dlat_dt * dlon_ds
-                if abs(det) < 1e-20:
-                    break
-
-                ds = (dlat * dlon_dt - dlon * dlat_dt) / det
-                dt = (dlon * dlat_ds - dlat * dlon_ds) / det
-                s += ds
-                t += dt
-
-            if 0.0 <= s <= 1.0 and 0.0 <= t <= 1.0:
-                return float(i0) + s, float(j0) + t
-
-    return best_x, best_y
+_MISSING = object()
 
 
-def ll_to_xy(wrffile, latitude, longitude, timeidx=0, squeeze=True,
-             meta=True, stagger=None, as_int=True):
-    """Convert latitude/longitude values to WRF grid coordinates.
+def _normalize_stagger(stagger):
+    if stagger is None:
+        return "m"
+    normalized = str(stagger).lower()
+    if normalized not in ("m", "u", "v"):
+        raise ValueError("invalid 'stagger' value; expected None, 'm', 'u', or 'v'")
+    return normalized
 
-    Drop-in replacement for ``wrf.ll_to_xy()`` from wrf-python.
 
-    The returned NumPy array follows wrf-python's leading-axis convention:
-    ``result[0, ...]`` is x (west-east) and ``result[1, ...]`` is y
-    (south-north). Scalar inputs return shape ``(2,)``; sequences return
-    shape ``(2, npoints)``. Coordinates are rounded to integers by default,
-    matching NCAR wrf-python; pass ``as_int=False`` for fractional values.
+def _is_dataset_source(source):
+    return hasattr(source, "variables") and (
+        hasattr(source, "getncattr") or hasattr(source, "attrs")
+    )
 
-    Parameters
-    ----------
-    wrffile : WrfFile, str, or netCDF4.Dataset
-        The WRF output file.
-    latitude : float or sequence of float
-        Target latitude value(s) in degrees.
-    longitude : float or sequence of float
-        Target longitude value(s) in degrees. Sequences must be the same
-        length as ``latitude`` and are flattened like wrf-python.
-    timeidx : int, optional
-        Time index (default 0).
-    squeeze, meta : bool, optional
-        Accepted for wrf-python call compatibility. This implementation
-        always returns a NumPy array and has no moving-domain dimensions to
-        squeeze.
-    stagger : {None, "m"}, optional
-        Mass-grid coordinates are supported. Staggered u/v coordinates are
-        not yet implemented.
-    as_int : bool, optional
-        Round with ``numpy.rint`` and return integers (default True).
 
-    Returns
-    -------
-    ndarray
-        Grid coordinates with leading dimension 2 (0=x, 1=y).
+class _CoordinateSource:
+    """Own an optional netCDF handle used to read projection metadata."""
 
-    Notes
-    -----
-    The current inverse lookup scans the entire grid once per requested
-    point and interpolates directly in longitude degrees. It is therefore
-    slower than projection-based conversion for large point collections and
-    does not yet handle grids crossing the antimeridian.
-    """
-    del squeeze, meta  # Accepted for signature compatibility.
-    if stagger is not None and str(stagger).lower() != "m":
-        raise NotImplementedError(
-            "ll_to_xy currently supports only the mass grid (stagger=None/'m')"
-        )
+    def __init__(self, wrffile):
+        self.wrffile = wrffile
+        self.source = None
+        self._opened = None
 
-    lat2d, lon2d = latlon_coords(wrffile, timeidx=timeidx)
-    lat2d = np.asarray(lat2d, dtype=np.float64)
-    lon2d = np.asarray(lon2d, dtype=np.float64)
-    latitude_values = np.asarray(latitude)
-    longitude_values = np.asarray(longitude)
+    def __enter__(self):
+        if _is_dataset_source(self.wrffile):
+            self.source = self.wrffile
+            return self.source
 
-    latitude_scalar = latitude_values.ndim == 0
-    longitude_scalar = longitude_values.ndim == 0
-    if latitude_scalar != longitude_scalar:
-        raise ValueError("'latitude' and 'longitude' must be the same length")
+        wf = _ensure_wrffile(self.wrffile)
+        native = wf._inner
+        if hasattr(native, "_global_attr_f64") and hasattr(native, "_has_var"):
+            self.source = native
+            return self.source
 
-    if latitude_scalar:
-        result = np.asarray(
-            _ll_to_xy_scalar(
-                lat2d,
-                lon2d,
-                latitude_values.item(),
-                longitude_values.item(),
-            ),
-            dtype=np.float64,
-        )
+        try:
+            from netCDF4 import Dataset as _NCDataset
+        except ImportError as exc:
+            raise ImportError(
+                "analytic WRF coordinate conversion needs projection globals; "
+                "install netCDF4 or use a wrf-rust wheel exposing native metadata"
+            ) from exc
+        self._opened = _NCDataset(wf.path, "r")
+        self.source = self._opened
+        return self.source
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self._opened is not None:
+            self._opened.close()
+        return False
+
+
+def _source_numeric_attr(source, name, default=_MISSING):
+    try:
+        if hasattr(source, "_global_attr_f64"):
+            value = source._global_attr_f64(name)
+        elif hasattr(source, "getncattr"):
+            value = source.getncattr(name)
+        else:
+            attrs = getattr(source, "attrs", {})
+            if name not in attrs:
+                raise KeyError(name)
+            value = attrs[name]
+    except (AttributeError, KeyError, RuntimeError, OSError):
+        if default is not _MISSING:
+            return default
+        raise ValueError(f"WRF file is missing required projection attribute {name}") from None
+
+    if np.ma.is_masked(value):
+        if default is not _MISSING:
+            return default
+        raise ValueError(f"WRF projection attribute {name} is masked")
+    try:
+        value = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"WRF projection attribute {name} is not numeric: {value!r}"
+        ) from exc
+    if not np.isfinite(value):
+        raise ValueError(f"WRF projection attribute {name} is not finite: {value!r}")
+    return value
+
+
+def _source_has_var(source, name):
+    if hasattr(source, "_has_var"):
+        return bool(source._has_var(name))
+    return name in getattr(source, "variables", {})
+
+
+def _coordinate_var_names(source, stagger):
+    if stagger == "m":
+        lat_candidates = ("XLAT", "XLAT_M")
+        lon_candidates = ("XLONG", "XLONG_M")
     else:
-        latitude_values = latitude_values.ravel()
-        longitude_values = longitude_values.ravel()
-        if latitude_values.size != longitude_values.size:
-            raise ValueError("'latitude' and 'longitude' must be the same length")
+        suffix = stagger.upper()
+        lat_candidates = (f"XLAT_{suffix}",)
+        lon_candidates = (f"XLONG_{suffix}",)
 
-        result = np.empty((2, latitude_values.size), dtype=np.float64)
-        for idx, (lat, lon) in enumerate(
-                zip(latitude_values, longitude_values)):
-            result[:, idx] = _ll_to_xy_scalar(lat2d, lon2d, lat, lon)
+    lat_name = next((name for name in lat_candidates if _source_has_var(source, name)), None)
+    lon_name = next((name for name in lon_candidates if _source_has_var(source, name)), None)
+    if lat_name is None or lon_name is None:
+        grid_name = {"m": "mass", "u": "U-staggered", "v": "V-staggered"}[stagger]
+        raise ValueError(f"WRF file is missing {grid_name} latitude/longitude variables")
+    return lat_name, lon_name
 
+
+def _as_finite_reference_series(values, name):
+    array = np.ma.asarray(values, dtype=np.float64)
+    array = np.asarray(np.ma.filled(array, np.nan), dtype=np.float64).reshape(-1)
+    if array.size == 0 or not np.all(np.isfinite(array)):
+        raise ValueError(f"WRF coordinate variable {name} has no finite reference point")
+    return array
+
+
+def _source_reference_series(source, name):
+    if hasattr(source, "_has_var"):
+        nt = int(source.nt)
+        values = np.empty(nt, dtype=np.float64)
+        for time_index in range(nt):
+            coordinate = np.asarray(
+                source.getvar(name, timeidx=time_index), dtype=np.float64
+            )
+            if coordinate.ndim != 2 or coordinate.size == 0:
+                raise ValueError(
+                    f"WRF coordinate variable {name} must be a non-empty 2-D field"
+                )
+            values[time_index] = coordinate[0, 0]
+        return _as_finite_reference_series(values, name)
+
+    variable = source.variables[name]
+    shape = tuple(variable.shape)
+    if len(shape) == 2:
+        values = variable[0, 0]
+    elif len(shape) == 3:
+        values = variable[:, 0, 0]
+    else:
+        raise ValueError(
+            f"WRF coordinate variable {name} has unsupported shape {shape}; "
+            "expected (y, x) or (time, y, x)"
+        )
+    return _as_finite_reference_series(values, name)
+
+
+def _projection_params(wrffile, timeidx, stagger):
+    if isinstance(timeidx, np.integer):
+        timeidx = int(timeidx)
+    if timeidx is not None and not isinstance(timeidx, int):
+        raise TypeError("'timeidx' must be an integer or None")
+    if timeidx is not None and timeidx < 0:
+        # This matches the pinned wrf-python coordinate implementation even
+        # though several other wrf-python APIs accept negative time indices.
+        raise ValueError("'timeidx' must be greater than or equal to 0")
+
+    stagger = _normalize_stagger(stagger)
+    with _CoordinateSource(wrffile) as source:
+        map_proj_value = _source_numeric_attr(source, "MAP_PROJ")
+        if not map_proj_value.is_integer():
+            raise ValueError(f"WRF MAP_PROJ must be an integer, got {map_proj_value!r}")
+        map_proj = int(map_proj_value)
+        truelat1 = _source_numeric_attr(source, "TRUELAT1")
+        truelat2 = _source_numeric_attr(source, "TRUELAT2")
+        stand_lon = _source_numeric_attr(source, "STAND_LON")
+        dx = _source_numeric_attr(source, "DX")
+        dy = _source_numeric_attr(source, "DY")
+        pole_lat = _source_numeric_attr(source, "POLE_LAT", 90.0)
+        pole_lon = _source_numeric_attr(source, "POLE_LON", 0.0)
+
+        lat_name, lon_name = _coordinate_var_names(source, stagger)
+        ref_lats = _source_reference_series(source, lat_name)
+        ref_lons = _source_reference_series(source, lon_name)
+
+    if ref_lats.size != ref_lons.size:
+        raise ValueError("WRF latitude/longitude reference series have different lengths")
+    if ref_lats.size > 1:
+        lat_moved = np.any(np.abs(ref_lats - ref_lats[0]) > 1.0e-10)
+        lon_moved = any(
+            abs(_longitude_delta(value, ref_lons[0])) > 1.0e-10
+            for value in ref_lons[1:]
+        )
+        if lat_moved or lon_moved:
+            raise NotImplementedError(
+                "moving-domain WRF coordinate metadata is not yet supported; "
+                "ll_to_xy/xy_to_ll will not silently use or clamp to time 0"
+            )
+
+    latinc = 0.0
+    loninc = 0.0
+    if map_proj == 6:
+        latinc = dy * 360.0 / (2.0 * np.pi * _COORD_EARTH_RADIUS)
+        loninc = dx * 360.0 / (2.0 * np.pi * _COORD_EARTH_RADIUS)
+
+    return _ProjectionParams(
+        map_proj=map_proj,
+        truelat1=truelat1,
+        truelat2=truelat2,
+        stand_lon=stand_lon,
+        ref_lat=float(ref_lats[0]),
+        ref_lon=float(ref_lons[0]),
+        dx=dx,
+        dy=dy,
+        pole_lat=pole_lat,
+        pole_lon=pole_lon,
+        latinc=latinc,
+        loninc=loninc,
+    )
+
+
+def _coordinate_inputs(first, second, first_name, second_name):
+    try:
+        first_values = np.asarray(first, dtype=np.float64)
+        second_values = np.asarray(second, dtype=np.float64)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"'{first_name}' and '{second_name}' must be numeric") from exc
+
+    first_scalar = first_values.ndim == 0
+    second_scalar = second_values.ndim == 0
+    if first_scalar != second_scalar:
+        raise ValueError(f"'{first_name}' and '{second_name}' must be the same length")
+    if first_scalar:
+        return first_values.reshape(1), second_values.reshape(1), True
+
+    first_values = first_values.ravel()
+    second_values = second_values.ravel()
+    if first_values.size != second_values.size:
+        raise ValueError(f"'{first_name}' and '{second_name}' must be the same length")
+    return first_values, second_values, False
+
+
+def _with_coordinate_metadata(result, first, second, *, xy, meta, squeeze):
+    if not meta:
+        return result
+    try:
+        from xarray import DataArray
+    except ImportError:
+        return result
+
+    data = result if result.ndim != 1 else result[:, np.newaxis]
+    first_values = np.asarray(first).ravel()
+    second_values = np.asarray(second).ravel()
+    pairs = np.empty(first_values.size, dtype=object)
+    if xy:
+        for index, (latitude, longitude) in enumerate(
+                zip(first_values, second_values)):
+            pairs[index] = CoordPair(lat=latitude, lon=longitude)
+        dims = ("x_y", "idx")
+        coords = {
+            "x_y": ["x", "y"],
+            "latlon_coord": ("idx", pairs),
+        }
+        name = "xy"
+    else:
+        for index, (x_value, y_value) in enumerate(
+                zip(first_values, second_values)):
+            pairs[index] = CoordPair(x=x_value, y=y_value)
+        dims = ("lat_lon", "idx")
+        coords = {
+            "lat_lon": ["lat", "lon"],
+            "xy_coord": ("idx", pairs),
+        }
+        name = "latlon"
+
+    output = DataArray(data, name=name, dims=dims, coords=coords)
+    return output.squeeze() if squeeze else output
+
+
+def ll_to_xy(wrfin, latitude, longitude, timeidx=0, squeeze=True,
+             meta=True, stagger=None, as_int=True):
+    """Return zero-based WRF x/y coordinates for latitude/longitude values.
+
+    This follows NCAR wrf-python 1.3.4.1's analytic WRF projection equations.
+    Scalar inputs produce a leading two-element x/y result and sequences are
+    flattened to ``(2, npoints)``. U and V staggering select the corresponding
+    ``XLAT_U/XLONG_U`` or ``XLAT_V/XLONG_V`` projection origin. Coordinates
+    outside the domain are extrapolated, as in wrf-python, rather than clamped.
+    """
+    params = _projection_params(wrfin, timeidx, stagger)
+    latitudes, longitudes, scalar = _coordinate_inputs(
+        latitude, longitude, "latitude", "longitude"
+    )
+    result = np.empty((2, latitudes.size), dtype=np.float64)
+    for index, (lat_value, lon_value) in enumerate(zip(latitudes, longitudes)):
+        result[:, index] = _project_ll_to_xy(params, lat_value, lon_value)
+
+    if scalar:
+        result = result[:, 0]
     if as_int:
         result = np.rint(result).astype(int)
-    return result
+    return _with_coordinate_metadata(
+        result,
+        latitude,
+        longitude,
+        xy=True,
+        meta=meta,
+        squeeze=squeeze,
+    )
+
+
+def xy_to_ll(wrfin, x, y, timeidx=0, squeeze=True, meta=True,
+             stagger=None):
+    """Return latitude/longitude values for zero-based WRF x/y coordinates.
+
+    The return convention matches wrf-python: the leading axis is latitude,
+    longitude; scalar inputs produce shape ``(2,)`` and sequences produce
+    ``(2, npoints)``. Antimeridian results are normalized to [-180, 180].
+    """
+    params = _projection_params(wrfin, timeidx, stagger)
+    x_values, y_values, scalar = _coordinate_inputs(x, y, "x", "y")
+    result = np.empty((2, x_values.size), dtype=np.float64)
+    for index, (x_value, y_value) in enumerate(zip(x_values, y_values)):
+        result[:, index] = _project_xy_to_ll(params, x_value, y_value)
+
+    if scalar:
+        result = result[:, 0]
+    return _with_coordinate_metadata(
+        result,
+        x,
+        y,
+        xy=False,
+        meta=meta,
+        squeeze=squeeze,
+    )

@@ -152,9 +152,18 @@ faithful multi-process call-sequence driver.
 - Full upstream `interplevel` supports left dimensions, 1-D level sequences,
   caller-selected missing values, `squeeze`, and metadata. Stage one fixes and
   probes WRF-Runner's scalar/2-D cases.
-- `ll_to_xy` now matches scalar/sequence result shapes and `as_int`, but still
-  uses an O(points x grid-size) nearest-grid scan, is not antimeridian-aware,
-  clamps out-of-domain points, and lacks stagger/metadata output.
+- `ll_to_xy` and `xy_to_ll` now use the pinned wrf-python 1.3.4.1 analytic
+  Lambert, polar-stereographic, Mercator, regular-lat/lon, and rotated-lat/lon
+  equations. They preserve scalar/sequence and optional xarray metadata
+  conventions, normalize antimeridian longitudes, support mass/U/V projection
+  origins, and extrapolate outside-domain points instead of clamping them.
+- For unrotated `MAP_PROJ=6`, longitude wrapping intentionally closes an
+  upstream edge-case bug: pinned `DLLTOIJ` returns x=-358 rather than x=2 for
+  a one-degree grid from 179E to 179W. All other projection values are pinned
+  numerically to the compiled 1.3.4.1 reference routine.
+- Moving nests are detected from time-varying stagger-specific reference
+  coordinates and rejected explicitly. Time-dependent moving-domain output,
+  multi-file `cat`/`join` dimensions, and mapping inputs remain stage-two gaps.
 - Projection constructors now use WRF's spherical globe and pinned Lambert,
   Mercator, polar, regular, and rotated-lat/lon parameters. Moving domains,
   xarray metadata, and exact inference without netCDF4 remain unsupported.

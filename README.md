@@ -127,8 +127,10 @@ forks. A separate WRF-Runner manifest protects the real migration workflow
 without treating every wrf-rust extension as upstream behavior.
 
 `netCDF4.Dataset` and xarray-like inputs are accepted when a source filepath is
-available, but `wrf-rust` reopens the file natively. On Windows, close an open
-`netCDF4.Dataset` before passing the same file to `wrf-rust`.
+available. Most diagnostics reopen that path natively, so on Windows an open
+dataset should still be closed before passing it to `getvar`. The analytic
+`ll_to_xy`/`xy_to_ll` helpers read projection metadata directly from an
+already-open dataset and do not reopen it.
 
 ## Native Rust Plotting
 

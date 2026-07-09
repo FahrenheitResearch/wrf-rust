@@ -64,6 +64,22 @@ impl WrfFile {
         self.inner.path.display().to_string()
     }
 
+    /// Internal projection helper: read a numeric global attribute without
+    /// requiring the optional Python netCDF4 package.
+    fn _global_attr_f64(&self, name: &str) -> PyResult<f64> {
+        self.inner.global_attr_f64(name).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyKeyError, _>(format!(
+                "global attribute {name}: {e}"
+            ))
+        })
+    }
+
+    /// Internal projection helper: check for stagger-specific coordinate
+    /// variables before selecting XLAT/XLONG origins.
+    fn _has_var(&self, name: &str) -> bool {
+        self.inner.has_var(name)
+    }
+
     /// Time strings from the file.
     fn times(&self) -> PyResult<Vec<String>> {
         self.inner

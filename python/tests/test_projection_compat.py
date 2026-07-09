@@ -237,68 +237,313 @@ class ProjectionCompatibilityTests(unittest.TestCase):
             )
 
 
-class LlToXyCompatibilityTests(unittest.TestCase):
-    def setUp(self):
-        self.lat = np.array(
-            [
-                [0.0, 0.0, 0.0],
-                [1.0, 1.0, 1.0],
-                [2.0, 2.0, 2.0],
-            ]
-        )
-        self.lon = np.array(
-            [
-                [10.0, 11.0, 12.0],
-                [10.0, 11.0, 12.0],
-                [10.0, 11.0, 12.0],
-            ]
-        )
+_DEGREE_METERS = 2.0 * np.pi * 6_370_000.0 / 360.0
 
+
+class _FakeDataset:
+    def __init__(self, attrs, variables):
+        self.attrs = dict(attrs)
+        self.variables = dict(variables)
+
+    def getncattr(self, name):
+        try:
+            return self.attrs[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+
+def _projection_dataset(attrs=None, ref_lat=0.0, ref_lon=10.0,
+                        moving_to=None):
+    projection_attrs = {
+        "MAP_PROJ": 6,
+        "TRUELAT1": 0.0,
+        "TRUELAT2": 0.0,
+        "STAND_LON": 0.0,
+        "DX": _DEGREE_METERS,
+        "DY": _DEGREE_METERS,
+        "POLE_LAT": 90.0,
+        "POLE_LON": 0.0,
+    }
+    if attrs:
+        projection_attrs.update(attrs)
+
+    if moving_to is None:
+        mass_lat = np.full((1, 3, 3), ref_lat, dtype=np.float64)
+        mass_lon = np.full((1, 3, 3), ref_lon, dtype=np.float64)
+    else:
+        moved_lat, moved_lon = moving_to
+        mass_lat = np.empty((2, 3, 3), dtype=np.float64)
+        mass_lon = np.empty((2, 3, 3), dtype=np.float64)
+        mass_lat[0].fill(ref_lat)
+        mass_lat[1].fill(moved_lat)
+        mass_lon[0].fill(ref_lon)
+        mass_lon[1].fill(moved_lon)
+
+    variables = {
+        "XLAT": mass_lat,
+        "XLONG": mass_lon,
+        "XLAT_U": np.full((1, 3, 4), ref_lat, dtype=np.float64),
+        "XLONG_U": np.full((1, 3, 4), ref_lon + 0.5, dtype=np.float64),
+        "XLAT_V": np.full((1, 4, 3), ref_lat + 0.5, dtype=np.float64),
+        "XLONG_V": np.full((1, 4, 3), ref_lon, dtype=np.float64),
+    }
+    return _FakeDataset(projection_attrs, variables)
+
+
+class CoordinateCompatibilityTests(unittest.TestCase):
     def test_scalar_defaults_to_integer_leading_axis_result(self):
-        with mock.patch.object(
-                WRF, "latlon_coords", return_value=(self.lat, self.lon)):
-            xy = WRF.ll_to_xy(object(), 0.7, 10.6)
+        dataset = _projection_dataset()
+        xy = WRF.ll_to_xy(
+            wrfin=dataset, latitude=0.7, longitude=10.6, meta=False
+        )
 
         self.assertEqual(xy.shape, (2,))
         self.assertTrue(np.issubdtype(xy.dtype, np.integer))
         np.testing.assert_array_equal(xy, [1, 1])
-        # WRF-Runner indexes scalar results exactly this way.
-        self.assertEqual(int(xy[0]), 1)
-        self.assertEqual(int(xy[1]), 1)
 
-    def test_sequences_have_leading_coordinate_axis_and_fractional_option(self):
-        with mock.patch.object(
-                WRF, "latlon_coords", return_value=(self.lat, self.lon)):
-            xy = WRF.ll_to_xy(
-                object(),
-                [0.25, 1.75],
-                [10.5, 11.25],
-                as_int=False,
-            )
+        # WRF-Runner indexes scalar default results exactly this way. This is
+        # valid for either ndarray or optional xarray metadata output.
+        runner_xy = WRF.ll_to_xy(dataset, 0.7, 10.6)
+        self.assertEqual(int(runner_xy[0]), 1)
+        self.assertEqual(int(runner_xy[1]), 1)
 
-        self.assertEqual(xy.shape, (2, 2))
-        np.testing.assert_allclose(xy[0], [0.5, 1.25], atol=1e-12)
-        np.testing.assert_allclose(xy[1], [0.25, 1.75], atol=1e-12)
+        latlon = WRF.xy_to_ll(wrfin=dataset, x=1.0, y=1.0, meta=False)
+        np.testing.assert_allclose(latlon, [1.0, 11.0], atol=1e-12)
 
-    def test_nested_sequences_are_flattened_like_wrf_python(self):
-        with mock.patch.object(
-                WRF, "latlon_coords", return_value=(self.lat, self.lon)):
-            xy = WRF.ll_to_xy(
-                object(),
-                [[0.0, 0.5], [1.0, 1.5]],
-                [[10.0, 10.5], [11.0, 11.5]],
-                as_int=False,
-            )
+    def test_sequences_flatten_and_preserve_leading_coordinate_axis(self):
+        dataset = _projection_dataset()
+        xy = WRF.ll_to_xy(
+            dataset,
+            [[0.25, 0.75], [1.25, 1.75]],
+            [[10.5, 10.75], [11.0, 11.25]],
+            as_int=False,
+            meta=False,
+        )
 
         self.assertEqual(xy.shape, (2, 4))
+        np.testing.assert_allclose(xy[0], [0.5, 0.75, 1.0, 1.25], atol=1e-12)
+        np.testing.assert_allclose(xy[1], [0.25, 0.75, 1.25, 1.75], atol=1e-12)
 
-    def test_mismatched_sequences_and_unsupported_stagger_are_explicit(self):
-        with mock.patch.object(
-                WRF, "latlon_coords", return_value=(self.lat, self.lon)):
-            with self.assertRaisesRegex(ValueError, "same length"):
-                WRF.ll_to_xy(object(), [0.0, 1.0], [10.0])
-            with self.assertRaises(NotImplementedError):
-                WRF.ll_to_xy(object(), 0.0, 10.0, stagger="u")
+        latlon = WRF.xy_to_ll(dataset, xy[0], xy[1], meta=False)
+        self.assertEqual(latlon.shape, (2, 4))
+        np.testing.assert_allclose(latlon[0], [0.25, 0.75, 1.25, 1.75])
+        np.testing.assert_allclose(latlon[1], [10.5, 10.75, 11.0, 11.25])
+
+    def test_antimeridian_uses_shortest_longitude_delta(self):
+        dataset = _projection_dataset(ref_lon=179.0)
+        xy = WRF.ll_to_xy(dataset, 1.0, -179.0, as_int=False, meta=False)
+        np.testing.assert_allclose(xy, [2.0, 1.0], atol=1e-12)
+
+        latlon = WRF.xy_to_ll(dataset, xy[0], xy[1], meta=False)
+        np.testing.assert_allclose(latlon, [1.0, -179.0], atol=1e-12)
+
+    def test_u_and_v_staggering_use_their_own_coordinate_origins(self):
+        dataset = _projection_dataset()
+        mass = WRF.ll_to_xy(
+            dataset, 0.0, 10.5, stagger="m", as_int=False, meta=False
+        )
+        u_grid = WRF.ll_to_xy(
+            dataset, 0.0, 10.5, stagger="u", as_int=False, meta=False
+        )
+        v_grid = WRF.ll_to_xy(
+            dataset, 0.5, 10.0, stagger="v", as_int=False, meta=False
+        )
+        np.testing.assert_allclose(mass, [0.5, 0.0], atol=1e-12)
+        np.testing.assert_allclose(u_grid, [0.0, 0.0], atol=1e-12)
+        np.testing.assert_allclose(v_grid, [0.0, 0.0], atol=1e-12)
+
+        u_origin = WRF.xy_to_ll(dataset, 0.0, 0.0, stagger="u", meta=False)
+        v_origin = WRF.xy_to_ll(dataset, 0.0, 0.0, stagger="v", meta=False)
+        np.testing.assert_allclose(u_origin, [0.0, 10.5], atol=1e-12)
+        np.testing.assert_allclose(v_origin, [0.5, 10.0], atol=1e-12)
+
+    def test_all_supported_projections_round_trip_fractional_coordinates(self):
+        cases = (
+            (
+                "lambert-north",
+                {
+                    "MAP_PROJ": 1,
+                    "TRUELAT1": 30.0,
+                    "TRUELAT2": 60.0,
+                    "STAND_LON": -97.0,
+                    "DX": 12_000.0,
+                    "DY": 12_000.0,
+                },
+                35.0,
+                -105.0,
+            ),
+            (
+                "lambert-south",
+                {
+                    "MAP_PROJ": 1,
+                    "TRUELAT1": -30.0,
+                    "TRUELAT2": -60.0,
+                    "STAND_LON": 135.0,
+                    "DX": 9_000.0,
+                    "DY": 9_000.0,
+                },
+                -40.0,
+                130.0,
+            ),
+            (
+                "polar-south",
+                {
+                    "MAP_PROJ": 2,
+                    "TRUELAT1": -60.0,
+                    "TRUELAT2": -60.0,
+                    "STAND_LON": 120.0,
+                    "DX": 15_000.0,
+                    "DY": 15_000.0,
+                },
+                -70.0,
+                115.0,
+            ),
+            (
+                "mercator-dateline",
+                {
+                    "MAP_PROJ": 3,
+                    "TRUELAT1": 20.0,
+                    "TRUELAT2": 20.0,
+                    "STAND_LON": 180.0,
+                    "DX": 10_000.0,
+                    "DY": 10_000.0,
+                },
+                5.0,
+                179.0,
+            ),
+            (
+                "rotated-latlon",
+                {
+                    "MAP_PROJ": 6,
+                    "TRUELAT1": 0.0,
+                    "TRUELAT2": 0.0,
+                    "STAND_LON": 10.0,
+                    "POLE_LAT": 45.0,
+                    "POLE_LON": 180.0,
+                },
+                35.0,
+                170.0,
+            ),
+        )
+        expected_xy = np.asarray([[0.0, 0.25, 2.5], [0.0, 1.5, -0.75]])
+        for name, attrs, ref_lat, ref_lon in cases:
+            with self.subTest(projection=name):
+                dataset = _projection_dataset(
+                    attrs=attrs, ref_lat=ref_lat, ref_lon=ref_lon
+                )
+                latlon = WRF.xy_to_ll(
+                    dataset, expected_xy[0], expected_xy[1], meta=False
+                )
+                actual_xy = WRF.ll_to_xy(
+                    dataset,
+                    latlon[0],
+                    latlon[1],
+                    as_int=False,
+                    meta=False,
+                )
+                np.testing.assert_allclose(actual_xy, expected_xy, atol=2e-9)
+
+    def test_matches_pinned_wrfpython_numeric_reference(self):
+        # Values generated by wrf-python 1.3.4.1's compiled DLLTOIJ/DIJTOLL
+        # routines. These make the test independent of our own round trip.
+        cases = (
+            (
+                {"MAP_PROJ": 1, "TRUELAT1": 30.0, "TRUELAT2": 60.0,
+                 "STAND_LON": -97.0, "DX": 12_000.0, "DY": 12_000.0},
+                35.0, -105.0, (36.25, -102.5),
+                (19.33857315429392, 9.753658550444356),
+                (34.94476941906187, -104.65637841480091),
+            ),
+            (
+                {"MAP_PROJ": 1, "TRUELAT1": -30.0, "TRUELAT2": -60.0,
+                 "STAND_LON": 135.0, "DX": 9_000.0, "DY": 9_000.0},
+                -40.0, 130.0, (-38.5, 133.0),
+                (27.067605929010885, 19.201060718721692),
+                (-40.075131989992265, 130.2669794929356),
+            ),
+            (
+                {"MAP_PROJ": 2, "TRUELAT1": -60.0, "TRUELAT2": -60.0,
+                 "STAND_LON": 120.0, "DX": 15_000.0, "DY": 15_000.0},
+                -70.0, 115.0, (-68.0, -179.0),
+                (146.89973347619804, -64.51922458735578),
+                (-70.13239726128698, 116.00123728491964),
+            ),
+            (
+                {"MAP_PROJ": 3, "TRUELAT1": 20.0, "TRUELAT2": 20.0,
+                 "STAND_LON": 180.0, "DX": 10_000.0, "DY": 10_000.0},
+                5.0, 179.0, (7.0, -179.0),
+                (20.894530261306567, 21.010713477520625),
+                (4.928480170003198, 179.23929707619507),
+            ),
+            (
+                {"MAP_PROJ": 6, "TRUELAT1": 0.0, "TRUELAT2": 0.0,
+                 "STAND_LON": 10.0, "POLE_LAT": 45.0, "POLE_LON": 180.0},
+                35.0, 170.0, (36.0, 172.0),
+                (10.253320884232977, 0.8732490047699315),
+                (34.2587018327836, 170.5640257276045),
+            ),
+        )
+        for attrs, ref_lat, ref_lon, target, expected_xy, expected_sample in cases:
+            with self.subTest(map_proj=attrs["MAP_PROJ"], ref_lat=ref_lat):
+                dataset = _projection_dataset(
+                    attrs=attrs, ref_lat=ref_lat, ref_lon=ref_lon
+                )
+                actual_xy = WRF.ll_to_xy(
+                    dataset, *target, as_int=False, meta=False
+                )
+                actual_sample = WRF.xy_to_ll(dataset, 2.5, -0.75, meta=False)
+                np.testing.assert_allclose(actual_xy, expected_xy, atol=2e-12)
+                np.testing.assert_allclose(
+                    actual_sample, expected_sample, atol=2e-12
+                )
+
+    def test_coordinates_outside_domain_are_extrapolated_not_clamped(self):
+        dataset = _projection_dataset()
+        xy = WRF.ll_to_xy(dataset, -4.0, 20.0, as_int=False, meta=False)
+        np.testing.assert_allclose(xy, [10.0, -4.0], atol=1e-12)
+
+    def test_moving_domain_fails_explicitly(self):
+        dataset = _projection_dataset(moving_to=(0.25, 10.5))
+        with self.assertRaisesRegex(NotImplementedError, "moving-domain"):
+            WRF.ll_to_xy(dataset, 0.0, 10.0, meta=False)
+        with self.assertRaisesRegex(NotImplementedError, "moving-domain"):
+            WRF.xy_to_ll(dataset, 0.0, 0.0, meta=False)
+
+    def test_bad_inputs_and_metadata_fail_clearly(self):
+        dataset = _projection_dataset()
+        with self.assertRaisesRegex(ValueError, "same length"):
+            WRF.ll_to_xy(dataset, [0.0, 1.0], [10.0], meta=False)
+        with self.assertRaisesRegex(ValueError, "stagger"):
+            WRF.ll_to_xy(dataset, 0.0, 10.0, stagger="w", meta=False)
+        with self.assertRaisesRegex(ValueError, "timeidx"):
+            WRF.ll_to_xy(dataset, 0.0, 10.0, timeidx=-1, meta=False)
+
+        missing_dx = _projection_dataset()
+        del missing_dx.attrs["DX"]
+        with self.assertRaisesRegex(ValueError, "DX"):
+            WRF.ll_to_xy(missing_dx, 0.0, 10.0, meta=False)
+
+    def test_optional_xarray_metadata_matches_wrf_python_conventions(self):
+        try:
+            import xarray  # noqa: F401
+        except ImportError:
+            self.skipTest("xarray is optional")
+
+        dataset = _projection_dataset()
+        xy = WRF.ll_to_xy(dataset, 0.25, 10.5, squeeze=False)
+        self.assertEqual(xy.name, "xy")
+        self.assertEqual(xy.dims, ("x_y", "idx"))
+        np.testing.assert_array_equal(xy.coords["x_y"], ["x", "y"])
+        pair = xy.coords["latlon_coord"].values[0]
+        self.assertIsInstance(pair, WRF.CoordPair)
+        self.assertEqual((pair.lat, pair.lon), (0.25, 10.5))
+
+        latlon = WRF.xy_to_ll(dataset, [0.5], [0.25], squeeze=False)
+        self.assertEqual(latlon.name, "latlon")
+        self.assertEqual(latlon.dims, ("lat_lon", "idx"))
+        np.testing.assert_array_equal(latlon.coords["lat_lon"], ["lat", "lon"])
+        pair = latlon.coords["xy_coord"].values[0]
+        self.assertEqual((pair.x, pair.y), (0.5, 0.25))
 
 
 if __name__ == "__main__":
