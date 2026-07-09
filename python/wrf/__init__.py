@@ -618,16 +618,197 @@ def interplevel(field_3d, vert_coord_3d, target_level):
 # get_cartopy -- CRS projection from WRF file
 # =========================================================================
 
+_WRF_EARTH_RADIUS = 6_370_000.0
+_WRF_PROJECTION_ATTRS = (
+    "MAP_PROJ",
+    "TRUELAT1",
+    "TRUELAT2",
+    "STAND_LON",
+    "MOAD_CEN_LAT",
+    "CEN_LAT",
+    "CEN_LON",
+    "POLE_LAT",
+    "POLE_LON",
+)
+
+
+def _wrf_cartopy_globe(ccrs):
+    """Return the spherical globe used by WRF's map projections."""
+    return ccrs.Globe(
+        ellipse=None,
+        semimajor_axis=_WRF_EARTH_RADIUS,
+        semiminor_axis=_WRF_EARTH_RADIUS,
+        nadgrids="@null",
+    )
+
+
+def _read_wrf_projection_attrs(nc):
+    """Read the available WRF projection globals from a NetCDF handle."""
+    attrs = {}
+    for name in _WRF_PROJECTION_ATTRS:
+        try:
+            value = nc.getncattr(name)
+        except (AttributeError, KeyError):
+            continue
+
+        if np.ma.is_masked(value):
+            continue
+        try:
+            value = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"WRF projection attribute {name} is not numeric: {value!r}"
+            ) from exc
+        if not np.isfinite(value):
+            raise ValueError(
+                f"WRF projection attribute {name} is not finite: {value!r}"
+            )
+        attrs[name] = value
+    return attrs
+
+
+def _cartopy_from_wrf_attrs(ccrs, attrs):
+    """Construct Cartopy CRS parameters using NCAR wrf-python semantics.
+
+    The compatibility contract is NCAR/wrf-python ``projection.py`` at
+    commit 124a8336529af6397fe150e14bd436d923122cdd.
+    """
+    attrs = {str(key).upper(): value for key, value in attrs.items()}
+
+    try:
+        map_proj_value = float(attrs["MAP_PROJ"])
+    except KeyError as exc:
+        raise ValueError("WRF file is missing required MAP_PROJ attribute") from exc
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Invalid WRF MAP_PROJ value: {attrs['MAP_PROJ']!r}"
+        ) from exc
+    if not np.isfinite(map_proj_value) or not map_proj_value.is_integer():
+        raise ValueError(f"Invalid WRF MAP_PROJ value: {map_proj_value!r}")
+    map_proj = int(map_proj_value)
+
+    def optional(name, fallback=None):
+        value = attrs.get(name, fallback)
+        if value is None:
+            return None
+        try:
+            value = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"WRF projection attribute {name} is not numeric: {value!r}"
+            ) from exc
+        if not np.isfinite(value):
+            raise ValueError(
+                f"WRF projection attribute {name} is not finite: {value!r}"
+            )
+        return value
+
+    def required(name, fallback=None):
+        value = optional(name, fallback)
+        if value is None:
+            raise ValueError(
+                f"WRF MAP_PROJ={map_proj} requires projection attribute {name}"
+            )
+        return value
+
+    cen_lat = optional("CEN_LAT")
+    cen_lon = optional("CEN_LON")
+    moad_cen_lat = optional("MOAD_CEN_LAT", cen_lat)
+    stand_lon = optional("STAND_LON", cen_lon)
+    truelat1 = optional("TRUELAT1")
+    truelat2 = optional("TRUELAT2")
+    pole_lat = optional("POLE_LAT")
+    pole_lon = optional("POLE_LON")
+    globe = _wrf_cartopy_globe(ccrs)
+
+    if map_proj == 1:
+        stand_lon = required("STAND_LON", cen_lon)
+        moad_cen_lat = required("MOAD_CEN_LAT", cen_lat)
+        truelat1 = required("TRUELAT1")
+        standard_parallels = [truelat1]
+        # wrf-python treats an absent or out-of-range TRUELAT2 as missing.
+        if truelat2 is not None and abs(truelat2) <= 90.0:
+            standard_parallels.append(truelat2)
+        cutoff = -30.0 if moad_cen_lat >= 0.0 else 30.0
+        return ccrs.LambertConformal(
+            central_longitude=stand_lon,
+            central_latitude=moad_cen_lat,
+            standard_parallels=tuple(standard_parallels),
+            globe=globe,
+            cutoff=cutoff,
+        )
+
+    if map_proj == 2:
+        stand_lon = required("STAND_LON", cen_lon)
+        truelat1 = required("TRUELAT1")
+        return ccrs.Stereographic(
+            central_latitude=-90.0 if truelat1 < 0.0 else 90.0,
+            central_longitude=stand_lon,
+            true_scale_latitude=truelat1,
+            globe=globe,
+        )
+
+    if map_proj == 3:
+        # WRF and wrf-python default a missing Mercator standard longitude
+        # to zero, not to the nested-domain center longitude.
+        stand_lon = optional("STAND_LON", 0.0)
+        kwargs = {
+            "central_longitude": stand_lon,
+            "globe": globe,
+        }
+        if truelat1 is not None and truelat1 != 0.0:
+            kwargs["latitude_true_scale"] = truelat1
+        return ccrs.Mercator(**kwargs)
+
+    if map_proj == 6:
+        stand_lon = required("STAND_LON", cen_lon)
+
+        # WRF's default pole describes an ordinary, unrotated lat/lon grid.
+        # Older files sometimes omit both default POLE_* attributes.
+        if ((pole_lat == 90.0 and pole_lon == 0.0) or
+                (pole_lat is None and pole_lon is None)):
+            return ccrs.PlateCarree(
+                central_longitude=stand_lon,
+                globe=globe,
+            )
+
+        if pole_lat is None or pole_lon is None:
+            raise ValueError(
+                "Rotated WRF MAP_PROJ=6 requires both POLE_LAT and POLE_LON"
+            )
+
+        # Match NCAR/wrf-python's RotatedLatLon conversion. POLE_LON normally
+        # distinguishes the northern (180) and southern (0) conventions.
+        north = True
+        if pole_lon == 0.0:
+            north = False
+        elif pole_lon != 180.0 and moad_cen_lat is not None:
+            north = moad_cen_lat >= 0.0
+        cart_pole_lat = pole_lat if north else -pole_lat
+        cart_pole_lon = -stand_lon - 180.0 if north else -stand_lon
+        return ccrs.RotatedPole(
+            pole_longitude=cart_pole_lon,
+            pole_latitude=cart_pole_lat,
+            central_rotated_longitude=180.0 - pole_lon,
+            globe=globe,
+        )
+
+    raise ValueError(
+        f"Unsupported WRF map projection MAP_PROJ={map_proj}. "
+        "Supported: 1 (Lambert), 2 (Polar Stereographic), "
+        "3 (Mercator), 6 (Lat-Lon)."
+    )
+
+
 def get_cartopy(wrffile):
     """Get a cartopy CRS projection from a WRF file.
 
     Drop-in replacement for ``wrf.get_cartopy()`` from wrf-python.
 
-    First tries to read ``MAP_PROJ``, ``TRUELAT1``, ``TRUELAT2``,
-    ``STAND_LON``, ``CEN_LAT``, and ``CEN_LON`` global attributes via
-    netCDF4 (if available).  Falls back to inferring the projection from
-    the lat/lon arrays in the Rust WrfFile handle when netCDF4 is not
-    installed.
+    First reads the WRF global projection attributes via netCDF4 (if
+    available), following NCAR wrf-python's projection parameter semantics.
+    Falls back to inferring the projection from the lat/lon arrays in the
+    Rust WrfFile handle when netCDF4 is not installed.
 
     Parameters
     ----------
@@ -656,40 +837,10 @@ def get_cartopy(wrffile):
 
         nc = _NCDataset(wf.path, "r")
         try:
-            map_proj = int(nc.getncattr("MAP_PROJ"))
-            truelat1 = float(nc.getncattr("TRUELAT1"))
-            truelat2 = float(nc.getncattr("TRUELAT2"))
-            stand_lon = float(nc.getncattr("STAND_LON"))
-            cen_lat = float(nc.getncattr("CEN_LAT"))
-            cen_lon = float(nc.getncattr("CEN_LON"))
+            attrs = _read_wrf_projection_attrs(nc)
         finally:
             nc.close()
-
-        if map_proj == 1:
-            return ccrs.LambertConformal(
-                central_longitude=stand_lon,
-                central_latitude=cen_lat,
-                standard_parallels=(truelat1, truelat2),
-            )
-        elif map_proj == 2:
-            return ccrs.Stereographic(
-                central_latitude=cen_lat,
-                central_longitude=stand_lon,
-                true_scale_latitude=truelat1,
-            )
-        elif map_proj == 3:
-            return ccrs.Mercator(
-                central_longitude=cen_lon,
-                latitude_true_scale=truelat1,
-            )
-        elif map_proj == 6:
-            return ccrs.PlateCarree(central_longitude=cen_lon)
-        else:
-            raise ValueError(
-                f"Unsupported WRF map projection MAP_PROJ={map_proj}. "
-                f"Supported: 1 (Lambert), 2 (Polar Stereographic), "
-                f"3 (Mercator), 6 (Lat-Lon)."
-            )
+        return _cartopy_from_wrf_attrs(ccrs, attrs)
     except ImportError:
         pass  # netCDF4 not available -- fall through to inference
 
@@ -721,7 +872,10 @@ def get_cartopy(wrffile):
 
     if lat_uniform and lon_uniform:
         # Regular lat-lon grid
-        return ccrs.PlateCarree(central_longitude=cen_lon)
+        return ccrs.PlateCarree(
+            central_longitude=cen_lon,
+            globe=_wrf_cartopy_globe(ccrs),
+        )
     else:
         # Default to Lambert Conformal -- the most common WRF projection.
         # Use the domain center and reasonable standard parallels.
@@ -729,6 +883,8 @@ def get_cartopy(wrffile):
             central_longitude=cen_lon,
             central_latitude=cen_lat,
             standard_parallels=(cen_lat - 5.0, cen_lat + 5.0),
+            globe=_wrf_cartopy_globe(ccrs),
+            cutoff=-30.0 if cen_lat >= 0.0 else 30.0,
         )
 
 
@@ -764,48 +920,37 @@ def latlon_coords(wrffile, timeidx=0):
 # ll_to_xy -- lat/lon to grid indices (fractional)
 # =========================================================================
 
-def ll_to_xy(wrffile, latitude, longitude, timeidx=0):
-    """Convert lat/lon to fractional grid (x, y) indices.
+def _ll_to_xy_scalar(lat2d, lon2d, latitude, longitude):
+    """Convert one lat/lon pair to fractional grid coordinates."""
+    latitude = float(latitude)
+    longitude = float(longitude)
+    if not np.isfinite(latitude) or not np.isfinite(longitude):
+        raise ValueError("latitude and longitude must be finite")
 
-    Drop-in replacement for ``wrf.ll_to_xy()`` from wrf-python.
+    if lat2d.ndim != 2 or lon2d.ndim != 2 or lat2d.shape != lon2d.shape:
+        raise ValueError("latitude and longitude grids must be matching 2-D arrays")
+    if lat2d.size == 0:
+        raise ValueError("latitude and longitude grids must not be empty")
 
-    Finds the position on the WRF grid corresponding to the given
-    latitude/longitude by inverse-distance interpolation, returning
-    fractional indices (floats) so callers can do sub-grid interpolation.
+    valid = np.isfinite(lat2d) & np.isfinite(lon2d)
+    if not np.any(valid):
+        raise ValueError("latitude and longitude grids contain no finite points")
 
-    Parameters
-    ----------
-    wrffile : WrfFile, str, or netCDF4.Dataset
-        The WRF output file.
-    latitude : float
-        Target latitude in degrees.
-    longitude : float
-        Target longitude in degrees.
-    timeidx : int, optional
-        Time index (default 0).
-
-    Returns
-    -------
-    (x, y) : tuple of float
-        Fractional grid indices (x = west-east, y = south-north).
-        Integer parts give the grid cell; fractional parts give position
-        within the cell.
-    """
-    lat2d, lon2d = latlon_coords(wrffile, timeidx=timeidx)
-
-    # Find the nearest grid point
+    # This intentionally retains the existing local-grid approximation.
+    # Longitudes that cross the antimeridian need unwrapping in a future
+    # projection-aware implementation.
     dist = (lat2d - latitude) ** 2 + (lon2d - longitude) ** 2
+    dist = np.where(valid, dist, np.inf)
     jn, in_ = np.unravel_index(np.argmin(dist), dist.shape)
 
-    # Refine to fractional indices using bilinear interpolation
-    # Search in the 2x2 cell around the nearest point
+    # Refine to fractional indices using bilinear interpolation in the cells
+    # adjacent to the nearest point.
     ny, nx = lat2d.shape
     best_x = float(in_)
     best_y = float(jn)
 
     for j0 in range(max(0, jn - 1), min(ny - 1, jn + 1)):
         for i0 in range(max(0, in_ - 1), min(nx - 1, in_ + 1)):
-            # Corners of this cell
             lat00 = lat2d[j0, i0]
             lat10 = lat2d[j0, i0 + 1]
             lat01 = lat2d[j0 + 1, i0]
@@ -814,24 +959,46 @@ def ll_to_xy(wrffile, latitude, longitude, timeidx=0):
             lon10 = lon2d[j0, i0 + 1]
             lon01 = lon2d[j0 + 1, i0]
             lon11 = lon2d[j0 + 1, i0 + 1]
+            corners = (
+                lat00, lat10, lat01, lat11,
+                lon00, lon10, lon01, lon11,
+            )
+            if not np.all(np.isfinite(corners)):
+                continue
 
-            # Solve for (s, t) in [0,1]x[0,1] using iterative approach
-            # Bilinear: lat = (1-s)(1-t)*lat00 + s(1-t)*lat10 + (1-s)t*lat01 + st*lat11
-            # Start from center
             s, t = 0.5, 0.5
             for _ in range(10):
-                lat_est = (1-s)*(1-t)*lat00 + s*(1-t)*lat10 + (1-s)*t*lat01 + s*t*lat11
-                lon_est = (1-s)*(1-t)*lon00 + s*(1-t)*lon10 + (1-s)*t*lon01 + s*t*lon11
-
+                lat_est = (
+                    (1 - s) * (1 - t) * lat00
+                    + s * (1 - t) * lat10
+                    + (1 - s) * t * lat01
+                    + s * t * lat11
+                )
+                lon_est = (
+                    (1 - s) * (1 - t) * lon00
+                    + s * (1 - t) * lon10
+                    + (1 - s) * t * lon01
+                    + s * t * lon11
+                )
                 dlat = latitude - lat_est
                 dlon = longitude - lon_est
 
-                # Jacobian approximation
-                dlat_ds = -(1-t)*lat00 + (1-t)*lat10 - t*lat01 + t*lat11
-                dlat_dt = -(1-s)*lat00 - s*lat10 + (1-s)*lat01 + s*lat11
-                dlon_ds = -(1-t)*lon00 + (1-t)*lon10 - t*lon01 + t*lon11
-                dlon_dt = -(1-s)*lon00 - s*lon10 + (1-s)*lon01 + s*lon11
-
+                dlat_ds = (
+                    -(1 - t) * lat00 + (1 - t) * lat10
+                    - t * lat01 + t * lat11
+                )
+                dlat_dt = (
+                    -(1 - s) * lat00 - s * lat10
+                    + (1 - s) * lat01 + s * lat11
+                )
+                dlon_ds = (
+                    -(1 - t) * lon00 + (1 - t) * lon10
+                    - t * lon01 + t * lon11
+                )
+                dlon_dt = (
+                    -(1 - s) * lon00 - s * lon10
+                    + (1 - s) * lon01 + s * lon11
+                )
                 det = dlat_ds * dlon_dt - dlat_dt * dlon_ds
                 if abs(det) < 1e-20:
                     break
@@ -842,8 +1009,94 @@ def ll_to_xy(wrffile, latitude, longitude, timeidx=0):
                 t += dt
 
             if 0.0 <= s <= 1.0 and 0.0 <= t <= 1.0:
-                best_x = float(i0) + s
-                best_y = float(j0) + t
-                return best_x, best_y
+                return float(i0) + s, float(j0) + t
 
     return best_x, best_y
+
+
+def ll_to_xy(wrffile, latitude, longitude, timeidx=0, squeeze=True,
+             meta=True, stagger=None, as_int=True):
+    """Convert latitude/longitude values to WRF grid coordinates.
+
+    Drop-in replacement for ``wrf.ll_to_xy()`` from wrf-python.
+
+    The returned NumPy array follows wrf-python's leading-axis convention:
+    ``result[0, ...]`` is x (west-east) and ``result[1, ...]`` is y
+    (south-north). Scalar inputs return shape ``(2,)``; sequences return
+    shape ``(2, npoints)``. Coordinates are rounded to integers by default,
+    matching NCAR wrf-python; pass ``as_int=False`` for fractional values.
+
+    Parameters
+    ----------
+    wrffile : WrfFile, str, or netCDF4.Dataset
+        The WRF output file.
+    latitude : float or sequence of float
+        Target latitude value(s) in degrees.
+    longitude : float or sequence of float
+        Target longitude value(s) in degrees. Sequences must be the same
+        length as ``latitude`` and are flattened like wrf-python.
+    timeidx : int, optional
+        Time index (default 0).
+    squeeze, meta : bool, optional
+        Accepted for wrf-python call compatibility. This implementation
+        always returns a NumPy array and has no moving-domain dimensions to
+        squeeze.
+    stagger : {None, "m"}, optional
+        Mass-grid coordinates are supported. Staggered u/v coordinates are
+        not yet implemented.
+    as_int : bool, optional
+        Round with ``numpy.rint`` and return integers (default True).
+
+    Returns
+    -------
+    ndarray
+        Grid coordinates with leading dimension 2 (0=x, 1=y).
+
+    Notes
+    -----
+    The current inverse lookup scans the entire grid once per requested
+    point and interpolates directly in longitude degrees. It is therefore
+    slower than projection-based conversion for large point collections and
+    does not yet handle grids crossing the antimeridian.
+    """
+    del squeeze, meta  # Accepted for signature compatibility.
+    if stagger is not None and str(stagger).lower() != "m":
+        raise NotImplementedError(
+            "ll_to_xy currently supports only the mass grid (stagger=None/'m')"
+        )
+
+    lat2d, lon2d = latlon_coords(wrffile, timeidx=timeidx)
+    lat2d = np.asarray(lat2d, dtype=np.float64)
+    lon2d = np.asarray(lon2d, dtype=np.float64)
+    latitude_values = np.asarray(latitude)
+    longitude_values = np.asarray(longitude)
+
+    latitude_scalar = latitude_values.ndim == 0
+    longitude_scalar = longitude_values.ndim == 0
+    if latitude_scalar != longitude_scalar:
+        raise ValueError("'latitude' and 'longitude' must be the same length")
+
+    if latitude_scalar:
+        result = np.asarray(
+            _ll_to_xy_scalar(
+                lat2d,
+                lon2d,
+                latitude_values.item(),
+                longitude_values.item(),
+            ),
+            dtype=np.float64,
+        )
+    else:
+        latitude_values = latitude_values.ravel()
+        longitude_values = longitude_values.ravel()
+        if latitude_values.size != longitude_values.size:
+            raise ValueError("'latitude' and 'longitude' must be the same length")
+
+        result = np.empty((2, latitude_values.size), dtype=np.float64)
+        for idx, (lat, lon) in enumerate(
+                zip(latitude_values, longitude_values)):
+            result[:, idx] = _ll_to_xy_scalar(lat2d, lon2d, lat, lon)
+
+    if as_int:
+        result = np.rint(result).astype(int)
+    return result
