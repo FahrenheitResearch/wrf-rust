@@ -152,13 +152,35 @@ pub fn interp_linear(x: f64, x1: f64, x2: f64, y1: f64, y2: f64) -> f64 {
     y1 + (x - x1) * (y2 - y1) / (x2 - x1)
 }
 
+/// Locate the first pressure interval containing `target_p` in a
+/// surface-first, monotonically decreasing profile.
+///
+/// `partition_point` uses the same boundary as the former linear scan: a
+/// target exactly equal to a model pressure belongs to the interval below
+/// the preceding level.  This matters for preserving interpolation results
+/// when a profile contains repeated pressures.
+fn pressure_bracket_index(target_p: f64, p_prof: &[f64]) -> Option<usize> {
+    if p_prof.len() < 2 {
+        return None;
+    }
+
+    let insertion = p_prof.partition_point(|pressure| *pressure > target_p);
+    let candidate = insertion.saturating_sub(1);
+    if candidate + 1 < p_prof.len()
+        && p_prof[candidate] >= target_p
+        && target_p >= p_prof[candidate + 1]
+    {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
 /// Interpolate height at a target pressure from pressure and height profiles
 /// (both in decreasing pressure order, i.e. surface first).
 pub fn get_height_at_pres(target_p: f64, p_prof: &[f64], h_prof: &[f64]) -> f64 {
-    for i in 0..p_prof.len() - 1 {
-        if p_prof[i] >= target_p && target_p >= p_prof[i + 1] {
-            return interp_linear(target_p, p_prof[i], p_prof[i + 1], h_prof[i], h_prof[i + 1]);
-        }
+    if let Some(i) = pressure_bracket_index(target_p, p_prof) {
+        return interp_linear(target_p, p_prof[i], p_prof[i + 1], h_prof[i], h_prof[i + 1]);
     }
     // Bounds check
     if target_p > p_prof[0] {
@@ -178,15 +200,13 @@ pub fn get_env_at_pres(
     t_prof: &[f64],
     td_prof: &[f64],
 ) -> (f64, f64) {
-    for i in 0..p_prof.len() - 1 {
-        if p_prof[i] >= target_p && target_p >= p_prof[i + 1] {
-            let log_p = target_p.ln();
-            let log_p1 = p_prof[i].ln();
-            let log_p2 = p_prof[i + 1].ln();
-            let t_interp = interp_linear(log_p, log_p1, log_p2, t_prof[i], t_prof[i + 1]);
-            let td_interp = interp_linear(log_p, log_p1, log_p2, td_prof[i], td_prof[i + 1]);
-            return (t_interp, td_interp);
-        }
+    if let Some(i) = pressure_bracket_index(target_p, p_prof) {
+        let log_p = target_p.ln();
+        let log_p1 = p_prof[i].ln();
+        let log_p2 = p_prof[i + 1].ln();
+        let t_interp = interp_linear(log_p, log_p1, log_p2, t_prof[i], t_prof[i + 1]);
+        let td_interp = interp_linear(log_p, log_p1, log_p2, td_prof[i], td_prof[i + 1]);
+        return (t_interp, td_interp);
     }
     (t_prof[t_prof.len() - 1], td_prof[td_prof.len() - 1])
 }
@@ -946,8 +966,8 @@ pub fn el(p_profile: &[f64], t_profile: &[f64], td_profile: &[f64]) -> Option<(f
 #[cfg(test)]
 mod tests {
     use super::{
-        cape_cin_core, drylift, get_env_at_pres, mixratio, parcel_virtual_temperature, satlift,
-        virtual_temp, wobf, WrfEnergyTrace, ROCP, ZEROCNK,
+        cape_cin_core, drylift, get_env_at_pres, mixratio, parcel_virtual_temperature,
+        pressure_bracket_index, satlift, virtual_temp, wobf, WrfEnergyTrace, ROCP, ZEROCNK,
     };
 
     const PRESSURE: [f64; 14] = [
@@ -987,6 +1007,21 @@ mod tests {
 
     fn surface_cape(temperature: &[f64], top_m: Option<f64>) -> (f64, f64, f64, f64) {
         parcel_cape(temperature, "sb", top_m)
+    }
+
+    #[test]
+    fn pressure_bracket_lookup_matches_the_first_linear_match() {
+        let pressure = [1_000.0, 950.0, 900.0, 900.0, 800.0, 700.0];
+        let targets = [
+            1_001.0, 1_000.0, 975.0, 950.0, 925.0, 900.0, 899.0, 850.0, 800.0, 750.0, 700.0, 699.0,
+        ];
+
+        for target in targets {
+            let linear = pressure
+                .windows(2)
+                .position(|pair| pair[0] >= target && target >= pair[1]);
+            assert_eq!(pressure_bracket_index(target, &pressure), linear);
+        }
     }
 
     #[test]
