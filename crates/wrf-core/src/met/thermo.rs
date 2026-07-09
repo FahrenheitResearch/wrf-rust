@@ -44,7 +44,7 @@ pub fn wobf(t: f64) -> f64 {
 /// p: Pressure (hPa), thetam: Saturation Potential Temperature (Celsius).
 /// Uses 7 Newton-Raphson iterations.
 pub fn satlift(p: f64, thetam: f64) -> f64 {
-    if p >= 1000.0 {
+    if (p - 1000.0).abs() <= 0.001 {
         return thetam;
     }
 
@@ -754,4 +754,25 @@ pub fn el(p_profile: &[f64], t_profile: &[f64], td_profile: &[f64]) -> Option<(f
     }
 
     last_el
+}
+
+#[cfg(test)]
+mod tests {
+    use super::satlift;
+
+    #[test]
+    fn satlift_treats_only_pressures_near_1000_as_identity() {
+        assert_eq!(satlift(999.9995, 20.0), 20.0);
+        assert_eq!(satlift(1_000.0005, 20.0), 20.0);
+    }
+
+    #[test]
+    fn satlift_warms_parcels_below_high_pressure_surfaces() {
+        let at_1020_hpa = satlift(1_020.0, 20.0);
+        let at_1050_hpa = satlift(1_050.0, 20.0);
+
+        assert!((at_1020_hpa - 20.7765).abs() < 0.001);
+        assert!((at_1050_hpa - 21.9104).abs() < 0.001);
+        assert!(at_1050_hpa > at_1020_hpa);
+    }
 }
