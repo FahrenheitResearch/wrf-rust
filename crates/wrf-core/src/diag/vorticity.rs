@@ -68,12 +68,8 @@ impl GridGeometry {
         let scalar_len = nxy.checked_mul(nz).ok_or_else(grid_size_overflow)?;
         let u_plane_len = nxp1.checked_mul(ny).ok_or_else(grid_size_overflow)?;
         let v_plane_len = nx.checked_mul(nyp1).ok_or_else(grid_size_overflow)?;
-        let u_len = u_plane_len
-            .checked_mul(nz)
-            .ok_or_else(grid_size_overflow)?;
-        let v_len = v_plane_len
-            .checked_mul(nz)
-            .ok_or_else(grid_size_overflow)?;
+        let u_len = u_plane_len.checked_mul(nz).ok_or_else(grid_size_overflow)?;
+        let v_len = v_plane_len.checked_mul(nz).ok_or_else(grid_size_overflow)?;
 
         Ok(Self {
             nx,
@@ -206,11 +202,7 @@ fn expect_var_shape(f: &WrfFile, name: &str, expected: &[usize]) -> WrfResult<()
     Ok(())
 }
 
-fn read_vorticity_fields(
-    f: &WrfFile,
-    t: usize,
-    grid: GridGeometry,
-) -> WrfResult<VorticityFields> {
+fn read_vorticity_fields(f: &WrfFile, t: usize, grid: GridGeometry) -> WrfResult<VorticityFields> {
     expect_var_shape(f, "U", &[grid.nz, grid.ny, grid.nxp1])?;
     expect_var_shape(f, "V", &[grid.nz, grid.nyp1, grid.nx])?;
     expect_var_shape(f, "MAPFAC_U", &[grid.ny, grid.nxp1])?;
@@ -251,24 +243,20 @@ fn absolute_vorticity_at(
     let mm = fields.mapfac_m[mass_index] * fields.mapfac_m[mass_index];
 
     let dudy = 0.5
-        * (fields.u[grid.u_index(k, jp1, i)]
-            / fields.mapfac_u[grid.mapfac_u_index(jp1, i)]
+        * (fields.u[grid.u_index(k, jp1, i)] / fields.mapfac_u[grid.mapfac_u_index(jp1, i)]
             + fields.u[grid.u_index(k, jp1, i + 1)]
                 / fields.mapfac_u[grid.mapfac_u_index(jp1, i + 1)]
-            - fields.u[grid.u_index(k, jm1, i)]
-                / fields.mapfac_u[grid.mapfac_u_index(jm1, i)]
+            - fields.u[grid.u_index(k, jm1, i)] / fields.mapfac_u[grid.mapfac_u_index(jm1, i)]
             - fields.u[grid.u_index(k, jm1, i + 1)]
                 / fields.mapfac_u[grid.mapfac_u_index(jm1, i + 1)])
         / dsy
         * mm;
 
     let dvdx = 0.5
-        * (fields.v[grid.v_index(k, j, ip1)]
-            / fields.mapfac_v[grid.mapfac_v_index(j, ip1)]
+        * (fields.v[grid.v_index(k, j, ip1)] / fields.mapfac_v[grid.mapfac_v_index(j, ip1)]
             + fields.v[grid.v_index(k, j + 1, ip1)]
                 / fields.mapfac_v[grid.mapfac_v_index(j + 1, ip1)]
-            - fields.v[grid.v_index(k, j, im1)]
-                / fields.mapfac_v[grid.mapfac_v_index(j, im1)]
+            - fields.v[grid.v_index(k, j, im1)] / fields.mapfac_v[grid.mapfac_v_index(j, im1)]
             - fields.v[grid.v_index(k, j + 1, im1)]
                 / fields.mapfac_v[grid.mapfac_v_index(j + 1, im1)])
         / dsx
@@ -277,10 +265,7 @@ fn absolute_vorticity_at(
     dvdx - dudy + fields.coriolis[mass_index]
 }
 
-fn wrf_absolute_vorticity(
-    fields: &VorticityFields,
-    grid: GridGeometry,
-) -> WrfResult<Vec<f64>> {
+fn wrf_absolute_vorticity(fields: &VorticityFields, grid: GridGeometry) -> WrfResult<Vec<f64>> {
     fields.validate(grid)?;
     let mut output = vec![0.0; grid.scalar_len];
 
@@ -288,8 +273,7 @@ fn wrf_absolute_vorticity(
         for j in 0..grid.ny {
             for i in 0..grid.nx {
                 let index = grid.scalar_index(k, j, i);
-                output[index] =
-                    absolute_vorticity_at(fields, grid, k, j, i) * AVO_DISPLAY_SCALE;
+                output[index] = absolute_vorticity_at(fields, grid, k, j, i) * AVO_DISPLAY_SCALE;
             }
         }
     }
@@ -335,14 +319,12 @@ fn wrf_potential_vorticity(
                 }
 
                 let dudp = 0.5
-                    * (fields.u[grid.u_index(kp1, j, i)]
-                        + fields.u[grid.u_index(kp1, j, i + 1)]
+                    * (fields.u[grid.u_index(kp1, j, i)] + fields.u[grid.u_index(kp1, j, i + 1)]
                         - fields.u[grid.u_index(km1, j, i)]
                         - fields.u[grid.u_index(km1, j, i + 1)])
                     / dp;
                 let dvdp = 0.5
-                    * (fields.v[grid.v_index(kp1, j, i)]
-                        + fields.v[grid.v_index(kp1, j + 1, i)]
+                    * (fields.v[grid.v_index(kp1, j, i)] + fields.v[grid.v_index(kp1, j + 1, i)]
                         - fields.v[grid.v_index(km1, j, i)]
                         - fields.v[grid.v_index(km1, j + 1, i)])
                     / dp;
@@ -360,9 +342,7 @@ fn wrf_potential_vorticity(
 
                 // Preserve the two scale operations in the pinned Fortran:
                 // first *10000, then *100, yielding PVU.
-                let pv = -WRF_G
-                    * (dthdp * avort - dvdp * dthdx + dudp * dthdy)
-                    * PVO_FIRST_SCALE;
+                let pv = -WRF_G * (dthdp * avort - dvdp * dthdx + dudp * dthdy) * PVO_FIRST_SCALE;
                 output[index] = pv * PVO_SECOND_SCALE;
             }
         }
@@ -607,8 +587,7 @@ mod tests {
                 for i in 0..grid.nx {
                     let mass_index = grid.mass_index(j, i);
                     let mapfac = mapfac_m[mass_index];
-                    let avort =
-                        (dvdx - dudy) * mapfac.powi(2) + coriolis[mass_index];
+                    let avort = (dvdx - dudy) * mapfac.powi(2) + coriolis[mass_index];
                     let local_dudp = 0.5
                         * dudp
                         * (mapfac_u[grid.mapfac_u_index(j, i)]
@@ -617,16 +596,14 @@ mod tests {
                         * dvdp
                         * (mapfac_v[grid.mapfac_v_index(j, i)]
                             + mapfac_v[grid.mapfac_v_index(j + 1, i)]);
-                    let full_ertel_term = dtheta_dp * avort
-                        - local_dvdp * dtheta_dx * mapfac
+                    let full_ertel_term = dtheta_dp * avort - local_dvdp * dtheta_dx * mapfac
                         + local_dudp * dtheta_dy * mapfac;
-                    let expected = -WRF_G * full_ertel_term * PVO_FIRST_SCALE
-                        * PVO_SECOND_SCALE;
+                    let expected = -WRF_G * full_ertel_term * PVO_FIRST_SCALE * PVO_SECOND_SCALE;
                     let index = grid.scalar_index(k, j, i);
                     assert_close(output[index], expected, 1.0e-8);
 
-                    let stretching_only = -WRF_G * dtheta_dp * avort * PVO_FIRST_SCALE
-                        * PVO_SECOND_SCALE;
+                    let stretching_only =
+                        -WRF_G * dtheta_dp * avort * PVO_FIRST_SCALE * PVO_SECOND_SCALE;
                     assert!((output[index] - stretching_only).abs() > 1.0e-3);
                 }
             }
