@@ -279,6 +279,205 @@ pub fn get_most_unstable_parcel(
 }
 
 // --- Core CAPE/CIN Computation ---
+// Layer selection follows DCAPECALC2D/DCAPECALC3D in NCAR wrf-python's
+// fortran/rip_cape.f90 (main @ 124a8336529af6397fe150e14bd436d923122cdd).
+// This crate retains its conventional negative CIN sign at the public API.
+
+#[derive(Clone, Copy, Debug)]
+struct WrfEnergyTrace {
+    accumulated: f64,
+    minimum: f64,
+    minimum_pressure: f64,
+}
+
+impl WrfEnergyTrace {
+    fn at_lcl(accumulated: f64, pressure: f64) -> Self {
+        Self {
+            accumulated,
+            minimum: accumulated,
+            minimum_pressure: pressure,
+        }
+    }
+
+    fn add_layer(&mut self, energy: f64, top_pressure: f64) {
+        self.accumulated += energy;
+        if self.accumulated < self.minimum {
+            self.minimum = self.accumulated;
+            self.minimum_pressure = top_pressure;
+        }
+    }
+
+    fn cape_cin(self) -> (f64, f64) {
+        (
+            (self.accumulated - self.minimum).max(0.0),
+            self.minimum.min(0.0),
+        )
+    }
+}
+
+fn parcel_virtual_temperature(
+    pressure: f64,
+    p_lcl: f64,
+    dry_theta_k: f64,
+    dry_mixratio_gkg: f64,
+    thetam: f64,
+) -> f64 {
+    if pressure > p_lcl {
+        let parcel_temperature_k = dry_theta_k * (pressure / 1000.0).powf(ROCP);
+        parcel_temperature_k * (1.0 + 0.61 * dry_mixratio_gkg / 1000.0) - ZEROCNK
+    } else {
+        let parcel_temperature = satlift(pressure, thetam);
+        virtual_temp(parcel_temperature, pressure, parcel_temperature)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parcel_temperature_excess(
+    pressure: f64,
+    p_prof: &[f64],
+    t_prof: &[f64],
+    td_prof: &[f64],
+    p_lcl: f64,
+    dry_theta_k: f64,
+    dry_mixratio_gkg: f64,
+    thetam: f64,
+) -> f64 {
+    let (environment_temperature, environment_dewpoint) =
+        get_env_at_pres(pressure, p_prof, t_prof, td_prof);
+    let environment_virtual_temperature = virtual_temp(
+        environment_temperature,
+        pressure,
+        environment_dewpoint,
+    );
+    parcel_virtual_temperature(
+        pressure,
+        p_lcl,
+        dry_theta_k,
+        dry_mixratio_gkg,
+        thetam,
+    ) - environment_virtual_temperature
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pressure_layer_energy(
+    bottom_pressure: f64,
+    top_pressure: f64,
+    p_prof: &[f64],
+    t_prof: &[f64],
+    td_prof: &[f64],
+    p_lcl: f64,
+    dry_theta_k: f64,
+    dry_mixratio_gkg: f64,
+    thetam: f64,
+) -> f64 {
+    if bottom_pressure <= top_pressure {
+        return 0.0;
+    }
+    let midpoint_pressure = (bottom_pressure + top_pressure) / 2.0;
+    RD * parcel_temperature_excess(
+        midpoint_pressure,
+        p_prof,
+        t_prof,
+        td_prof,
+        p_lcl,
+        dry_theta_k,
+        dry_mixratio_gkg,
+        thetam,
+    ) * (bottom_pressure / top_pressure).ln()
+}
+
+fn zero_crossing_pressure(
+    bottom_pressure: f64,
+    bottom_buoyancy: f64,
+    top_pressure: f64,
+    top_buoyancy: f64,
+) -> Option<f64> {
+    if bottom_buoyancy * top_buoyancy >= 0.0 {
+        return None;
+    }
+    let fraction = -bottom_buoyancy / (top_buoyancy - bottom_buoyancy);
+    Some(bottom_pressure + fraction * (top_pressure - bottom_pressure))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn integrate_moist_pressure_range(
+    bottom_pressure: f64,
+    top_pressure: f64,
+    p_prof: &[f64],
+    t_prof: &[f64],
+    td_prof: &[f64],
+    p_lcl: f64,
+    dry_theta_k: f64,
+    dry_mixratio_gkg: f64,
+    thetam: f64,
+    trace: &mut WrfEnergyTrace,
+) {
+    if bottom_pressure <= top_pressure {
+        return;
+    }
+
+    let bottom_buoyancy = parcel_temperature_excess(
+        bottom_pressure,
+        p_prof,
+        t_prof,
+        td_prof,
+        p_lcl,
+        dry_theta_k,
+        dry_mixratio_gkg,
+        thetam,
+    );
+    let top_buoyancy = parcel_temperature_excess(
+        top_pressure,
+        p_prof,
+        t_prof,
+        td_prof,
+        p_lcl,
+        dry_theta_k,
+        dry_mixratio_gkg,
+        thetam,
+    );
+
+    let crossing = zero_crossing_pressure(
+        bottom_pressure,
+        bottom_buoyancy,
+        top_pressure,
+        top_buoyancy,
+    );
+    let ranges = [
+        (bottom_pressure, crossing.unwrap_or(top_pressure)),
+        (crossing.unwrap_or(top_pressure), top_pressure),
+    ];
+
+    for (range_bottom, range_top) in ranges {
+        let pressure_depth = range_bottom - range_top;
+        if pressure_depth <= 0.0 {
+            continue;
+        }
+        let step_count = if pressure_depth > 10.0 {
+            (pressure_depth / 10.0) as usize + 1
+        } else {
+            1
+        };
+        let step_size = pressure_depth / step_count as f64;
+
+        for step in 0..step_count {
+            let step_bottom = range_bottom - step as f64 * step_size;
+            let step_top = range_bottom - (step + 1) as f64 * step_size;
+            let energy = pressure_layer_energy(
+                step_bottom,
+                step_top,
+                p_prof,
+                t_prof,
+                td_prof,
+                p_lcl,
+                dry_theta_k,
+                dry_mixratio_gkg,
+                thetam,
+            );
+            trace.add_layer(energy, step_top);
+        }
+    }
+}
 
 /// Compute CAPE, CIN, LCL height, and LFC height for a grid column.
 ///
@@ -383,100 +582,117 @@ pub fn cape_cin_core(
     let theta_start_c = theta_start_k - ZEROCNK;
     let thetam = theta_start_c - wobf(theta_start_c) + wobf(t_lcl);
 
-    // --- PASS 1: Geometric Scan for LFC and EL ---
-    let mut el_p = p_lcl;
-    let mut lfc_p = p_lcl;
+    let dry_theta_start_k = (t_start + ZEROCNK) * ((1000.0 / p_start).powf(ROCP));
+    let dry_parcel_mixratio = mixratio(p_start, td_start);
 
-    let mut found_positive_layer = false;
-    let mut in_pos_layer = false;
+    // NCAR wrf-python's RIP CAPE kernel defines the EL as the highest
+    // non-negative-buoyancy level above the LCL. Start the scan exactly at
+    // the LCL so the first crossing never evaluates a sub-LCL point with the
+    // moist parcel equation.
+    let mut previous_pressure = p_lcl;
+    let mut previous_buoyancy = parcel_temperature_excess(
+        p_lcl,
+        &p_prof,
+        &t_prof,
+        &td_prof,
+        p_lcl,
+        dry_theta_start_k,
+        dry_parcel_mixratio,
+        thetam,
+    );
+    let mut found_positive_layer = previous_buoyancy > 0.0;
+    let mut el_p = if found_positive_layer {
+        p_lcl
+    } else {
+        f64::NAN
+    };
 
-    // Find start index (first level at or above LCL)
-    let mut start_idx = 0;
-    for i in 0..p_prof.len() {
-        if p_prof[i] <= p_lcl {
-            start_idx = i;
-            break;
+    for &pressure in &p_prof {
+        if pressure >= p_lcl - 0.01 {
+            continue;
         }
-    }
-
-    for i in start_idx..p_prof.len() {
-        let p_curr = p_prof[i];
-
-        // Environmental Tv
-        let tv_env = virtual_temp(t_prof[i], p_curr, td_prof[i]);
-        // Parcel Tv
-        let t_parc = satlift(p_curr, thetam);
-        let tv_parc = virtual_temp(t_parc, p_curr, t_parc);
-
-        let buoyancy = tv_parc - tv_env;
+        let buoyancy = parcel_temperature_excess(
+            pressure,
+            &p_prof,
+            &t_prof,
+            &td_prof,
+            p_lcl,
+            dry_theta_start_k,
+            dry_parcel_mixratio,
+            thetam,
+        );
 
         if buoyancy > 0.0 {
-            if !in_pos_layer {
-                in_pos_layer = true;
-
-                // Find crossing (LFC of this layer)
-                let curr_pos_bottom = if i > 0 {
-                    let p_prev = p_prof[i - 1];
-                    let tv_env_prev = virtual_temp(t_prof[i - 1], p_prev, td_prof[i - 1]);
-                    let t_parc_prev = satlift(p_prev, thetam);
-                    let tv_parc_prev = virtual_temp(t_parc_prev, p_prev, t_parc_prev);
-                    let buoy_prev = tv_parc_prev - tv_env_prev;
-
-                    if buoyancy != buoy_prev {
-                        let frac = (0.0 - buoy_prev) / (buoyancy - buoy_prev);
-                        p_prev + frac * (p_curr - p_prev)
-                    } else {
-                        p_curr
-                    }
-                } else {
-                    p_curr
-                };
-
-                lfc_p = curr_pos_bottom;
-                el_p = p_prof[p_prof.len() - 1];
-                found_positive_layer = true;
-            }
-        } else {
-            // buoyancy <= 0
-            if in_pos_layer {
-                in_pos_layer = false;
-
-                // Find crossing (EL)
-                let p_prev = p_prof[i - 1];
-                let tv_env_prev = virtual_temp(t_prof[i - 1], p_prev, td_prof[i - 1]);
-                let t_parc_prev = satlift(p_prev, thetam);
-                let tv_parc_prev = virtual_temp(t_parc_prev, p_prev, t_parc_prev);
-                let buoy_prev = tv_parc_prev - tv_env_prev;
-
-                let curr_pos_top = if buoyancy != buoy_prev {
-                    let frac = (0.0 - buoy_prev) / (buoyancy - buoy_prev);
-                    p_prev + frac * (p_curr - p_prev)
-                } else {
-                    p_curr
-                };
-
-                el_p = curr_pos_top;
+            found_positive_layer = true;
+            el_p = pressure;
+        } else if found_positive_layer {
+            if buoyancy == 0.0 {
+                el_p = pressure;
+            } else if previous_buoyancy > 0.0 {
+                el_p = zero_crossing_pressure(
+                    previous_pressure,
+                    previous_buoyancy,
+                    pressure,
+                    buoyancy,
+                )
+                .unwrap_or(pressure);
             }
         }
+
+        previous_pressure = pressure;
+        previous_buoyancy = buoyancy;
     }
 
-    if in_pos_layer {
-        el_p = p_prof[p_prof.len() - 1];
-    }
-
-    // Return zeros if no instability found
     if !found_positive_layer {
         return (0.0, 0.0, h_lcl, f64::NAN);
     }
 
-    // If LFC is below LCL, set to LCL
-    if lfc_p.is_nan() || lfc_p > p_lcl {
-        lfc_p = p_lcl;
+    // Integrate every model layer between the parcel source and the LCL.
+    // The previous cursor started above the LCL, collapsing this entire depth
+    // to one midpoint and making shallow caps invisible.
+    let mut accumulated_energy = 0.0;
+    let mut current_pressure = p_start;
+    for &pressure in &p_prof {
+        if pressure >= current_pressure - 0.01 {
+            continue;
+        }
+        if pressure <= p_lcl {
+            break;
+        }
+        accumulated_energy += pressure_layer_energy(
+            current_pressure,
+            pressure,
+            &p_prof,
+            &t_prof,
+            &td_prof,
+            p_lcl,
+            dry_theta_start_k,
+            dry_parcel_mixratio,
+            thetam,
+        );
+        current_pressure = pressure;
     }
-    let h_lfc = get_height_at_pres(lfc_p, &p_prof, &height_agl);
+    if current_pressure > p_lcl {
+        accumulated_energy += pressure_layer_energy(
+            current_pressure,
+            p_lcl,
+            &p_prof,
+            &t_prof,
+            &td_prof,
+            p_lcl,
+            dry_theta_start_k,
+            dry_parcel_mixratio,
+            thetam,
+        );
+    }
 
-    // --- PASS 2: Integration ---
-    let mut p_top_limit = el_p;
+    // RIP accumulates signed energy, then selects the LFC as the minimum
+    // accumulated energy between LCL and the highest EL. Negative buoyancy
+    // after an early positive layer therefore reduces net CAPE; it becomes
+    // additional CIN only when it establishes a new, deeper minimum.
+    let mut natural_trace = WrfEnergyTrace::at_lcl(accumulated_energy, p_lcl);
+
+    let mut cape_top_pressure = el_p;
     if let Some(top_m_val) = top_m {
         // Find the pressure at the target height AGL
         // Interpolate: given height_agl profile and p_prof, find p at top_m_val
@@ -490,124 +706,111 @@ pub fn cape_cin_core(
         }
         // For 3CAPE: stop at 3km, which is a HIGHER pressure (closer to surface)
         // than the EL. Use the larger pressure value (lower altitude) as the cap.
-        if p_at_top > p_top_limit || p_top_limit <= 0.0 {
-            p_top_limit = p_at_top;
+        if p_at_top > cape_top_pressure || cape_top_pressure <= 0.0 {
+            cape_top_pressure = p_at_top;
         }
     }
 
-    let mut total_cape = 0.0_f64;
-    let mut total_cin = 0.0_f64;
+    // If the requested CAPE top is below the LCL, CAPE is zero but the
+    // sub-LCL CIN convention is unchanged. Otherwise snapshot the signed
+    // energy trace exactly at the requested top while continuing to the
+    // natural EL for the LFC selection.
+    let mut limited_trace = if cape_top_pressure >= p_lcl - 0.01 {
+        Some(natural_trace)
+    } else {
+        None
+    };
+    current_pressure = p_lcl;
 
-    // --- Integrate CIN from Surface (p_start) to LCL (dry adiabat) ---
-    let mut curr_dry_p = p_start;
-    let mut dry_idx = start_idx;
-    let dry_theta_start_k = (t_start + ZEROCNK) * ((1000.0 / p_start).powf(ROCP));
-    let dry_parcel_mixratio = mixratio(p_start, td_start);
+    for &pressure in &p_prof {
+        if pressure >= current_pressure - 0.01 {
+            continue;
+        }
+        let target_pressure = pressure.max(el_p);
 
-    while curr_dry_p > p_lcl {
-        // Find next model level
-        let mut next_p = -1.0_f64;
-        let mut temp_idx = dry_idx;
-        while temp_idx < p_prof.len() {
-            if p_prof[temp_idx] < curr_dry_p - 0.01 {
-                next_p = p_prof[temp_idx];
-                dry_idx = temp_idx;
-                break;
-            }
-            temp_idx += 1;
+        if limited_trace.is_none()
+            && current_pressure > cape_top_pressure
+            && target_pressure <= cape_top_pressure
+        {
+            integrate_moist_pressure_range(
+                current_pressure,
+                cape_top_pressure,
+                &p_prof,
+                &t_prof,
+                &td_prof,
+                p_lcl,
+                dry_theta_start_k,
+                dry_parcel_mixratio,
+                thetam,
+                &mut natural_trace,
+            );
+            current_pressure = cape_top_pressure;
+            limited_trace = Some(natural_trace);
         }
 
-        let target_dry_p = if next_p == -1.0 || next_p < p_lcl {
-            p_lcl
-        } else {
-            next_p
-        };
+        integrate_moist_pressure_range(
+            current_pressure,
+            target_pressure,
+            &p_prof,
+            &t_prof,
+            &td_prof,
+            p_lcl,
+            dry_theta_start_k,
+            dry_parcel_mixratio,
+            thetam,
+            &mut natural_trace,
+        );
+        current_pressure = target_pressure;
 
-        // Standard sub-stepping for the dry layer
-        let p1 = curr_dry_p;
-        let p2 = target_dry_p;
-        let p_mid = (p1 + p2) / 2.0;
-
-        // Environment at p_mid
-        let (t_env, td_env) = get_env_at_pres(p_mid, &p_prof, &t_prof, &td_prof);
-        let tv_env = virtual_temp(t_env, p_mid, td_env);
-
-        // Parcel temperature via dry adiabat
-        let t_parc_k = dry_theta_start_k * ((p_mid / 1000.0).powf(ROCP));
-        let t_parc = t_parc_k - ZEROCNK;
-
-        // Parcel mixing ratio is constant (from starting dewpoint)
-        // Virtual Temp of Parcel with known W
-        let tv_parc = (t_parc + ZEROCNK) * (1.0 + 0.61 * (dry_parcel_mixratio / 1000.0)) - ZEROCNK;
-
-        let val = RD * (tv_parc - tv_env) * (p1 / p2).ln();
-
-        // In the dry layer, only accumulate CIN
-        if val < 0.0 {
-            total_cin += val;
+        if limited_trace.is_none() && (current_pressure - cape_top_pressure).abs() <= 0.01 {
+            limited_trace = Some(natural_trace);
         }
-
-        curr_dry_p = target_dry_p;
+        if current_pressure <= el_p + 0.01 {
+            break;
+        }
     }
 
-    // --- Integrate from LCL to EL (moist adiabat) ---
-    let mut curr_p = p_lcl;
-    let mut idx = 0;
-    while idx < p_prof.len() && p_prof[idx] > p_lcl {
-        idx += 1;
+    if current_pressure > el_p {
+        if limited_trace.is_none()
+            && current_pressure > cape_top_pressure
+            && el_p <= cape_top_pressure
+        {
+            integrate_moist_pressure_range(
+                current_pressure,
+                cape_top_pressure,
+                &p_prof,
+                &t_prof,
+                &td_prof,
+                p_lcl,
+                dry_theta_start_k,
+                dry_parcel_mixratio,
+                thetam,
+                &mut natural_trace,
+            );
+            current_pressure = cape_top_pressure;
+            limited_trace = Some(natural_trace);
+        }
+        integrate_moist_pressure_range(
+            current_pressure,
+            el_p,
+            &p_prof,
+            &t_prof,
+            &td_prof,
+            p_lcl,
+            dry_theta_start_k,
+            dry_parcel_mixratio,
+            thetam,
+            &mut natural_trace,
+        );
     }
 
-    while curr_p > p_top_limit {
-        // Find next model level
-        let mut next_model_p = -1.0_f64;
-        let mut temp_idx = idx;
-        while temp_idx < p_prof.len() {
-            if p_prof[temp_idx] < curr_p - 0.01 {
-                next_model_p = p_prof[temp_idx];
-                idx = temp_idx;
-                break;
-            }
-            temp_idx += 1;
-        }
-
-        let target_p = if next_model_p == -1.0 || next_model_p < p_top_limit {
-            p_top_limit
-        } else {
-            next_model_p
-        };
-
-        let dp_total = curr_p - target_p;
-        let n_steps = if dp_total > 10.0 {
-            (dp_total / 10.0) as usize + 1
-        } else {
-            1
-        };
-        let step_size = dp_total / n_steps as f64;
-
-        for k in 0..n_steps {
-            let p1 = curr_p - k as f64 * step_size;
-            let p2 = curr_p - (k + 1) as f64 * step_size;
-            let p_mid = (p1 + p2) / 2.0;
-
-            let (t_env, td_env) = get_env_at_pres(p_mid, &p_prof, &t_prof, &td_prof);
-            let tv_env = virtual_temp(t_env, p_mid, td_env);
-
-            let t_parc = satlift(p_mid, thetam);
-            let tv_parc = virtual_temp(t_parc, p_mid, t_parc);
-
-            let val = RD * (tv_parc - tv_env) * (p1 / p2).ln();
-
-            if val > 0.0 {
-                total_cape += val;
-            } else {
-                total_cin += val;
-            }
-        }
-
-        curr_p = target_p;
-    }
-
-    (total_cape, total_cin, h_lcl, h_lfc)
+    let (cape, cin) = limited_trace.unwrap_or(natural_trace).cape_cin();
+    let h_lfc = get_height_at_pres(
+        natural_trace.minimum_pressure,
+        &p_prof,
+        &height_agl,
+    );
+    (cape, cin, h_lcl, h_lfc)
 }
 
 // =============================================================================
@@ -758,7 +961,194 @@ pub fn el(p_profile: &[f64], t_profile: &[f64], td_profile: &[f64]) -> Option<(f
 
 #[cfg(test)]
 mod tests {
-    use super::satlift;
+    use super::{
+        cape_cin_core, drylift, get_env_at_pres, mixratio, parcel_virtual_temperature, satlift,
+        virtual_temp, wobf, WrfEnergyTrace, ROCP, ZEROCNK,
+    };
+
+    const PRESSURE: [f64; 14] = [
+        975.0, 950.0, 925.0, 900.0, 850.0, 800.0, 750.0, 700.0, 650.0, 600.0,
+        550.0, 500.0, 450.0, 400.0,
+    ];
+    const TEMPERATURE: [f64; 14] = [
+        28.0, 27.0, 24.0, 20.0, 14.0, 8.0, 2.0, -4.0, -10.0, -17.0, -24.0,
+        -31.0, -39.0, -47.0,
+    ];
+    const DEWPOINT: [f64; 14] = [
+        19.0, 18.0, 15.0, 12.0, 6.0, 0.0, -6.0, -12.0, -18.0, -25.0, -32.0,
+        -40.0, -48.0, -55.0,
+    ];
+    const HEIGHT: [f64; 14] = [
+        250.0, 500.0, 750.0, 1000.0, 1500.0, 2000.0, 2500.0, 3000.0, 3600.0,
+        4200.0, 4900.0, 5600.0, 6400.0, 7200.0,
+    ];
+
+    fn parcel_cape(
+        temperature: &[f64],
+        parcel_type: &str,
+        top_m: Option<f64>,
+    ) -> (f64, f64, f64, f64) {
+        cape_cin_core(
+            &PRESSURE,
+            temperature,
+            &DEWPOINT,
+            &HEIGHT,
+            1000.0,
+            30.0,
+            20.0,
+            parcel_type,
+            100.0,
+            300.0,
+            top_m,
+        )
+    }
+
+    fn surface_cape(temperature: &[f64], top_m: Option<f64>) -> (f64, f64, f64, f64) {
+        parcel_cape(temperature, "sb", top_m)
+    }
+
+    #[test]
+    fn dry_integration_resolves_a_shallow_cap_between_surface_and_lcl() {
+        let baseline = surface_cape(&TEMPERATURE, None);
+        let mut capped_temperature = TEMPERATURE;
+        capped_temperature[0] += 8.0;
+        let capped = surface_cape(&capped_temperature, None);
+
+        // The old one-midpoint dry integration sampled near 932 hPa, where
+        // these profiles are identical, and therefore could not see the
+        // deliberately shallow 975-hPa cap.
+        let (p_lcl, _) = drylift(1000.0, 30.0, 20.0);
+        let collapsed_midpoint = (1000.0 + p_lcl) / 2.0;
+        let mut augmented_pressure = vec![1000.0];
+        augmented_pressure.extend_from_slice(&PRESSURE);
+        let mut baseline_temperature = vec![30.0];
+        baseline_temperature.extend_from_slice(&TEMPERATURE);
+        let mut capped_augmented_temperature = vec![30.0];
+        capped_augmented_temperature.extend_from_slice(&capped_temperature);
+        let mut augmented_dewpoint = vec![20.0];
+        augmented_dewpoint.extend_from_slice(&DEWPOINT);
+        let baseline_midpoint = get_env_at_pres(
+            collapsed_midpoint,
+            &augmented_pressure,
+            &baseline_temperature,
+            &augmented_dewpoint,
+        );
+        let capped_midpoint = get_env_at_pres(
+            collapsed_midpoint,
+            &augmented_pressure,
+            &capped_augmented_temperature,
+            &augmented_dewpoint,
+        );
+
+        assert_eq!(baseline_midpoint, capped_midpoint);
+        assert!((baseline.0 - 4785.588_699_964_336).abs() < 1.0e-6);
+        assert!((baseline.0 - capped.0).abs() < 1.0e-8);
+        assert_eq!(baseline.1, 0.0);
+        assert!((capped.1 + 33.146_037_419_91).abs() < 1.0e-6);
+        assert!(capped.1 < baseline.1 - 5.0);
+    }
+
+    #[test]
+    fn wrf_multilayer_selection_nets_post_lfc_negative_energy() {
+        let mut trace = WrfEnergyTrace::at_lcl(-50.0, 900.0);
+        trace.add_layer(-30.0, 875.0);
+        trace.add_layer(200.0, 750.0);
+        trace.add_layer(-60.0, 700.0);
+        trace.add_layer(240.0, 500.0);
+
+        let (cape, cin) = trace.cape_cin();
+        assert_eq!(trace.minimum_pressure, 875.0);
+        assert_eq!(cape, 380.0);
+        assert_eq!(cin, -80.0);
+
+        // If the intervening negative layer establishes a lower accumulated
+        // energy minimum, the WRF convention moves the LFC above that layer.
+        let mut deeper_cap = WrfEnergyTrace::at_lcl(-50.0, 900.0);
+        deeper_cap.add_layer(-30.0, 875.0);
+        deeper_cap.add_layer(200.0, 750.0);
+        deeper_cap.add_layer(-250.0, 700.0);
+        deeper_cap.add_layer(430.0, 500.0);
+        let (cape, cin) = deeper_cap.cape_cin();
+        assert_eq!(deeper_cap.minimum_pressure, 700.0);
+        assert_eq!(cape, 430.0);
+        assert_eq!(cin, -130.0);
+    }
+
+    #[test]
+    fn a_single_positive_layer_keeps_ordinary_cape_unchanged() {
+        let mut trace = WrfEnergyTrace::at_lcl(-20.0, 900.0);
+        trace.add_layer(-30.0, 875.0);
+        trace.add_layer(250.0, 700.0);
+        trace.add_layer(400.0, 500.0);
+
+        let (cape, cin) = trace.cape_cin();
+        assert_eq!(cape, 650.0);
+        assert_eq!(cin, -50.0);
+    }
+
+    #[test]
+    fn lfc_scan_uses_dry_physics_only_below_the_lcl() {
+        let (p_lcl, t_lcl) = drylift(1000.0, 30.0, 20.0);
+        let dry_theta_k = (30.0 + ZEROCNK) * (1000.0_f64 / 1000.0).powf(ROCP);
+        let dry_mixratio = mixratio(1000.0, 20.0);
+        let theta_lcl_c = (t_lcl + ZEROCNK) * (1000.0 / p_lcl).powf(ROCP) - ZEROCNK;
+        let thetam = theta_lcl_c - wobf(theta_lcl_c) + wobf(t_lcl);
+
+        let below_lcl_pressure = (1000.0 + p_lcl) / 2.0;
+        let dry_temperature_k =
+            dry_theta_k * (below_lcl_pressure / 1000.0).powf(ROCP);
+        let expected_dry_virtual_temperature =
+            dry_temperature_k * (1.0 + 0.61 * dry_mixratio / 1000.0) - ZEROCNK;
+        let actual_below = parcel_virtual_temperature(
+            below_lcl_pressure,
+            p_lcl,
+            dry_theta_k,
+            dry_mixratio,
+            thetam,
+        );
+        let incorrectly_moist_temperature = satlift(below_lcl_pressure, thetam);
+        let incorrectly_moist_virtual_temperature = virtual_temp(
+            incorrectly_moist_temperature,
+            below_lcl_pressure,
+            incorrectly_moist_temperature,
+        );
+
+        assert!((actual_below - expected_dry_virtual_temperature).abs() < 1.0e-12);
+        assert!((actual_below - incorrectly_moist_virtual_temperature).abs() > 0.01);
+
+        let above_lcl_pressure = p_lcl - 25.0;
+        let moist_temperature = satlift(above_lcl_pressure, thetam);
+        let expected_moist_virtual_temperature =
+            virtual_temp(moist_temperature, above_lcl_pressure, moist_temperature);
+        let actual_above = parcel_virtual_temperature(
+            above_lcl_pressure,
+            p_lcl,
+            dry_theta_k,
+            dry_mixratio,
+            thetam,
+        );
+        assert!((actual_above - expected_moist_virtual_temperature).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn truncated_cape_keeps_agl_lfc_from_the_natural_parcel_trace() {
+        let full = surface_cape(&TEMPERATURE, None);
+        let three_km = surface_cape(&TEMPERATURE, Some(3000.0));
+
+        assert!(three_km.0 >= 0.0);
+        assert!(three_km.0 <= full.0);
+        assert_eq!(three_km.2, full.2);
+        assert_eq!(three_km.3, full.3);
+
+        // WRF-Runner consumes this exact generic option combination for its
+        // 0-3 km mixed-layer CAPE map.
+        let ml_full = parcel_cape(&TEMPERATURE, "ml", None);
+        let ml_three_km = parcel_cape(&TEMPERATURE, "ml", Some(3000.0));
+        assert!(ml_three_km.0 >= 0.0);
+        assert!(ml_three_km.0 <= ml_full.0);
+        assert_eq!(ml_three_km.2, ml_full.2);
+        assert_eq!(ml_three_km.3, ml_full.3);
+    }
 
     #[test]
     fn satlift_treats_only_pressures_near_1000_as_identity() {
