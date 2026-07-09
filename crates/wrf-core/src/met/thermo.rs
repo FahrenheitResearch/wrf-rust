@@ -1023,7 +1023,7 @@ mod tests {
         );
 
         assert_eq!(baseline_midpoint, capped_midpoint);
-        assert!((baseline.0 - 4785.588_699_964_336).abs() < 1.0e-6);
+        assert!((baseline.0 - 4_785.588_699_964_336).abs() < 1.0e-6);
         assert!((baseline.0 - capped.0).abs() < 1.0e-8);
         assert_eq!(baseline.1, 0.0);
         assert!((capped.1 + 33.146_037_419_91).abs() < 1.0e-6);
@@ -1134,7 +1134,7 @@ mod tests {
     #[test]
     fn satlift_treats_only_pressures_near_1000_as_identity() {
         assert_eq!(satlift(999.9995, 20.0), 20.0);
-        assert_eq!(satlift(1_000.0005, 20.0), 20.0);
+        assert_eq!(satlift(1_000.000_5, 20.0), 20.0);
     }
 
     #[test]
