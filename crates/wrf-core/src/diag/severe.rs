@@ -2,12 +2,67 @@
 //! stp, scp, ehi, ecape_scp, ecape_ehi, critical_angle, ship, bri
 
 use crate::compute::{ComputeOpts, StormMotionMethod};
-use crate::diag::cape::effective_inflow_layer_grid;
+use crate::diag::cape::{effective_inflow_layer_grid, mu_parcel_mixing_ratio_field};
 use crate::error::WrfResult;
 use crate::file::WrfFile;
 use rayon::prelude::*;
 
 const SURFACE_LAYER_HEIGHT_M: f64 = 0.0;
+const SHIP_SPC_2014_DENOMINATOR: f64 = 42_000_000.0;
+
+/// SPC mesoanalysis / SHARPpy 2014 Significant Hail Parameter.
+///
+/// This deliberately targets the sequential correction published by SPC and
+/// implemented in SHARPpy's `ship`: MU-parcel mixing ratio constrained to
+/// 11-13.6 g/kg, 0-6 km shear constrained to 7-27 m/s, T500 no warmer than
+/// -5.5 C, followed by the low-MUCAPE, weak-lapse-rate, and low-freezing-level
+/// multipliers. Some legacy NOAA NSHARP material shows a 44,000,000
+/// normalization; this version uses the SPC/SHARPpy 42,000,000 normalization
+/// and names its vintage rather than silently mixing the two definitions.
+fn ship_spc_2014_from_components(
+    mucape: f64,
+    mu_mixing_ratio: f64,
+    lapse_rate_700_500: f64,
+    t500_c: f64,
+    shear_0_6km: f64,
+    freezing_level_agl: f64,
+) -> f64 {
+    if !mucape.is_finite()
+        || !mu_mixing_ratio.is_finite()
+        || !lapse_rate_700_500.is_finite()
+        || !t500_c.is_finite()
+        || !shear_0_6km.is_finite()
+        || !freezing_level_agl.is_finite()
+        || mucape <= 0.0
+        || lapse_rate_700_500 <= 0.0
+        || freezing_level_agl < 0.0
+    {
+        return 0.0;
+    }
+
+    let mixing_ratio = mu_mixing_ratio.clamp(11.0, 13.6);
+    let shear = shear_0_6km.clamp(7.0, 27.0);
+    let t500 = t500_c.min(-5.5);
+    let mut ship =
+        -(mucape * mixing_ratio * lapse_rate_700_500 * t500 * shear)
+            / SHIP_SPC_2014_DENOMINATOR;
+
+    if mucape < 1_300.0 {
+        ship *= mucape / 1_300.0;
+    }
+    if lapse_rate_700_500 < 5.8 {
+        ship *= lapse_rate_700_500 / 5.8;
+    }
+    if freezing_level_agl < 2_400.0 {
+        ship *= freezing_level_agl / 2_400.0;
+    }
+
+    if ship.is_finite() {
+        ship.max(0.0)
+    } else {
+        0.0
+    }
+}
 
 fn resolved_storm_motion_method(opts: &ComputeOpts) -> StormMotionMethod {
     opts.storm_motion_method
@@ -172,13 +227,6 @@ pub fn compute_effective_bulk_wind_difference(
 ///
 /// SRH is computed through the canonical compute_srh_field path (earth-rotated + 10m prepend).
 pub fn compute_stp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let h_agl = f.height_agl(t)?;
-    let u = f.u_destag(t)?;
-    let v = f.v_destag(t)?;
-    let nx = f.nx;
-    let ny = f.ny;
-    let nz = f.nz;
-
     let (sbcape, _, lcl, _) =
         crate::diag::cape::compute_cape_fields(f, t, "sb", None, opts.lake_interp)?;
 
@@ -191,8 +239,8 @@ pub fn compute_stp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
         opts.storm_motion_method,
     )?;
 
-    // 0-6 km shear magnitude
-    let shear6 = crate::met::composite::compute_shear(&u, &v, &h_agl, nx, ny, nz, 0.0, 6000.0);
+    // 0-6 km shear uses U10/V10 as the surface anchor, matching the SRH path.
+    let shear6 = crate::diag::srh::compute_shear_0_6km(f, t, opts)?;
 
     Ok(stp_fixed_from_components(&sbcape, &lcl, &srh1, &shear6))
 }
@@ -687,6 +735,7 @@ pub fn compute_critical_angle(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfR
     let h_agl = f.height_agl(t)?;
     let pres_hpa = f.pressure_hpa(t)?;
     let psfc_hpa: Vec<f64> = f.psfc(t)?.iter().map(|p| p / 100.0).collect();
+    let latitude = f.xlat(t)?;
 
     let nx = f.nx;
     let ny = f.ny;
@@ -719,6 +768,7 @@ pub fn compute_critical_angle(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfR
             u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij],
             opts.storm_motion.as_ref().map(|sm| sm.at(ij)),
             resolved_storm_motion_method(opts),
+            latitude[ij],
         );
     });
 
@@ -726,25 +776,14 @@ pub fn compute_critical_angle(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfR
 }
 
 /// Significant Hail Parameter (dimensionless). `[ny, nx]`
-/// Significant Hail Parameter (dimensionless). `[ny, nx]`
 ///
-/// Full SHIP formula (per SPC):
-///   SHIP = (MUCAPE * MR_500 * LR_700_500 * (-T500) * SHEAR_0_6km) / 42000000
-///
-/// Where:
-///   MUCAPE = most-unstable CAPE (J/kg)
-///   MR_500 = mixing ratio at 500 hPa (g/kg)
-///   LR_700_500 = 700-500 hPa lapse rate (degC/km)
-///   T500 = temperature at 500 hPa (degC, typically negative)
-///   SHEAR_0_6km = 0-6 km bulk wind shear magnitude (m/s)
+/// Implements the SPC mesoanalysis / SHARPpy 2014 formulation, including the
+/// MU-parcel mixing ratio and all published clamps and sequential correction
+/// factors. See `ship_spc_2014_from_components` for the explicitly versioned
+/// scalar definition.
 pub fn compute_ship(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let pres = f.full_pressure(t)?;
-    let pres_hpa: Vec<f64> = pres.iter().map(|p| p / 100.0).collect();
+    let pres_hpa = f.pressure_hpa(t)?;
     let tc = f.temperature_c(t)?;
-    let qv = f.qvapor(t)?;
-    let h_agl = f.height_agl(t)?;
-    let u = f.u_destag(t)?;
-    let v = f.v_destag(t)?;
 
     let nx = f.nx;
     let ny = f.ny;
@@ -753,53 +792,27 @@ pub fn compute_ship(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<
 
     let (mucape, _, _, _) =
         crate::diag::cape::compute_cape_fields(f, t, "mu", None, opts.lake_interp)?;
+    let mu_mixing_ratio = mu_parcel_mixing_ratio_field(f, t, opts)?;
 
-    // 0-6 km shear
-    let shear6 = crate::met::composite::compute_shear(&u, &v, &h_agl, nx, ny, nz, 0.0, 6000.0);
+    // Surface-to-6-km shear uses U10/V10 at 0 m AGL.
+    let shear6 = crate::diag::srh::compute_shear_0_6km(f, t, opts)?;
 
-    // 700-500 hPa lapse rate
-    let lr_opts = {
-        let mut o = opts.clone();
-        o.bottom_p = Some(700.0);
-        o.top_p = Some(500.0);
-        o
-    };
-    let lr_700_500 = crate::diag::extra::compute_lapse_rate(f, t, &lr_opts)?;
+    let lr_700_500 = crate::diag::extra::compute_lapse_rate_700_500(f, t, opts)?;
+    let freezing_level = crate::diag::extra::compute_freezing_level(f, t, opts)?;
+    let t500 = crate::met::composite::interp_to_pressure_level(
+        &tc, &pres_hpa, nx, ny, nz, 500.0,
+    );
 
-    // T500 and MR_500: interpolate per column
-    let mut t500 = vec![0.0f64; nxy];
-    let mut mr500 = vec![0.0f64; nxy];
-    t500.iter_mut()
-        .zip(mr500.iter_mut())
-        .enumerate()
-        .for_each(|(ij, (t500_val, mr500_val))| {
-            for k in 0..nz - 1 {
-                let idx = k * nxy + ij;
-                let idx1 = (k + 1) * nxy + ij;
-                if pres_hpa[idx] >= 500.0 && pres_hpa[idx1] < 500.0 {
-                    let frac = (500.0 - pres_hpa[idx1]) / (pres_hpa[idx] - pres_hpa[idx1]);
-                    *t500_val = tc[idx1] + frac * (tc[idx] - tc[idx1]);
-                    // Mixing ratio at 500 hPa in g/kg
-                    let q_interp = qv[idx1] + frac * (qv[idx] - qv[idx1]);
-                    *mr500_val = q_interp.max(0.0) * 1000.0; // kg/kg -> g/kg
-                    break;
-                }
-            }
-        });
-
-    // SHIP = (MUCAPE * MR_500 * LR * (-T500) * SHEAR) / 42000000
-    Ok(mucape
-        .iter()
-        .zip(mr500.iter())
-        .zip(lr_700_500.iter())
-        .zip(t500.iter())
-        .zip(shear6.iter())
-        .map(|((((cape, mr), lr), t5), shr)| {
-            if *cape <= 0.0 {
-                return 0.0;
-            }
-            let result = (cape * mr * lr * (-t5).max(0.0) * shr) / 42_000_000.0;
-            result.max(0.0)
+    Ok((0..nxy)
+        .map(|ij| {
+            ship_spc_2014_from_components(
+                mucape[ij],
+                mu_mixing_ratio[ij],
+                lr_700_500[ij],
+                t500[ij],
+                shear6[ij],
+                freezing_level[ij],
+            )
         })
         .collect())
 }
@@ -1057,6 +1070,7 @@ fn critical_angle_from_profile(
     v_sfc: f64,
     storm_motion: Option<(f64, f64)>,
     storm_motion_method: StormMotionMethod,
+    latitude_deg: f64,
 ) -> f64 {
     let mut u_aug = Vec::with_capacity(u_prof.len() + 1);
     let mut v_aug = Vec::with_capacity(v_prof.len() + 1);
@@ -1073,17 +1087,23 @@ fn critical_angle_from_profile(
     h_aug.extend_from_slice(h_prof);
 
     let (sm_u, sm_v) = storm_motion.unwrap_or_else(|| {
-        let ((ru, rv), _, _) = match storm_motion_method {
+        let (right_mover, left_mover) = match storm_motion_method {
             StormMotionMethod::PressureWeighted => {
-                crate::met::composite::pressure_weighted_bunkers_storm_motion(
-                    &h_aug, &u_aug, &v_aug, &p_aug,
-                )
+                let (right, left, _) =
+                    crate::met::composite::pressure_weighted_bunkers_storm_motion(
+                        &h_aug, &u_aug, &v_aug, &p_aug,
+                    );
+                (right, left)
             }
             StormMotionMethod::NonPressureWeighted => {
-                crate::met::wind::bunkers_storm_motion(&u_aug, &v_aug, &h_aug)
+                let (right, left, _) =
+                    crate::met::wind::bunkers_storm_motion_npw_pressure_resampled(
+                        &u_aug, &v_aug, &h_aug, &p_aug,
+                    );
+                (right, left)
             }
         };
-        (ru, rv)
+        crate::met::wind::cyclonic_bunkers_motion(latitude_deg, right_mover, left_mover)
     });
     let (u_500, v_500) = interp_wind_at_height(&u_aug, &v_aug, &h_aug, 500.0);
 
@@ -1099,6 +1119,29 @@ mod tests {
             (actual - expected).abs() < 1.0e-9,
             "expected {expected}, got {actual}"
         );
+    }
+
+    #[test]
+    fn ship_spc_2014_matches_nominal_reference_scalar() {
+        let ship = ship_spc_2014_from_components(2_000.0, 12.0, 7.0, -15.0, 20.0, 3_000.0);
+
+        assert_close(ship, 1.2);
+    }
+
+    #[test]
+    fn ship_spc_2014_applies_term_bounds_before_the_product() {
+        let ship = ship_spc_2014_from_components(2_000.0, 5.0, 7.0, -2.0, 50.0, 3_000.0);
+
+        // MR -> 11 g/kg, T500 -> -5.5 C, shear -> 27 m/s.
+        assert_close(ship, 0.5445);
+    }
+
+    #[test]
+    fn ship_spc_2014_applies_all_three_sequential_corrections() {
+        let ship = ship_spc_2014_from_components(650.0, 12.0, 2.9, -10.0, 20.0, 1_200.0);
+
+        // Base value multiplied by 650/1300, 2.9/5.8, and 1200/2400.
+        assert_close(ship, 0.013_464_285_714_285_7);
     }
 
     #[test]
@@ -1119,6 +1162,7 @@ mod tests {
             v10,
             None,
             StormMotionMethod::NonPressureWeighted,
+            35.0,
         );
 
         let mut u_aug = vec![u10];
@@ -1128,7 +1172,10 @@ mod tests {
         v_aug.extend_from_slice(&v_prof);
         h_aug.extend_from_slice(&h_prof);
 
-        let ((sm_u, sm_v), _, _) = crate::met::wind::bunkers_storm_motion(&u_aug, &v_aug, &h_aug);
+        let ((sm_u, sm_v), _, _) =
+            crate::met::wind::bunkers_storm_motion_npw_pressure_resampled(
+                &u_aug, &v_aug, &h_aug, &p_prof,
+            );
         let (u_500, v_500) = interp_wind_at_height(&u_aug, &v_aug, &h_aug, 500.0);
         let expected = crate::met::wind::critical_angle(sm_u, sm_v, u10, v10, u_500, v_500);
         let first_level =

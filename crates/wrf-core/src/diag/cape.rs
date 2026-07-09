@@ -232,6 +232,24 @@ fn effective_layer_cache_key(t: usize, lake_interp: Option<f64>) -> String {
     format!("effective_layer_stack_{t}_{lake_interp}")
 }
 
+fn mu_parcel_mixing_ratio_cache_key(t: usize, lake_interp: Option<f64>) -> String {
+    let lake_interp = match lake_interp {
+        Some(value) if value > 0.0 => format!("{:016x}", value.to_bits()),
+        _ => "none".to_string(),
+    };
+    format!("mu_parcel_mixing_ratio_{t}_{lake_interp}")
+}
+
+fn mu_parcel_mixing_ratio_from_profile(
+    p_prof: &[f64],
+    t_prof: &[f64],
+    td_prof: &[f64],
+) -> f64 {
+    let (mu_p, _, mu_td) =
+        crate::met::thermo::get_most_unstable_parcel(p_prof, t_prof, td_prof, 300.0);
+    crate::met::thermo::mixratio(mu_p, mu_td)
+}
+
 pub(crate) fn build_surface_augmented_thermo_column(
     pres_hpa: &[f64],
     tc: &[f64],
@@ -387,6 +405,72 @@ pub(crate) fn effective_inflow_layer_grid(
     let stacked = f.store_cached_field(cache_key, stacked);
     Ok(EffectiveLayerGrid::from_stacked(stacked, nxy)
         .expect("effective-layer cache has the expected shape"))
+}
+
+/// Most-unstable parcel mixing ratio (g/kg) for each grid column.
+///
+/// Parcel selection intentionally shares the 300-hPa search depth and
+/// surface augmentation used by `cape_cin_core(..., "mu", ...)`. SHIP uses
+/// this parcel property; environmental moisture at 500 hPa is not a
+/// substitute for it.
+pub(crate) fn mu_parcel_mixing_ratio_field(
+    f: &WrfFile,
+    t: usize,
+    opts: &ComputeOpts,
+) -> WrfResult<SharedField> {
+    let cache_key = mu_parcel_mixing_ratio_cache_key(t, opts.lake_interp);
+    if let Some(cached) = f.cached_field(&cache_key) {
+        return Ok(cached);
+    }
+
+    let pres_hpa = f.pressure_hpa(t)?;
+    let tc = f.temperature_c(t)?;
+    let qv = f.qvapor(t)?;
+    let psfc = f.psfc(t)?;
+    let t2 = f.t2_for_opts(t, opts)?;
+    let q2 = f.q2_for_opts(t, opts)?;
+    let nz = f.nz;
+    let nxy = f.nxy();
+
+    let mixing_ratio = (0..nxy)
+        .into_par_iter()
+        .map_init(
+            || {
+                (
+                    Vec::with_capacity(nz + 1),
+                    Vec::with_capacity(nz + 1),
+                    Vec::with_capacity(nz + 1),
+                )
+            },
+            |(p_prof, t_prof, td_prof), ij| {
+                p_prof.clear();
+                t_prof.clear();
+                td_prof.clear();
+
+                let (psfc_hpa, t2_c, td2_c) = surface_parcel_from_2m(psfc[ij], t2[ij], q2[ij]);
+                p_prof.push(psfc_hpa);
+                t_prof.push(t2_c);
+                td_prof.push(td2_c);
+
+                let reverse_model = nz > 1 && pres_hpa[ij] < pres_hpa[(nz - 1) * nxy + ij];
+                for level in 0..nz {
+                    let k = if reverse_model { nz - 1 - level } else { level };
+                    let idx = k * nxy + ij;
+                    let temperature = tc[idx];
+                    p_prof.push(pres_hpa[idx]);
+                    t_prof.push(temperature);
+                    td_prof.push(
+                        crate::met::composite::dewpoint_from_q(qv[idx], pres_hpa[idx])
+                            .min(temperature),
+                    );
+                }
+
+                mu_parcel_mixing_ratio_from_profile(p_prof, t_prof, td_prof)
+            },
+        )
+        .collect();
+
+    Ok(f.store_cached_field(cache_key, mixing_ratio))
 }
 
 // ── Public compute functions ──
@@ -876,6 +960,19 @@ pub fn compute_effective_inflow_cape(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mu_parcel_mixing_ratio_follows_the_selected_parcel() {
+        let pressure = [1_000.0, 950.0, 900.0, 850.0, 700.0];
+        let temperature = [20.0, 25.0, 15.0, 8.0, -5.0];
+        let dewpoint = [0.0, 20.0, 5.0, -2.0, -20.0];
+
+        let actual =
+            mu_parcel_mixing_ratio_from_profile(&pressure, &temperature, &dewpoint);
+        let expected = crate::met::thermo::mixratio(950.0, 20.0);
+
+        assert!((actual - expected).abs() < 1.0e-12);
+    }
 
     #[test]
     fn surface_parcel_responds_to_q2() {

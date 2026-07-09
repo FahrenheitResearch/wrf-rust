@@ -83,6 +83,7 @@ pub fn compute_srh_field(
     let h_agl = f.height_agl(t)?;
     let pres_hpa = f.pressure_hpa(t)?;
     let psfc_hpa: Vec<f64> = f.psfc(t)?.iter().map(|p| p / 100.0).collect();
+    let latitude = f.xlat(t)?;
     let u10_grid = f.u10(t)?;
     let v10_grid = f.v10(t)?;
 
@@ -149,38 +150,97 @@ pub fn compute_srh_field(
             storm_motion_method,
             Some(StormMotionMethod::NonPressureWeighted)
         ) {
-            Ok(crate::met::composite::compute_srh_with_pressure(
+            Ok(crate::met::composite::compute_srh_with_npw_bunkers_and_latitude(
                 &u_aug,
                 &v_aug,
                 &h_aug,
-                &[],
+                &p_aug,
+                &latitude,
                 nx,
                 ny,
                 nz_aug,
                 depth_m,
             ))
         } else {
-            Ok(crate::met::composite::compute_srh_with_pressure(
-                &u_aug, &v_aug, &h_aug, &p_aug, nx, ny, nz_aug, depth_m,
+            Ok(crate::met::composite::compute_srh_with_pressure_and_latitude(
+                &u_aug,
+                &v_aug,
+                &h_aug,
+                &p_aug,
+                &latitude,
+                nx,
+                ny,
+                nz_aug,
+                depth_m,
             ))
         }
     }
 }
 
-/// Helper: compute bulk shear magnitude for a given layer.
-fn compute_shear_field(f: &WrfFile, t: usize, bottom_m: f64, top_m: f64) -> WrfResult<Vec<f64>> {
+fn surface_augmented_shear_from_profile(
+    u_prof: &[f64],
+    v_prof: &[f64],
+    h_prof: &[f64],
+    bottom_m: f64,
+    top_m: f64,
+) -> f64 {
+    let (du, dv) = crate::met::wind::bulk_shear(u_prof, v_prof, h_prof, bottom_m, top_m);
+    du.hypot(dv)
+}
+
+/// Compute bulk shear after anchoring the column with the 10-m wind at 0 m AGL.
+pub(crate) fn compute_shear_field(
+    f: &WrfFile,
+    t: usize,
+    bottom_m: f64,
+    top_m: f64,
+) -> WrfResult<Vec<f64>> {
     let u = f.u_destag(t)?;
     let v = f.v_destag(t)?;
     let h_agl = f.height_agl(t)?;
+    let u10 = f.u10(t)?;
+    let v10 = f.v10(t)?;
 
-    let nx = f.nx;
-    let ny = f.ny;
     let nz = f.nz;
-    let _nxy = nx * ny;
+    let nxy = f.nxy();
 
-    Ok(crate::met::composite::compute_shear(
-        &u, &v, &h_agl, nx, ny, nz, bottom_m, top_m,
-    ))
+    Ok((0..nxy)
+        .into_par_iter()
+        .map_init(
+            || {
+                (
+                    Vec::with_capacity(nz + 1),
+                    Vec::with_capacity(nz + 1),
+                    Vec::with_capacity(nz + 1),
+                )
+            },
+            |(u_prof, v_prof, h_prof), ij| {
+                u_prof.clear();
+                v_prof.clear();
+                h_prof.clear();
+                u_prof.push(u10[ij]);
+                v_prof.push(v10[ij]);
+                h_prof.push(SURFACE_LAYER_HEIGHT_M);
+
+                for k in 0..nz {
+                    let idx = k * nxy + ij;
+                    u_prof.push(u[idx]);
+                    v_prof.push(v[idx]);
+                    h_prof.push(h_agl[idx]);
+                }
+
+                if h_prof.len() > 2 && h_prof[1] > h_prof[h_prof.len() - 1] {
+                    u_prof[1..].reverse();
+                    v_prof[1..].reverse();
+                    h_prof[1..].reverse();
+                }
+
+                surface_augmented_shear_from_profile(
+                    u_prof, v_prof, h_prof, bottom_m, top_m,
+                )
+            },
+        )
+        .collect())
 }
 
 /// Helper: compute Bunkers storm motion for each column.
@@ -251,7 +311,9 @@ fn compute_bunkers_columns(
                     )
                 }
                 StormMotionMethod::NonPressureWeighted => {
-                    crate::met::wind::bunkers_storm_motion(&u_prof, &v_prof, &h_prof)
+                    crate::met::wind::bunkers_storm_motion_npw_pressure_resampled(
+                        &u_prof, &v_prof, &h_prof, &p_prof,
+                    )
                 }
             };
             (ij, ru, rv, lu, lv, mu, mv)
@@ -364,6 +426,7 @@ pub fn compute_effective_srh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
     let q2 = f.q2_for_opts(t, opts)?;
     let u10_grid = f.u10(t)?;
     let v10_grid = f.v10(t)?;
+    let latitude = f.xlat(t)?;
 
     let nx = f.nx;
     let ny = f.ny;
@@ -401,17 +464,27 @@ pub fn compute_effective_srh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
             let (sm_u, sm_v) = if let Some(sm) = custom_sm {
                 sm.at(ij)
             } else {
-                let ((ru, rv), _, _) = match storm_motion_method {
+                let (right_mover, left_mover) = match storm_motion_method {
                     StormMotionMethod::PressureWeighted => {
-                        crate::met::composite::pressure_weighted_bunkers_storm_motion(
-                            &h_prof, &u_prof, &v_prof, &p_prof,
-                        )
+                        let (right, left, _) =
+                            crate::met::composite::pressure_weighted_bunkers_storm_motion(
+                                &h_prof, &u_prof, &v_prof, &p_prof,
+                            );
+                        (right, left)
                     }
                     StormMotionMethod::NonPressureWeighted => {
-                        crate::met::wind::bunkers_storm_motion(&u_prof, &v_prof, &h_prof)
+                        let (right, left, _) =
+                            crate::met::wind::bunkers_storm_motion_npw_pressure_resampled(
+                                &u_prof, &v_prof, &h_prof, &p_prof,
+                            );
+                        (right, left)
                     }
                 };
-                (ru, rv)
+                crate::met::wind::cyclonic_bunkers_motion(
+                    latitude[ij],
+                    right_mover,
+                    left_mover,
+                )
             };
 
             let (_, _, total) = crate::met::wind::storm_relative_helicity(
@@ -496,13 +569,24 @@ pub fn compute_mean_wind(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult
 #[cfg(test)]
 mod tests {
     use super::{
-        bunkers_cache_key, pack_bunkers_stack, unpack_bunkers_stack, StormMotionMethod,
-        SURFACE_LAYER_HEIGHT_M,
+        bunkers_cache_key, pack_bunkers_stack, surface_augmented_shear_from_profile,
+        unpack_bunkers_stack, StormMotionMethod, SURFACE_LAYER_HEIGHT_M,
     };
 
     #[test]
     fn surface_augmentation_anchors_10m_winds_at_zero_agl() {
         assert_eq!(SURFACE_LAYER_HEIGHT_M, 0.0);
+    }
+
+    #[test]
+    fn fixed_layer_shear_uses_the_10m_surface_wind() {
+        let u = [0.0, 5.0, 20.0];
+        let v = [0.0, 0.0, 0.0];
+        let h = [0.0, 25.0, 1_000.0];
+
+        let shear = surface_augmented_shear_from_profile(&u, &v, &h, 0.0, 1_000.0);
+
+        assert!((shear - 20.0).abs() < 1.0e-12);
     }
 
     #[test]

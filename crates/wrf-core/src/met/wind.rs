@@ -238,12 +238,13 @@ pub fn mean_wind(
     (sum_u / total_dz, sum_v / total_dz)
 }
 
-/// Non-pressure-weighted arithmetic mean wind over a height layer.
+/// Native-level arithmetic mean wind over a height layer.
 ///
-/// This is the SHARPpy `mean_wind_npw` convention: a simple average of all
-/// profile levels that fall within the layer, NOT a height-weighted
-/// (trapezoidal) integral.  Used by Bunkers storm motion for consistency
-/// with SHARPpy/SPC operational practice.
+/// This legacy, pressure-less helper averages the supplied native profile
+/// levels plus interpolated height endpoints. It is retained for callers that
+/// do not have pressure data, but it is **not** SHARPpy's `mean_wind_npw`:
+/// SHARPpy first resamples the profile every 1 hPa. Use
+/// [`mean_wind_npw_pressure_resampled`] when pressure is available.
 ///
 /// # Arguments
 /// * `u_prof`, `v_prof` -- wind components (m/s), ascending height
@@ -294,6 +295,110 @@ pub fn mean_wind_npw(
     }
 
     (sum_u / count as f64, sum_v / count as f64)
+}
+
+/// SHARPpy 1.4 non-pressure-weighted mean wind over a height layer.
+///
+/// The layer endpoints are converted to pressure with log-pressure height
+/// interpolation. Wind is then log-pressure interpolated at the exact
+/// `np.arange(pbot, ptop - 1, -1)` sequence used by SHARPpy's
+/// `winds.mean_wind_npw` default (`dp=-1 hPa`) and arithmetically averaged.
+/// This makes the result independent of the WRF eta-level density.
+///
+/// Falls back to [`mean_wind_npw`] for a non-monotonic or otherwise unusable
+/// pressure profile. The fallback is deliberately bounded so malformed input
+/// cannot trigger an unreasonably long pressure-sampling loop.
+pub fn mean_wind_npw_pressure_resampled(
+    u_prof: &[f64],
+    v_prof: &[f64],
+    height_prof: &[f64],
+    pressure_hpa: &[f64],
+    bottom_m: f64,
+    top_m: f64,
+) -> (f64, f64) {
+    const MAX_PRESSURE_SAMPLES: usize = 2_500;
+
+    let n = u_prof.len();
+    if n < 2
+        || v_prof.len() != n
+        || height_prof.len() != n
+        || pressure_hpa.len() != n
+        || !bottom_m.is_finite()
+        || !top_m.is_finite()
+        || bottom_m > top_m
+    {
+        return (0.0, 0.0);
+    }
+
+    let usable = (0..n).all(|i| {
+        u_prof[i].is_finite()
+            && v_prof[i].is_finite()
+            && height_prof[i].is_finite()
+            && pressure_hpa[i].is_finite()
+            && pressure_hpa[i] > 0.0
+            && (i == 0
+                || (height_prof[i] > height_prof[i - 1]
+                    && pressure_hpa[i] < pressure_hpa[i - 1]))
+    });
+    if !usable {
+        return mean_wind_npw(u_prof, v_prof, height_prof, bottom_m, top_m);
+    }
+
+    let pressure_at_height = |target_h: f64| {
+        if target_h <= height_prof[0] {
+            return pressure_hpa[0];
+        }
+        if target_h >= height_prof[n - 1] {
+            return pressure_hpa[n - 1];
+        }
+        for i in 1..n {
+            if height_prof[i] >= target_h {
+                let fraction =
+                    (target_h - height_prof[i - 1]) / (height_prof[i] - height_prof[i - 1]);
+                let log_p = pressure_hpa[i - 1].ln()
+                    + fraction * (pressure_hpa[i].ln() - pressure_hpa[i - 1].ln());
+                return log_p.exp();
+            }
+        }
+        pressure_hpa[n - 1]
+    };
+
+    let p_bottom = pressure_at_height(bottom_m);
+    let p_top = pressure_at_height(top_m);
+    if !p_bottom.is_finite() || !p_top.is_finite() || p_bottom <= p_top {
+        return mean_wind_npw(u_prof, v_prof, height_prof, bottom_m, top_m);
+    }
+
+    // Equivalent to len(np.arange(p_bottom, p_top - 1.0, -1.0)).
+    let sample_count = (p_bottom - p_top + 1.0).ceil() as usize;
+    let last_sample_pressure = p_bottom - sample_count.saturating_sub(1) as f64;
+    if sample_count == 0
+        || sample_count > MAX_PRESSURE_SAMPLES
+        || last_sample_pressure <= 0.0
+    {
+        return mean_wind_npw(u_prof, v_prof, height_prof, bottom_m, top_m);
+    }
+
+    let mut sum_u = 0.0;
+    let mut sum_v = 0.0;
+    let mut segment = 0usize;
+    for sample in 0..sample_count {
+        let p = p_bottom - sample as f64;
+        while segment + 1 < n - 1 && p < pressure_hpa[segment + 1] {
+            segment += 1;
+        }
+
+        let p0 = pressure_hpa[segment];
+        let p1 = pressure_hpa[segment + 1];
+        let fraction = (p.ln() - p0.ln()) / (p1.ln() - p0.ln());
+        sum_u += u_prof[segment] + fraction * (u_prof[segment + 1] - u_prof[segment]);
+        sum_v += v_prof[segment] + fraction * (v_prof[segment + 1] - v_prof[segment]);
+    }
+
+    (
+        sum_u / sample_count as f64,
+        sum_v / sample_count as f64,
+    )
 }
 
 /// Bunkers storm motion estimate using the internal dynamics (ID) method.
@@ -352,6 +457,78 @@ pub fn bunkers_storm_motion(
     ((right_u, right_v), (left_u, left_v), (mw_u, mw_v))
 }
 
+/// Bunkers layer-mean method using SHARPpy 1.4's pressure-resampled NPW means.
+///
+/// This is the pressure-aware counterpart to [`bunkers_storm_motion`]. It
+/// preserves the same 0--500 m and 5.5--6 km layer-mean shear construction,
+/// while removing dependence on the placement of native model levels.
+pub fn bunkers_storm_motion_npw_pressure_resampled(
+    u_prof: &[f64],
+    v_prof: &[f64],
+    height_prof: &[f64],
+    pressure_hpa: &[f64],
+) -> ((f64, f64), (f64, f64), (f64, f64)) {
+    let deviation = 7.5;
+
+    let (mw_u, mw_v) = mean_wind_npw_pressure_resampled(
+        u_prof,
+        v_prof,
+        height_prof,
+        pressure_hpa,
+        0.0,
+        6000.0,
+    );
+    let (low_u, low_v) = mean_wind_npw_pressure_resampled(
+        u_prof,
+        v_prof,
+        height_prof,
+        pressure_hpa,
+        0.0,
+        500.0,
+    );
+    let (high_u, high_v) = mean_wind_npw_pressure_resampled(
+        u_prof,
+        v_prof,
+        height_prof,
+        pressure_hpa,
+        5500.0,
+        6000.0,
+    );
+
+    let shear_u = high_u - low_u;
+    let shear_v = high_v - low_v;
+    let shear_mag = shear_u.hypot(shear_v);
+    if shear_mag < 1.0e-10 {
+        return ((mw_u, mw_v), (mw_u, mw_v), (mw_u, mw_v));
+    }
+
+    let dev_u = deviation * shear_v / shear_mag;
+    let dev_v = -deviation * shear_u / shear_mag;
+    (
+        (mw_u + dev_u, mw_v + dev_v),
+        (mw_u - dev_u, mw_v - dev_v),
+        (mw_u, mw_v),
+    )
+}
+
+/// Select the cyclonically favored Bunkers mover for a latitude.
+///
+/// Right movers are cyclonic in the Northern Hemisphere; the mirrored left
+/// mover is cyclonic in the Southern Hemisphere. The returned motion does not
+/// alter SRH's mathematical sign: cyclonic SRH remains negative in a mirrored
+/// Southern Hemisphere profile, matching wrf-python's latitude-aware raw SRH.
+pub fn cyclonic_bunkers_motion(
+    latitude_deg: f64,
+    right_mover: (f64, f64),
+    left_mover: (f64, f64),
+) -> (f64, f64) {
+    if latitude_deg < 0.0 {
+        left_mover
+    } else {
+        right_mover
+    }
+}
+
 /// Critical angle between the storm-relative inflow vector and the 0-500 m
 /// shear vector.
 ///
@@ -380,9 +557,10 @@ pub fn critical_angle(
     u_500m: f64,
     v_500m: f64,
 ) -> f64 {
-    // Storm-relative inflow vector (surface wind relative to storm)
-    let inflow_u = u_sfc - storm_u;
-    let inflow_v = v_sfc - storm_v;
+    // Operational SHARPpy/MetPy convention: vector from the surface wind
+    // point on the hodograph toward the storm-motion point.
+    let inflow_u = storm_u - u_sfc;
+    let inflow_v = storm_v - v_sfc;
 
     // 0-500 m shear vector
     let shear_u = u_500m - u_sfc;
@@ -466,5 +644,44 @@ mod tests {
 
         assert_close(mean_u, 57.5);
         assert_close(mean_v, 7.5);
+    }
+
+    #[test]
+    fn sharppy_npw_resamples_uniformly_in_pressure_not_native_levels() {
+        let heights_m = [0.0, 10.0, 6000.0];
+        let pressure_hpa = [1000.0, 999.0, 900.0];
+        let u_prof = [0.0, 100.0, 0.0];
+        let v_prof = [0.0, 0.0, 0.0];
+
+        let (resampled_u, resampled_v) = mean_wind_npw_pressure_resampled(
+            &u_prof,
+            &v_prof,
+            &heights_m,
+            &pressure_hpa,
+            0.0,
+            6000.0,
+        );
+        let (native_u, _) = mean_wind_npw(&u_prof, &v_prof, &heights_m, 0.0, 6000.0);
+
+        // SHARPpy's dp=-1 sequence has 101 samples (1000 through 900 hPa).
+        assert_close(resampled_u, 50.357_154_417_278_1);
+        assert_close(resampled_v, 0.0);
+        assert!((resampled_u - native_u).abs() > 10.0);
+    }
+
+    #[test]
+    fn critical_angle_matches_sharppy_inflow_direction() {
+        let angle = critical_angle(10.0, 0.0, 0.0, 0.0, 10.0, 10.0);
+
+        assert_close(angle, 45.0);
+    }
+
+    #[test]
+    fn cyclonic_bunkers_motion_switches_mover_by_hemisphere() {
+        let right = (10.0, 2.0);
+        let left = (4.0, 8.0);
+
+        assert_eq!(cyclonic_bunkers_motion(35.0, right, left), right);
+        assert_eq!(cyclonic_bunkers_motion(-35.0, right, left), left);
     }
 }

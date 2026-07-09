@@ -302,8 +302,94 @@ pub fn compute_srh_with_pressure(
     nz: usize,
     top_m: f64,
 ) -> Vec<f64> {
+    compute_srh_with_pressure_and_latitude(
+        u_3d,
+        v_3d,
+        height_agl_3d,
+        pressure_hpa_3d,
+        &[],
+        nx,
+        ny,
+        nz,
+        top_m,
+    )
+}
+
+/// Compute signed SRH using the cyclonic Bunkers mover for each hemisphere.
+///
+/// If `latitude_2d` is empty, Northern Hemisphere behavior is retained for
+/// compatibility with the pressure-less public API. A full `[ny][nx]`
+/// latitude field selects the left mover south of the equator. This mirrors
+/// the hemispheric sign convention used by wrf-python, while retaining this
+/// crate's Bunkers storm-motion algorithm (wrf-python uses a different
+/// 3--10-km mean-wind motion internally).
+pub fn compute_srh_with_pressure_and_latitude(
+    u_3d: &[f64],
+    v_3d: &[f64],
+    height_agl_3d: &[f64],
+    pressure_hpa_3d: &[f64],
+    latitude_2d: &[f64],
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    top_m: f64,
+) -> Vec<f64> {
+    compute_srh_with_bunkers_method(
+        u_3d,
+        v_3d,
+        height_agl_3d,
+        pressure_hpa_3d,
+        latitude_2d,
+        nx,
+        ny,
+        nz,
+        top_m,
+        false,
+    )
+}
+
+/// Compute signed SRH with SHARPpy's 1-hPa-resampled NPW Bunkers means.
+pub fn compute_srh_with_npw_bunkers_and_latitude(
+    u_3d: &[f64],
+    v_3d: &[f64],
+    height_agl_3d: &[f64],
+    pressure_hpa_3d: &[f64],
+    latitude_2d: &[f64],
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    top_m: f64,
+) -> Vec<f64> {
+    compute_srh_with_bunkers_method(
+        u_3d,
+        v_3d,
+        height_agl_3d,
+        pressure_hpa_3d,
+        latitude_2d,
+        nx,
+        ny,
+        nz,
+        top_m,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_srh_with_bunkers_method(
+    u_3d: &[f64],
+    v_3d: &[f64],
+    height_agl_3d: &[f64],
+    pressure_hpa_3d: &[f64],
+    latitude_2d: &[f64],
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    top_m: f64,
+    pressure_resampled_npw: bool,
+) -> Vec<f64> {
     let n2d = ny * nx;
     let has_pressure = pressure_hpa_3d.len() == nz * ny * nx;
+    let has_latitude = latitude_2d.len() == n2d;
     let nxy = n2d;
 
     (0..n2d)
@@ -334,7 +420,14 @@ pub fn compute_srh_with_pressure(
                     p_col.reverse();
                 }
 
-                compute_srh_column(h_col, u_col, v_col, p_col, top_m)
+                let latitude = if has_latitude { latitude_2d[idx] } else { 0.0 };
+                if pressure_resampled_npw {
+                    compute_srh_column_with_method(
+                        h_col, u_col, v_col, p_col, top_m, latitude, true,
+                    )
+                } else {
+                    compute_srh_column(h_col, u_col, v_col, p_col, top_m, latitude)
+                }
             },
         )
         .collect()
@@ -349,6 +442,27 @@ fn compute_srh_column(
     v_prof: &[f64],
     p_prof: &[f64],
     top_m: f64,
+    latitude_deg: f64,
+) -> f64 {
+    compute_srh_column_with_method(
+        heights,
+        u_prof,
+        v_prof,
+        p_prof,
+        top_m,
+        latitude_deg,
+        false,
+    )
+}
+
+fn compute_srh_column_with_method(
+    heights: &[f64],
+    u_prof: &[f64],
+    v_prof: &[f64],
+    p_prof: &[f64],
+    top_m: f64,
+    latitude_deg: f64,
+    pressure_resampled_npw: bool,
 ) -> f64 {
     let nz = heights.len();
     if nz < 2 {
@@ -356,15 +470,23 @@ fn compute_srh_column(
     }
 
     let has_pressure = p_prof.len() == nz;
-    let (storm_u, storm_v) = if has_pressure {
-        let ((storm_u, storm_v), _, _) =
+    let (right_mover, left_mover) = if has_pressure && pressure_resampled_npw {
+        let (right_mover, left_mover, _) =
+            crate::met::wind::bunkers_storm_motion_npw_pressure_resampled(
+                u_prof, v_prof, heights, p_prof,
+            );
+        (right_mover, left_mover)
+    } else if has_pressure {
+        let (right_mover, left_mover, _) =
             pressure_weighted_bunkers_storm_motion(heights, u_prof, v_prof, p_prof);
-        (storm_u, storm_v)
+        (right_mover, left_mover)
     } else {
-        let ((storm_u, storm_v), _, _) =
+        let (right_mover, left_mover, _) =
             crate::met::wind::bunkers_storm_motion(u_prof, v_prof, heights);
-        (storm_u, storm_v)
+        (right_mover, left_mover)
     };
+    let (storm_u, storm_v) =
+        crate::met::wind::cyclonic_bunkers_motion(latitude_deg, right_mover, left_mover);
 
     let mut srh = 0.0;
 
@@ -1475,12 +1597,27 @@ mod tests {
         let v_prof = [0.0, 10.0, 20.0, 20.0];
         let p_prof = [1000.0, 850.0, 500.0, 450.0];
 
-        let weighted = compute_srh_column(&heights, &u_prof, &v_prof, &p_prof, 3000.0);
-        let unweighted = compute_srh_column(&heights, &u_prof, &v_prof, &[], 3000.0);
+        let weighted = compute_srh_column(&heights, &u_prof, &v_prof, &p_prof, 3000.0, 35.0);
+        let unweighted = compute_srh_column(&heights, &u_prof, &v_prof, &[], 3000.0, 35.0);
 
         assert!(
             (weighted - unweighted).abs() > 1.0,
             "expected pressure-weighted and unweighted SRH to differ, got weighted={weighted} unweighted={unweighted}"
         );
+    }
+
+    #[test]
+    fn srh_uses_the_mirrored_cyclonic_mover_south_of_the_equator() {
+        let heights = [0.0, 500.0, 1000.0, 3000.0, 5500.0, 6000.0];
+        let u_prof = [0.0, 3.0, 5.0, 10.0, 18.0, 20.0];
+        let v_north = [0.0, 2.0, 5.0, 12.0, 18.0, 20.0];
+        let v_south = [0.0, -2.0, -5.0, -12.0, -18.0, -20.0];
+
+        let north = compute_srh_column(&heights, &u_prof, &v_north, &[], 1000.0, 35.0);
+        let south = compute_srh_column(&heights, &u_prof, &v_south, &[], 1000.0, -35.0);
+
+        assert!(north > 0.0, "expected positive NH cyclonic SRH, got {north}");
+        assert!(south < 0.0, "expected signed-negative SH cyclonic SRH, got {south}");
+        assert_close(south, -north);
     }
 }
