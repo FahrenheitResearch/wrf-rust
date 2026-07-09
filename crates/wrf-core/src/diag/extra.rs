@@ -5,7 +5,7 @@
 use crate::compute::ComputeOpts;
 use crate::diag::cape::build_surface_augmented_thermo_column;
 use crate::error::WrfResult;
-use crate::file::WrfFile;
+use crate::file::{SharedField, WrfFile};
 use rayon::prelude::*;
 
 /// 700-500 hPa lapse rate (°C/km). `[ny, nx]`
@@ -491,9 +491,27 @@ pub fn compute_max_temp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<
 
 /// Downdraft CAPE (J/kg). `[ny, nx]`
 pub fn compute_dcape(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    compute_thermo_profile_scalar(f, t, opts, |p, temp, td, h| {
+    Ok(dcape_field(f, t, opts)?.to_vec())
+}
+
+fn dcape_cache_key(t: usize, lake_interp: Option<f64>) -> String {
+    let lake_interp = match lake_interp {
+        Some(value) if value > 0.0 => format!("{:016x}", value.to_bits()),
+        _ => "none".to_string(),
+    };
+    format!("dcape_{t}_{lake_interp}")
+}
+
+pub(crate) fn dcape_field(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<SharedField> {
+    let cache_key = dcape_cache_key(t, opts.lake_interp);
+    if let Some(cached) = f.cached_field(&cache_key) {
+        return Ok(cached);
+    }
+
+    let dcape = compute_thermo_profile_scalar(f, t, opts, |p, temp, td, h| {
         dcape_profile(p, temp, td, h).unwrap_or(0.0)
-    })
+    })?;
+    Ok(f.store_cached_field(cache_key, dcape))
 }
 
 fn interp_at_pressure(p: &[f64], values: &[f64], target_p: f64) -> f64 {
@@ -688,4 +706,16 @@ fn wet_lift(p: f64, temp_c: f64, target_p: f64) -> f64 {
         - crate::met::thermo::ZEROCNK;
     let theta_m = theta_c - crate::met::thermo::wobf(theta_c) + crate::met::thermo::wobf(temp_c);
     crate::met::thermo::satlift(target_p, theta_m)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dcape_cache_key;
+
+    #[test]
+    fn dcape_cache_key_tracks_time_and_lake_correction() {
+        assert_ne!(dcape_cache_key(0, None), dcape_cache_key(1, None));
+        assert_eq!(dcape_cache_key(0, None), dcape_cache_key(0, Some(0.0)));
+        assert_ne!(dcape_cache_key(0, None), dcape_cache_key(0, Some(1_000.0)));
+    }
 }

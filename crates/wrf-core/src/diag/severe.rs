@@ -878,7 +878,7 @@ pub fn compute_ship(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<
 
 /// Derecho Composite Parameter (dimensionless). `[ny, nx]`
 pub fn compute_dcp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let dcape = crate::diag::extra::compute_dcape(f, t, opts)?;
+    let dcape = crate::diag::extra::dcape_field(f, t, opts)?;
     let mucape = crate::diag::cape::compute_mucape(f, t, opts)?;
     let shear06_ms = crate::diag::srh::compute_shear_0_6km(f, t, opts)?;
     let mean06 = crate::diag::srh::compute_mean_wind_0_6km(f, t, opts)?;
