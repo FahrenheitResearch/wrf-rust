@@ -132,6 +132,15 @@ processes, each constructing a fresh `WrfFile`; per-handle CAPE/EIL caches are
 not shared. A release benchmark must include the real product batch or a
 faithful multi-process call-sequence driver.
 
+## Resolved stage-one parity
+
+- AVO and PVO directly mirror pinned wrf-python 1.3.4.1 commit
+  `31c923335227b22fa656fd589a5342b91103e939`
+  `DCOMPUTEABSVORT`/`DCOMPUTEPV` kernels: raw C-grid winds, stagger-specific
+  and mass map factors, raw `F`, clamped boundary stencils, the pinned 9.81
+  m/s^2 gravity constant, and all three Ertel-PV terms. They are required
+  comparisons rather than documented approximations.
+
 ## Known stage-one gaps
 
 - `theta_w`, SB/ML parcel diagnostics, shear, Bunkers motion, SHIP, STP, and
@@ -140,15 +149,15 @@ faithful multi-process call-sequence driver.
   explicitly ports RIP `DCALRELHL`; the existing `srh`/`srh1`/`srh3` names
   retain WRF-Runner's Bunkers behavior. Southern-Hemisphere and threshold-level
   fixtures are still needed to exercise the strict path end to end.
-- PVO is still a vertical-stretching approximation. AVO now uses upstream
-  display scaling but still lacks WRF map-factor terms.
 - Full upstream `interplevel` supports left dimensions, 1-D level sequences,
   caller-selected missing values, `squeeze`, and metadata. Stage one fixes and
   probes WRF-Runner's scalar/2-D cases.
-- `ll_to_xy` still lacks upstream sequence/stagger/as-int/metadata behavior and
-  robust longitude wrapping.
-- Projection parity still needs the WRF spherical globe, `MOAD_CEN_LAT`, exact
-  polar/Mercator rules, and rotated-pole handling.
+- `ll_to_xy` now matches scalar/sequence result shapes and `as_int`, but still
+  uses an O(points x grid-size) nearest-grid scan, is not antimeridian-aware,
+  clamps out-of-domain points, and lacks stagger/metadata output.
+- Projection constructors now use WRF's spherical globe and pinned Lambert,
+  Mercator, polar, regular, and rotated-lat/lon parameters. Moving domains,
+  xarray metadata, and exact inference without netCDF4 remain unsupported.
 - Multiple representative fixtures are still needed: high terrain, lakes,
   moving nests, Southern Hemisphere, dateline/global grids, high surface
   pressure, shallow caps, and multiple buoyant layers.
