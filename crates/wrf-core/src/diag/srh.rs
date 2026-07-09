@@ -90,23 +90,6 @@ pub fn compute_srh_field(
     let ny = f.ny;
     let nxy = nx * ny;
 
-    // Rotate 3D winds to earth coordinates
-    let mut u = vec![0.0f64; u_grid.len()];
-    let mut v = vec![0.0f64; v_grid.len()];
-    for idx in 0..u_grid.len() {
-        let ij = idx % nxy;
-        u[idx] = u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij];
-        v[idx] = u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij];
-    }
-
-    // Rotate 10m winds to earth coordinates
-    let mut u10 = vec![0.0f64; nxy];
-    let mut v10 = vec![0.0f64; nxy];
-    for ij in 0..nxy {
-        u10[ij] = u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij];
-        v10[ij] = u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij];
-    }
-
     let nz = f.nz;
 
     if let Some(storm_motion) = storm_motion {
@@ -117,14 +100,14 @@ pub fn compute_srh_field(
             let mut u_prof = Vec::with_capacity(nz + 1);
             let mut v_prof = Vec::with_capacity(nz + 1);
             let mut h_prof = Vec::with_capacity(nz + 1);
-            u_prof.push(u10[ij]);
-            v_prof.push(v10[ij]);
+            u_prof.push(u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij]);
+            v_prof.push(u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij]);
             h_prof.push(SURFACE_LAYER_HEIGHT_M);
 
             for k in 0..nz {
                 let idx = k * nxy + ij;
-                u_prof.push(u[idx]);
-                v_prof.push(v[idx]);
+                u_prof.push(u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij]);
+                v_prof.push(u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij]);
                 h_prof.push(h_agl[idx]);
             }
 
@@ -146,8 +129,8 @@ pub fn compute_srh_field(
 
         // Level 0: 10m winds anchored to the surface, with surface pressure.
         for ij in 0..nxy {
-            u_aug.push(u10[ij]);
-            v_aug.push(v10[ij]);
+            u_aug.push(u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij]);
+            v_aug.push(u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij]);
             h_aug.push(SURFACE_LAYER_HEIGHT_M);
             p_aug.push(psfc_hpa[ij]);
         }
@@ -155,8 +138,8 @@ pub fn compute_srh_field(
         for k in 0..nz {
             let off = k * nxy;
             for ij in 0..nxy {
-                u_aug.push(u[off + ij]);
-                v_aug.push(v[off + ij]);
+                u_aug.push(u_grid[off + ij] * cosa[ij] - v_grid[off + ij] * sina[ij]);
+                v_aug.push(u_grid[off + ij] * sina[ij] + v_grid[off + ij] * cosa[ij]);
                 h_aug.push(h_agl[off + ij]);
                 p_aug.push(pres_hpa[off + ij]);
             }
@@ -233,23 +216,6 @@ fn compute_bunkers_columns(
     let nz = f.nz;
     let nxy = nx * ny;
 
-    // Rotate 3D winds to earth coordinates
-    let mut u = vec![0.0f64; u_grid.len()];
-    let mut v = vec![0.0f64; v_grid.len()];
-    for idx in 0..u_grid.len() {
-        let ij = idx % nxy;
-        u[idx] = u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij];
-        v[idx] = u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij];
-    }
-
-    // Rotate 10m winds to earth coordinates
-    let mut u10 = vec![0.0f64; nxy];
-    let mut v10 = vec![0.0f64; nxy];
-    for ij in 0..nxy {
-        u10[ij] = u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij];
-        v10[ij] = u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij];
-    }
-
     let mut rm_u = vec![0.0f64; nxy];
     let mut rm_v = vec![0.0f64; nxy];
     let mut lm_u = vec![0.0f64; nxy];
@@ -265,15 +231,15 @@ fn compute_bunkers_columns(
             let mut v_prof = Vec::with_capacity(nz + 1);
             let mut h_prof = Vec::with_capacity(nz + 1);
             let mut p_prof = Vec::with_capacity(nz + 1);
-            u_prof.push(u10[ij]);
-            v_prof.push(v10[ij]);
+            u_prof.push(u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij]);
+            v_prof.push(u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij]);
             h_prof.push(SURFACE_LAYER_HEIGHT_M);
             p_prof.push(psfc_hpa[ij]);
 
             for k in 0..nz {
                 let idx = k * nxy + ij;
-                u_prof.push(u[idx]);
-                v_prof.push(v[idx]);
+                u_prof.push(u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij]);
+                v_prof.push(u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij]);
                 h_prof.push(h_agl[idx]);
                 p_prof.push(pres_hpa[idx]);
             }
@@ -405,23 +371,6 @@ pub fn compute_effective_srh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
     let nxy = nx * ny;
     let effective_layers = effective_inflow_layer_grid(f, t, opts)?;
 
-    // Rotate 3D winds to earth coordinates
-    let mut u = vec![0.0f64; u_grid.len()];
-    let mut v = vec![0.0f64; v_grid.len()];
-    for idx in 0..u_grid.len() {
-        let ij = idx % nxy;
-        u[idx] = u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij];
-        v[idx] = u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij];
-    }
-
-    // Rotate 10m winds to earth coordinates
-    let mut u10 = vec![0.0f64; nxy];
-    let mut v10 = vec![0.0f64; nxy];
-    for ij in 0..nxy {
-        u10[ij] = u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij];
-        v10[ij] = u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij];
-    }
-
     let custom_sm = opts.storm_motion.as_ref();
     let storm_motion_method = resolved_storm_motion_method(opts);
     Ok((0..nxy)
@@ -441,12 +390,12 @@ pub fn compute_effective_srh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
 
             let mut u_prof = Vec::with_capacity(nz + 1);
             let mut v_prof = Vec::with_capacity(nz + 1);
-            u_prof.push(u10[ij]);
-            v_prof.push(v10[ij]);
+            u_prof.push(u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij]);
+            v_prof.push(u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij]);
             for k in 0..nz {
                 let idx = k * nxy + ij;
-                u_prof.push(u[idx]);
-                v_prof.push(v[idx]);
+                u_prof.push(u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij]);
+                v_prof.push(u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij]);
             }
 
             let (sm_u, sm_v) = if let Some(sm) = custom_sm {
@@ -505,23 +454,6 @@ pub fn compute_mean_wind(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult
     let nz = f.nz;
     let nxy = nx * ny;
 
-    // Rotate 3D winds to earth coordinates
-    let mut u = vec![0.0f64; u_grid.len()];
-    let mut v = vec![0.0f64; v_grid.len()];
-    for idx in 0..u_grid.len() {
-        let ij = idx % nxy;
-        u[idx] = u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij];
-        v[idx] = u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij];
-    }
-
-    // Rotate 10m winds to earth coordinates
-    let mut u10 = vec![0.0f64; nxy];
-    let mut v10 = vec![0.0f64; nxy];
-    for ij in 0..nxy {
-        u10[ij] = u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij];
-        v10[ij] = u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij];
-    }
-
     let bottom = opts.bottom_m.unwrap_or(0.0);
     let top = opts.top_m.unwrap_or(6000.0);
 
@@ -535,14 +467,14 @@ pub fn compute_mean_wind(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult
             let mut u_prof = Vec::with_capacity(nz + 1);
             let mut v_prof = Vec::with_capacity(nz + 1);
             let mut h_prof = Vec::with_capacity(nz + 1);
-            u_prof.push(u10[ij]);
-            v_prof.push(v10[ij]);
+            u_prof.push(u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij]);
+            v_prof.push(u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij]);
             h_prof.push(SURFACE_LAYER_HEIGHT_M);
 
             for k in 0..nz {
                 let idx = k * nxy + ij;
-                u_prof.push(u[idx]);
-                v_prof.push(v[idx]);
+                u_prof.push(u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij]);
+                v_prof.push(u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij]);
                 h_prof.push(h_agl[idx]);
             }
 

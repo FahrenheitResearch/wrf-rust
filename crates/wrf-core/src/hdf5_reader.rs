@@ -116,6 +116,8 @@ struct DatasetInfo {
     filters: Vec<Filter>,
 }
 
+type DecodedSliceChunk = Option<(Vec<usize>, Vec<u8>)>;
+
 #[derive(Debug, Clone)]
 enum DType {
     F32,
@@ -1024,11 +1026,9 @@ impl PureRustFile {
         self.collect_btree_v1_chunks(btree_addr, ndims, &mut chunks)?;
 
         let ndim = shape.len();
-        let batch_size = rayon::current_num_threads()
-            .min(MAX_PARALLEL_CHUNK_DECODES)
-            .max(1);
+        let batch_size = rayon::current_num_threads().clamp(1, MAX_PARALLEL_CHUNK_DECODES);
         for chunk_batch in chunks.chunks(batch_size) {
-            let decoded_chunks: WrfResult<Vec<Option<(Vec<usize>, Vec<u8>)>>> = chunk_batch
+            let decoded_chunks: WrfResult<Vec<DecodedSliceChunk>> = chunk_batch
                 .par_iter()
                 .map(|(offsets, chunk_addr, compressed_size, filter_mask)| {
                     if *chunk_addr == UNDEF_ADDR {

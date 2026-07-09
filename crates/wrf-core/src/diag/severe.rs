@@ -693,21 +693,6 @@ pub fn compute_critical_angle(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfR
     let nz = f.nz;
     let nxy = nx * ny;
 
-    let mut u = vec![0.0f64; u_grid.len()];
-    let mut v = vec![0.0f64; v_grid.len()];
-    for idx in 0..u_grid.len() {
-        let ij = idx % nxy;
-        u[idx] = u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij];
-        v[idx] = u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij];
-    }
-
-    let mut u10 = vec![0.0f64; nxy];
-    let mut v10 = vec![0.0f64; nxy];
-    for ij in 0..nxy {
-        u10[ij] = u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij];
-        v10[ij] = u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij];
-    }
-
     let mut result = vec![0.0f64; nxy];
     result.iter_mut().enumerate().for_each(|(ij, val)| {
         let mut u_prof = Vec::with_capacity(nz);
@@ -719,8 +704,8 @@ pub fn compute_critical_angle(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfR
 
         for k in 0..nz {
             let idx = k * nxy + ij;
-            u_prof.push(u[idx]);
-            v_prof.push(v[idx]);
+            u_prof.push(u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij]);
+            v_prof.push(u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij]);
             h_prof.push(h_agl[idx]);
             p_prof.push(pres_hpa[idx]);
         }
@@ -730,8 +715,8 @@ pub fn compute_critical_angle(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfR
             &v_prof,
             &h_prof,
             &p_prof,
-            u10[ij],
-            v10[ij],
+            u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij],
+            u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij],
             opts.storm_motion.as_ref().map(|sm| sm.at(ij)),
             resolved_storm_motion_method(opts),
         );
