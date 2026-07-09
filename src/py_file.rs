@@ -68,9 +68,7 @@ impl WrfFile {
     /// requiring the optional Python netCDF4 package.
     fn _global_attr_f64(&self, name: &str) -> PyResult<f64> {
         self.inner.global_attr_f64(name).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyKeyError, _>(format!(
-                "global attribute {name}: {e}"
-            ))
+            PyErr::new::<pyo3::exceptions::PyKeyError, _>(format!("global attribute {name}: {e}"))
         })
     }
 
