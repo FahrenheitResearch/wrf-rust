@@ -692,6 +692,139 @@ pub fn compute_cape3d(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<V
 const WRFPYTHON_CAPE2D_FIELDS: usize = 4;
 const WRFPYTHON_CAPE3D_FIELDS: usize = 2;
 
+/// Inputs staged exactly as wrf-python's float32 NumPy wrapper presents them
+/// to the double-precision RIP CAPE kernel.
+///
+/// WRF output fields are ordinarily float32.  wrf-python performs its derived
+/// field arithmetic in that storage type, briefly widens pressure and theta
+/// for `DCOMPUTETK`, casts the resulting temperature back to float32, and only
+/// then widens all CAPE inputs to float64.  Keeping these arrays as `f32`
+/// reproduces those rounding boundaries while using half the staging memory.
+struct WrfPythonCapeInputs {
+    pressure_hpa: Vec<f32>,
+    temperature_k: Vec<f32>,
+    mixing_ratio: Vec<f32>,
+    height_msl: Vec<f32>,
+    terrain_m: Vec<f32>,
+    surface_pressure_hpa: Vec<f32>,
+}
+
+#[inline]
+fn wrfpython_temperature_f32(pressure_pa: f32, theta_k: f32) -> f32 {
+    ((f64::from(pressure_pa) / 100_000.0).powf(crate::met::rip_cape::GAMMA)
+        * f64::from(theta_k)) as f32
+}
+
+#[inline]
+fn wrfpython_geopotential_f32(
+    ph_lower: f64,
+    phb_lower: f64,
+    ph_upper: f64,
+    phb_upper: f64,
+) -> f32 {
+    let lower = ph_lower as f32 + phb_lower as f32;
+    let upper = ph_upper as f32 + phb_upper as f32;
+    0.5_f32 * (lower + upper)
+}
+
+#[inline]
+fn wrfpython_height_f32(
+    ph_lower: f64,
+    phb_lower: f64,
+    ph_upper: f64,
+    phb_upper: f64,
+) -> f32 {
+    wrfpython_geopotential_f32(ph_lower, phb_lower, ph_upper, phb_upper) / 9.81_f32
+}
+
+#[inline]
+fn wrfpython_output_f32(value: f64) -> f64 {
+    f64::from(value as f32)
+}
+
+fn build_wrfpython_cape_inputs(f: &WrfFile, t: usize) -> WrfResult<WrfPythonCapeInputs> {
+    let nxy = f.nxy();
+    let nxyz = f.nxyz();
+    let nxyz_stag = f.nz_stag * nxy;
+
+    let perturbation_pressure = f.read_var("P", t)?;
+    let base_pressure = f.read_var("PB", t)?;
+    validate_strict_input_size("P", perturbation_pressure.len(), nxyz)?;
+    validate_strict_input_size("PB", base_pressure.len(), nxyz)?;
+    let mut pressure_hpa: Vec<f32> = perturbation_pressure
+        .iter()
+        .zip(base_pressure.iter())
+        .map(|(&p, &pb)| p as f32 + pb as f32)
+        .collect();
+    drop(perturbation_pressure);
+    drop(base_pressure);
+
+    let perturbation_theta = f.read_var("T", t)?;
+    validate_strict_input_size("T", perturbation_theta.len(), nxyz)?;
+    let temperature_k: Vec<f32> = pressure_hpa
+        .iter()
+        .zip(perturbation_theta.iter())
+        .map(|(&pressure_pa, &theta)| {
+            let full_theta = theta as f32 + 300.0_f32;
+            wrfpython_temperature_f32(pressure_pa, full_theta)
+        })
+        .collect();
+    drop(perturbation_theta);
+    pressure_hpa
+        .iter_mut()
+        .for_each(|pressure| *pressure *= 0.01_f32);
+
+    let mixing_ratio_raw = f.read_var("QVAPOR", t)?;
+    validate_strict_input_size("QVAPOR", mixing_ratio_raw.len(), nxyz)?;
+    let mixing_ratio = mixing_ratio_raw
+        .into_iter()
+        .map(|value| value as f32)
+        .collect();
+
+    let ph = f.read_var("PH", t)?;
+    let phb = f.read_var("PHB", t)?;
+    validate_strict_input_size("PH", ph.len(), nxyz_stag)?;
+    validate_strict_input_size("PHB", phb.len(), nxyz_stag)?;
+    let mut height_msl = Vec::with_capacity(nxyz);
+    for level in 0..f.nz {
+        let lower_offset = level * nxy;
+        let upper_offset = (level + 1) * nxy;
+        for ij in 0..nxy {
+            height_msl.push(wrfpython_height_f32(
+                ph[lower_offset + ij],
+                phb[lower_offset + ij],
+                ph[upper_offset + ij],
+                phb[upper_offset + ij],
+            ));
+        }
+    }
+    drop(ph);
+    drop(phb);
+
+    let terrain_raw = f.read_var("HGT", t)?;
+    validate_strict_input_size("HGT", terrain_raw.len(), nxy)?;
+    let terrain_m = terrain_raw
+        .into_iter()
+        .map(|value| value as f32)
+        .collect();
+
+    let surface_pressure_raw = f.read_var("PSFC", t)?;
+    validate_strict_input_size("PSFC", surface_pressure_raw.len(), nxy)?;
+    let surface_pressure_hpa = surface_pressure_raw
+        .into_iter()
+        .map(|value| value as f32 * 0.01_f32)
+        .collect();
+
+    Ok(WrfPythonCapeInputs {
+        pressure_hpa,
+        temperature_k,
+        mixing_ratio,
+        height_msl,
+        terrain_m,
+        surface_pressure_hpa,
+    })
+}
+
 fn validate_wrfpython_cape_opts(opts: &ComputeOpts) -> WrfResult<()> {
     let mut unsupported = Vec::new();
     if opts.parcel_type.is_some() {
@@ -737,10 +870,10 @@ fn fill_wrfpython_cape_column(
     ij: usize,
     nxy: usize,
     nz: usize,
-    pressure_pa: &[f64],
-    theta_k: &[f64],
-    mixing_ratio: &[f64],
-    geopotential: &[f64],
+    pressure_hpa_field: &[f32],
+    temperature_k_field: &[f32],
+    mixing_ratio_field: &[f32],
+    height_msl_field: &[f32],
     pressure_hpa: &mut Vec<f64>,
     temperature_k: &mut Vec<f64>,
     column_mixing_ratio: &mut Vec<f64>,
@@ -753,7 +886,7 @@ fn fill_wrfpython_cape_column(
 
     // Standard WRF files are surface-first. Match wrf-python's vertical flip
     // for an input whose pressure axis is already top-first.
-    let reverse = pressure_pa[ij] < pressure_pa[(nz - 1) * nxy + ij];
+    let reverse = pressure_hpa_field[ij] < pressure_hpa_field[(nz - 1) * nxy + ij];
     for output_level in 0..nz {
         let input_level = if reverse {
             nz - 1 - output_level
@@ -761,12 +894,10 @@ fn fill_wrfpython_cape_column(
             output_level
         };
         let index = input_level * nxy + ij;
-        let pressure = pressure_pa[index];
-        pressure_hpa.push(pressure / 100.0);
-        temperature_k
-            .push(theta_k[index] * (pressure / 100_000.0).powf(crate::met::rip_cape::GAMMA));
-        column_mixing_ratio.push(mixing_ratio[index]);
-        height_msl.push(geopotential[index] / crate::met::rip_cape::G);
+        pressure_hpa.push(f64::from(pressure_hpa_field[index]));
+        temperature_k.push(f64::from(temperature_k_field[index]));
+        column_mixing_ratio.push(f64::from(mixing_ratio_field[index]));
+        height_msl.push(f64::from(height_msl_field[index]));
     }
 }
 
@@ -790,18 +921,25 @@ fn wrfpython_cape2d_stack(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResul
             "strict wrf-python CAPE requires at least two vertical levels".into(),
         ));
     }
-    let pressure_pa = f.full_pressure(t)?;
-    let theta_k = f.full_theta(t)?;
-    let mixing_ratio = f.qvapor(t)?;
-    let geopotential = f.full_geopotential(t)?;
-    let terrain = f.terrain(t)?;
-    let surface_pressure_pa = f.psfc(t)?;
-    validate_strict_input_size("pressure", pressure_pa.len(), nxyz)?;
-    validate_strict_input_size("potential temperature", theta_k.len(), nxyz)?;
-    validate_strict_input_size("water-vapor mixing ratio", mixing_ratio.len(), nxyz)?;
-    validate_strict_input_size("geopotential", geopotential.len(), nxyz)?;
-    validate_strict_input_size("terrain", terrain.len(), nxy)?;
-    validate_strict_input_size("surface pressure", surface_pressure_pa.len(), nxy)?;
+    let inputs = build_wrfpython_cape_inputs(f, t)?;
+    validate_strict_input_size("pressure", inputs.pressure_hpa.len(), nxyz)?;
+    validate_strict_input_size(
+        "temperature",
+        inputs.temperature_k.len(),
+        nxyz,
+    )?;
+    validate_strict_input_size(
+        "water-vapor mixing ratio",
+        inputs.mixing_ratio.len(),
+        nxyz,
+    )?;
+    validate_strict_input_size("height", inputs.height_msl.len(), nxyz)?;
+    validate_strict_input_size("terrain", inputs.terrain_m.len(), nxy)?;
+    validate_strict_input_size(
+        "surface pressure",
+        inputs.surface_pressure_hpa.len(),
+        nxy,
+    )?;
 
     let columns: Result<Vec<crate::met::rip_cape::Cape2dColumn>, String> = (0..nxy)
         .into_par_iter()
@@ -820,10 +958,10 @@ fn wrfpython_cape2d_stack(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResul
                     ij,
                     nxy,
                     nz,
-                    &pressure_pa,
-                    &theta_k,
-                    &mixing_ratio,
-                    &geopotential,
+                    &inputs.pressure_hpa,
+                    &inputs.temperature_k,
+                    &inputs.mixing_ratio,
+                    &inputs.height_msl,
                     pressure,
                     temperature,
                     moisture,
@@ -834,8 +972,8 @@ fn wrfpython_cape2d_stack(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResul
                     temperature,
                     moisture,
                     height,
-                    terrain[ij],
-                    surface_pressure_pa[ij] / 100.0,
+                    f64::from(inputs.terrain_m[ij]),
+                    f64::from(inputs.surface_pressure_hpa[ij]),
                     workspace,
                 )
                 .map_err(|error| format!("column {ij}: {error}"))
@@ -846,10 +984,26 @@ fn wrfpython_cape2d_stack(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResul
         .map_err(|error| WrfError::Compute(format!("strict wrf-python cape_2d failed: {error}")))?;
 
     let mut stack = Vec::with_capacity(WRFPYTHON_CAPE2D_FIELDS * nxy);
-    stack.extend(columns.iter().map(|column| column.cape));
-    stack.extend(columns.iter().map(|column| column.cin));
-    stack.extend(columns.iter().map(|column| column.lcl_agl));
-    stack.extend(columns.iter().map(|column| column.lfc_agl));
+    stack.extend(
+        columns
+            .iter()
+            .map(|column| wrfpython_output_f32(column.cape)),
+    );
+    stack.extend(
+        columns
+            .iter()
+            .map(|column| wrfpython_output_f32(column.cin)),
+    );
+    stack.extend(
+        columns
+            .iter()
+            .map(|column| wrfpython_output_f32(column.lcl_agl)),
+    );
+    stack.extend(
+        columns
+            .iter()
+            .map(|column| wrfpython_output_f32(column.lfc_agl)),
+    );
     Ok(f.store_cached_field(cache_key, stack))
 }
 
@@ -873,14 +1027,19 @@ fn wrfpython_cape3d_stack(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResul
             "strict wrf-python CAPE requires at least two vertical levels".into(),
         ));
     }
-    let pressure_pa = f.full_pressure(t)?;
-    let theta_k = f.full_theta(t)?;
-    let mixing_ratio = f.qvapor(t)?;
-    let geopotential = f.full_geopotential(t)?;
-    validate_strict_input_size("pressure", pressure_pa.len(), nxyz)?;
-    validate_strict_input_size("potential temperature", theta_k.len(), nxyz)?;
-    validate_strict_input_size("water-vapor mixing ratio", mixing_ratio.len(), nxyz)?;
-    validate_strict_input_size("geopotential", geopotential.len(), nxyz)?;
+    let inputs = build_wrfpython_cape_inputs(f, t)?;
+    validate_strict_input_size("pressure", inputs.pressure_hpa.len(), nxyz)?;
+    validate_strict_input_size(
+        "temperature",
+        inputs.temperature_k.len(),
+        nxyz,
+    )?;
+    validate_strict_input_size(
+        "water-vapor mixing ratio",
+        inputs.mixing_ratio.len(),
+        nxyz,
+    )?;
+    validate_strict_input_size("height", inputs.height_msl.len(), nxyz)?;
 
     let mut stack = vec![f64::NAN; WRFPYTHON_CAPE3D_FIELDS * nxyz];
     let values_per_column = WRFPYTHON_CAPE3D_FIELDS * nz;
@@ -912,10 +1071,10 @@ fn wrfpython_cape3d_stack(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResul
                         ij,
                         nxy,
                         nz,
-                        &pressure_pa,
-                        &theta_k,
-                        &mixing_ratio,
-                        &geopotential,
+                        &inputs.pressure_hpa,
+                        &inputs.temperature_k,
+                        &inputs.mixing_ratio,
+                        &inputs.height_msl,
                         pressure,
                         temperature,
                         moisture,
@@ -944,8 +1103,8 @@ fn wrfpython_cape3d_stack(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResul
             let column = &columns[batch_ij * values_per_column..(batch_ij + 1) * values_per_column];
             let (cape, cin) = column.split_at(nz);
             for level in 0..nz {
-                stack[level * nxy + ij] = cape[level];
-                stack[nxyz + level * nxy + ij] = cin[level];
+                stack[level * nxy + ij] = wrfpython_output_f32(cape[level]);
+                stack[nxyz + level * nxy + ij] = wrfpython_output_f32(cin[level]);
             }
         }
     }
@@ -1435,6 +1594,37 @@ mod tests {
             ..ComputeOpts::default()
         })
         .is_err());
+    }
+
+    #[test]
+    fn strict_wrfpython_pressure_conversion_uses_float32_arithmetic() {
+        let pressure_hpa = 100_001.0_f32 * 0.01_f32;
+        assert_eq!(f64::from(pressure_hpa), 1_000.0099487304688);
+    }
+
+    #[test]
+    fn strict_wrfpython_temperature_rounds_after_double_precision_tk() {
+        let temperature = wrfpython_temperature_f32(90_001.0_f32, 301.234_f32);
+        assert_eq!(temperature.to_bits(), 0x4392_26a8);
+        assert_eq!(f64::from(temperature), 292.302001953125);
+    }
+
+    #[test]
+    fn strict_wrfpython_geopotential_preserves_staged_float32_rounding() {
+        let geopotential =
+            wrfpython_geopotential_f32(40_972.95, 88_560.734, 33_131.484, -73_320.85);
+        assert_eq!(geopotential.to_bits(), 0x472e_8029);
+
+        let one_shot = (0.5
+            * ((40_972.95_f32 as f64 + 88_560.734_f32 as f64)
+                + (33_131.484_f32 as f64 - 73_320.85_f32 as f64))) as f32;
+        assert_eq!(one_shot.to_bits(), 0x472e_8028);
+    }
+
+    #[test]
+    fn strict_wrfpython_outputs_round_only_after_kernel_decisions() {
+        assert_eq!(wrfpython_output_f32(0.1), 0.10000000149011612);
+        assert!(wrfpython_output_f32(f64::NAN).is_nan());
     }
 
     #[test]
