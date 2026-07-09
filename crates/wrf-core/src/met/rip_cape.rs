@@ -271,9 +271,7 @@ fn temperature_on_pseudoadiabat(theta_e: f64, pressure_hpa: f64) -> RipResult<f6
     // These bounds intentionally stop at element 148 (Fortran index 149).
     // The RIP binary search can extrapolate beyond the grid endpoints and
     // never selects the final theta-e or pressure interval.
-    let theta_index = rip_binary_search(0, LOOKUP_SIZE - 2, |mid| {
-        theta_e >= table.theta_e[mid]
-    });
+    let theta_index = rip_binary_search(0, LOOKUP_SIZE - 2, |mid| theta_e >= table.theta_e[mid]);
     let pressure_index = rip_binary_search(0, LOOKUP_SIZE - 2, |mid| {
         pressure_hpa <= table.pressure[mid]
     });
@@ -351,9 +349,7 @@ fn equivalent_potential_temperature(
 ) -> f64 {
     temperature
         * (1000.0 / pressure_hpa).powf(GAMMA * (1.0 + GAMMAMD * mixing_ratio))
-        * ((THTECON1 / lcl_temperature - THTECON2)
-            * mixing_ratio
-            * (1.0 + THTECON3 * mixing_ratio))
+        * ((THTECON1 / lcl_temperature - THTECON2) * mixing_ratio * (1.0 + THTECON3 * mixing_ratio))
             .exp()
 }
 
@@ -367,8 +363,7 @@ fn validate_profile(
     if levels < 2 {
         return Err("RIP CAPE requires at least two vertical levels".into());
     }
-    if temperature_k.len() != levels || mixing_ratio.len() != levels || height_msl.len() != levels
-    {
+    if temperature_k.len() != levels || mixing_ratio.len() != levels || height_msl.len() != levels {
         return Err("RIP CAPE profile arrays have different lengths".into());
     }
     for level in 0..levels {
@@ -384,16 +379,10 @@ fn validate_profile(
             return Err(format!("invalid RIP CAPE input at vertical level {level}"));
         }
     }
-    if pressure_hpa
-        .windows(2)
-        .any(|values| values[0] <= values[1])
-    {
+    if pressure_hpa.windows(2).any(|values| values[0] <= values[1]) {
         return Err("RIP CAPE pressure must decrease from surface to model top".into());
     }
-    if height_msl
-        .windows(2)
-        .any(|values| values[0] >= values[1])
-    {
+    if height_msl.windows(2).any(|values| values[0] >= values[1]) {
         return Err("RIP CAPE height must increase from surface to model top".into());
     }
     Ok(())
@@ -440,10 +429,8 @@ fn average_500m_parcel(
 ) -> RipResult<ParcelAverage> {
     let parcel_virtual_temperature =
         virtual_temperature(temperature_k[selected], mixing_ratio[selected]);
-    let pressure_depth =
-        500.0 * pressure_hpa[selected] * G / (RD * parcel_virtual_temperature);
-    let lower_pressure = (pressure_hpa[selected] + 0.5 * pressure_depth)
-        .min(surface_pressure_hpa);
+    let pressure_depth = 500.0 * pressure_hpa[selected] * G / (RD * parcel_virtual_temperature);
+    let lower_pressure = (pressure_hpa[selected] + 0.5 * pressure_depth).min(surface_pressure_hpa);
     let upper_pressure = lower_pressure - pressure_depth;
     if !pressure_depth.is_finite() || pressure_depth <= 0.0 || upper_pressure <= 0.0 {
         return Err("invalid pressure depth for RIP 500 m parcel average".into());
@@ -468,8 +455,8 @@ fn average_500m_parcel(
             continue;
         }
         let q = mixing_ratio[level].max(1.0e-15);
-        let theta = temperature_k[level]
-            * (1000.0 / pressure_hpa[level]).powf(GAMMA * (1.0 + GAMMAMD * q));
+        let theta =
+            temperature_k[level] * (1000.0 / pressure_hpa[level]).powf(GAMMA * (1.0 + GAMMAMD * q));
         let overlap_upper = upper_pressure.max(layer_upper);
         let overlap_lower = lower_pressure.min(layer_lower);
         let overlap = overlap_lower - overlap_upper;
@@ -487,8 +474,7 @@ fn average_500m_parcel(
     // This selected-level environmental q in the exponent is an intentional
     // compatibility quirk in rip_cape.f90.
     let parcel_temperature = (theta_total / integrated_pressure)
-        * (pressure_hpa[selected] / 1000.0)
-            .powf(GAMMA * (1.0 + GAMMAMD * mixing_ratio[selected]));
+        * (pressure_hpa[selected] / 1000.0).powf(GAMMA * (1.0 + GAMMAMD * mixing_ratio[selected]));
     if parcel_temperature.is_finite() && parcel_q.is_finite() {
         Ok(ParcelAverage {
             temperature: parcel_temperature,
@@ -504,10 +490,9 @@ fn append_buoyancy_sample(
     buoyancy: f64,
     relative_height: f64,
 ) -> usize {
-    if let (Some(&previous_buoyancy), Some(&previous_height)) = (
-        scratch.buoyancy.last(),
-        scratch.relative_height.last(),
-    ) {
+    if let (Some(&previous_buoyancy), Some(&previous_height)) =
+        (scratch.buoyancy.last(), scratch.relative_height.last())
+    {
         if buoyancy * previous_buoyancy < 0.0 {
             let crossing_height = previous_height
                 + previous_buoyancy / (previous_buoyancy - buoyancy)
@@ -592,7 +577,9 @@ fn lift_parcel(
     );
     let lcl_height = height_msl[start] + (parcel_temperature - tlcl) / lcl_lapse_rate;
     if !tlcl.is_finite() || !theta_e.is_finite() || !lcl_height.is_finite() {
-        return Err(format!("invalid RIP parcel thermodynamics at vertical level {start}"));
+        return Err(format!(
+            "invalid RIP parcel thermodynamics at vertical level {start}"
+        ));
     }
 
     let dry_temperature = temperature_k[start];
@@ -613,9 +600,9 @@ fn lift_parcel(
                     false,
                 )
             } else if !lcl_inserted {
-                let below = level.checked_sub(1).ok_or_else(|| {
-                    "RIP LCL interpolation has no lower model level".to_string()
-                })?;
+                let below = level
+                    .checked_sub(1)
+                    .ok_or_else(|| "RIP LCL interpolation has no lower model level".to_string())?;
                 let denominator = height_msl[level] - height_msl[below];
                 let lower_weight = (height_msl[level] - lcl_height) / denominator;
                 let upper_weight = (lcl_height - height_msl[below]) / denominator;
@@ -633,8 +620,7 @@ fn lift_parcel(
                 let lifted_temperature =
                     temperature_on_pseudoadiabat(theta_e, pressure_hpa[level])?;
                 let saturation_vapor_pressure = EZERO
-                    * (ESLCON1 * (lifted_temperature - CELKEL)
-                        / (lifted_temperature - ESLCON2))
+                    * (ESLCON1 * (lifted_temperature - CELKEL) / (lifted_temperature - ESLCON2))
                         .exp();
                 let lifted_q = EPS * saturation_vapor_pressure
                     / (pressure_hpa[level] - saturation_vapor_pressure);
@@ -654,11 +640,8 @@ fn lift_parcel(
         }
         let buoyancy = G * (lifted_virtual_temperature - environmental_virtual_temperature)
             / environmental_virtual_temperature;
-        let current_index = append_buoyancy_sample(
-            scratch,
-            buoyancy,
-            lifted_height - height_msl[start],
-        );
+        let current_index =
+            append_buoyancy_sample(scratch, buoyancy, lifted_height - height_msl[start]);
         if is_lcl {
             lcl_index = current_index;
             lcl_inserted = true;
@@ -709,10 +692,7 @@ pub(crate) fn cape2d_column_with_workspace(
     workspace: &mut CapeWorkspace,
 ) -> RipResult<Cape2dColumn> {
     validate_profile(pressure_hpa, temperature_k, mixing_ratio, height_msl)?;
-    if !terrain_m.is_finite()
-        || !surface_pressure_hpa.is_finite()
-        || surface_pressure_hpa <= 0.0
-    {
+    if !terrain_m.is_finite() || !surface_pressure_hpa.is_finite() || surface_pressure_hpa <= 0.0 {
         return Err("invalid terrain or surface pressure for RIP CAPE".into());
     }
 
@@ -869,11 +849,7 @@ mod tests {
             G / (CP * (1.0 + CPMD * q)),
             1.0e-15,
         );
-        assert_close(
-            cape3d_lcl_lapse_rate(q),
-            G / CP * (1.0 + CPMD * q),
-            1.0e-15,
-        );
+        assert_close(cape3d_lcl_lapse_rate(q), G / CP * (1.0 + CPMD * q), 1.0e-15);
         assert_ne!(cape2d_lcl_lapse_rate(q), cape3d_lcl_lapse_rate(q));
     }
 
@@ -884,13 +860,7 @@ mod tests {
         let mixing_ratio = [0.012, 0.012, 0.020];
         let height = [0.0, 1000.0, 3000.0];
         assert_eq!(
-            select_max_theta_e_level(
-                &pressure,
-                &temperature,
-                &mixing_ratio,
-                &height,
-                0.0,
-            ),
+            select_max_theta_e_level(&pressure, &temperature, &mixing_ratio, &height, 0.0,),
             1
         );
     }
@@ -913,15 +883,14 @@ mod tests {
         let parcel =
             average_500m_parcel(&pressure, &temperature, &mixing_ratio, 1000.0, 1).unwrap();
 
-        let depth = 500.0 * pressure[1] * G
-            / (RD * virtual_temperature(temperature[1], mixing_ratio[1]));
+        let depth =
+            500.0 * pressure[1] * G / (RD * virtual_temperature(temperature[1], mixing_ratio[1]));
         let p2 = (pressure[1] + 0.5 * depth).min(1000.0);
         let p1 = p2 - depth;
         let boundary = 0.5 * (pressure[0] + pressure[1]);
         let lower_overlap = (p2 - boundary).max(0.0);
         let selected_overlap = boundary.min(p2) - p1.max(0.5 * (pressure[1] + pressure[2]));
-        let expected_q = (mixing_ratio[0] * lower_overlap
-            + mixing_ratio[1] * selected_overlap)
+        let expected_q = (mixing_ratio[0] * lower_overlap + mixing_ratio[1] * selected_overlap)
             / (lower_overlap + selected_overlap);
         assert_close(parcel.mixing_ratio, expected_q, 1.0e-12);
         assert!((parcel.mixing_ratio - mixing_ratio[1]).abs() > 1.0e-5);

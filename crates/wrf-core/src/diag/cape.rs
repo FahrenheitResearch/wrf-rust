@@ -763,20 +763,14 @@ fn fill_wrfpython_cape_column(
         let index = input_level * nxy + ij;
         let pressure = pressure_pa[index];
         pressure_hpa.push(pressure / 100.0);
-        temperature_k.push(
-            theta_k[index]
-                * (pressure / 100_000.0).powf(crate::met::rip_cape::GAMMA),
-        );
+        temperature_k
+            .push(theta_k[index] * (pressure / 100_000.0).powf(crate::met::rip_cape::GAMMA));
         column_mixing_ratio.push(mixing_ratio[index]);
         height_msl.push(geopotential[index] / crate::met::rip_cape::G);
     }
 }
 
-fn wrfpython_cape2d_stack(
-    f: &WrfFile,
-    t: usize,
-    opts: &ComputeOpts,
-) -> WrfResult<SharedField> {
+fn wrfpython_cape2d_stack(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<SharedField> {
     validate_wrfpython_cape_opts(opts)?;
     let cache_key = format!("cape2d_wrfpython_stack_{t}");
     if let Some(cached) = f.cached_field(&cache_key) {
@@ -848,9 +842,8 @@ fn wrfpython_cape2d_stack(
             },
         )
         .collect();
-    let columns = columns.map_err(|error| {
-        WrfError::Compute(format!("strict wrf-python cape_2d failed: {error}"))
-    })?;
+    let columns = columns
+        .map_err(|error| WrfError::Compute(format!("strict wrf-python cape_2d failed: {error}")))?;
 
     let mut stack = Vec::with_capacity(WRFPYTHON_CAPE2D_FIELDS * nxy);
     stack.extend(columns.iter().map(|column| column.cape));
@@ -860,11 +853,7 @@ fn wrfpython_cape2d_stack(
     Ok(f.store_cached_field(cache_key, stack))
 }
 
-fn wrfpython_cape3d_stack(
-    f: &WrfFile,
-    t: usize,
-    opts: &ComputeOpts,
-) -> WrfResult<SharedField> {
+fn wrfpython_cape3d_stack(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<SharedField> {
     validate_wrfpython_cape_opts(opts)?;
     let cache_key = format!("cape3d_wrfpython_stack_{t}");
     if let Some(cached) = f.cached_field(&cache_key) {
@@ -917,8 +906,7 @@ fn wrfpython_cape3d_stack(
                         crate::met::rip_cape::CapeWorkspace::with_levels(nz),
                     )
                 },
-                |(pressure, temperature, moisture, height, workspace),
-                 (batch_ij, column)| {
+                |(pressure, temperature, moisture, height, workspace), (batch_ij, column)| {
                     let ij = batch_start + batch_ij;
                     fill_wrfpython_cape_column(
                         ij,
@@ -953,8 +941,7 @@ fn wrfpython_cape3d_stack(
 
         for batch_ij in 0..batch_end - batch_start {
             let ij = batch_start + batch_ij;
-            let column = &columns
-                [batch_ij * values_per_column..(batch_ij + 1) * values_per_column];
+            let column = &columns[batch_ij * values_per_column..(batch_ij + 1) * values_per_column];
             let (cape, cin) = column.split_at(nz);
             for level in 0..nz {
                 stack[level * nxy + ij] = cape[level];
@@ -981,11 +968,7 @@ fn wrfpython_cape2d_component(
 ///
 /// This mixed-unit aggregate does not accept a unit override; request one of
 /// the component diagnostics when conversion is needed.
-pub fn compute_cape2d_wrfpython(
-    f: &WrfFile,
-    t: usize,
-    opts: &ComputeOpts,
-) -> WrfResult<Vec<f64>> {
+pub fn compute_cape2d_wrfpython(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     if opts.units.is_some() {
         return Err(WrfError::InvalidParam(
             "cape2d_wrfpython is a mixed-unit aggregate; request mcape_wrfpython, mcin_wrfpython, lcl_wrfpython, or lfc_wrfpython for unit conversion".into(),
@@ -994,44 +977,24 @@ pub fn compute_cape2d_wrfpython(
     Ok(wrfpython_cape2d_stack(f, t, opts)?.to_vec())
 }
 
-pub fn compute_mcape_wrfpython(
-    f: &WrfFile,
-    t: usize,
-    opts: &ComputeOpts,
-) -> WrfResult<Vec<f64>> {
+pub fn compute_mcape_wrfpython(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     wrfpython_cape2d_component(f, t, opts, 0)
 }
 
-pub fn compute_mcin_wrfpython(
-    f: &WrfFile,
-    t: usize,
-    opts: &ComputeOpts,
-) -> WrfResult<Vec<f64>> {
+pub fn compute_mcin_wrfpython(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     wrfpython_cape2d_component(f, t, opts, 1)
 }
 
-pub fn compute_lcl_wrfpython(
-    f: &WrfFile,
-    t: usize,
-    opts: &ComputeOpts,
-) -> WrfResult<Vec<f64>> {
+pub fn compute_lcl_wrfpython(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     wrfpython_cape2d_component(f, t, opts, 2)
 }
 
-pub fn compute_lfc_wrfpython(
-    f: &WrfFile,
-    t: usize,
-    opts: &ComputeOpts,
-) -> WrfResult<Vec<f64>> {
+pub fn compute_lfc_wrfpython(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     wrfpython_cape2d_component(f, t, opts, 3)
 }
 
 /// Exact wrf-python 1.3.4.1 `cape_3d` ordering: `[CAPE, CIN]`.
-pub fn compute_cape3d_wrfpython(
-    f: &WrfFile,
-    t: usize,
-    opts: &ComputeOpts,
-) -> WrfResult<Vec<f64>> {
+pub fn compute_cape3d_wrfpython(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     Ok(wrfpython_cape3d_stack(f, t, opts)?.to_vec())
 }
 
@@ -1044,11 +1007,7 @@ pub fn compute_cape3d_only_wrfpython(
     Ok(stack[..f.nxyz()].to_vec())
 }
 
-pub fn compute_cin3d_wrfpython(
-    f: &WrfFile,
-    t: usize,
-    opts: &ComputeOpts,
-) -> WrfResult<Vec<f64>> {
+pub fn compute_cin3d_wrfpython(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let stack = wrfpython_cape3d_stack(f, t, opts)?;
     Ok(stack[f.nxyz()..].to_vec())
 }
