@@ -857,8 +857,6 @@ mod tests {
         let heights = [
             100.0, 1_000.0, 3_000.0, 3_500.0, 8_000.0, 10_001.0, 12_000.0,
         ];
-        let u = [0.0, 5.0, 10.0, 20.0, 10.0, 10.0, 10.0];
-        let v = [0.0, 5.0, 0.0, 10.0, 0.0, 0.0, 0.0];
         let (_, _, level_top) = wrfpython_rip_level_bounds(&heights, 0.0, 3_000.0).unwrap();
 
         assert_eq!(level_top, 3);
