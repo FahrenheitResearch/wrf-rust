@@ -164,8 +164,7 @@ fn wrfpython_rip_storm_motion(
     let mean_direction_deg = if mean_u == 0.0 && mean_v == 0.0 {
         0.0
     } else {
-        180.0 / std::f64::consts::PI
-            * (std::f64::consts::PI + mean_u.atan2(mean_v))
+        180.0 / std::f64::consts::PI * (std::f64::consts::PI + mean_u.atan2(mean_v))
     };
     let storm_speed = WRFPYTHON_STORM_SPEED_FACTOR * mean_speed;
     let mut storm_direction_deg = if latitude_deg >= 0.0 {
@@ -242,11 +241,7 @@ fn wrfpython_rip_srh_column(
 /// 3--10-km mean, 0.75 storm speed, and a latitude-dependent 30-degree turn.
 /// `depth_m` defaults to 3000 m. `storm_motion` and `storm_motion_method` are
 /// rejected because accepting them would no longer be strict compatibility.
-pub fn compute_srh_wrfpython(
-    f: &WrfFile,
-    t: usize,
-    opts: &ComputeOpts,
-) -> WrfResult<Vec<f64>> {
+pub fn compute_srh_wrfpython(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     if opts.storm_motion.is_some() || opts.storm_motion_method.is_some() {
         return Err(WrfError::InvalidParam(
             "srh_wrfpython has fixed NCAR RIP storm-motion semantics; use srh for custom or Bunkers motion"
@@ -822,18 +817,18 @@ mod tests {
 
     #[test]
     fn wrfpython_rip_motion_uses_three_to_ten_km_mean_and_hemisphere_turn() {
-        let heights = [100.0, 1_000.0, 3_001.0, 5_000.0, 8_000.0, 10_001.0, 12_000.0];
+        let heights = [
+            100.0, 1_000.0, 3_001.0, 5_000.0, 8_000.0, 10_001.0, 12_000.0,
+        ];
         let u = [10.0; 7];
         let v = [0.0; 7];
         let (level_3km, level_10km, _) =
             wrfpython_rip_level_bounds(&heights, 0.0, 3_000.0).unwrap();
 
         let north =
-            wrfpython_rip_storm_motion(&u, &v, &heights, level_3km, level_10km, 35.0)
-                .unwrap();
+            wrfpython_rip_storm_motion(&u, &v, &heights, level_3km, level_10km, 35.0).unwrap();
         let south =
-            wrfpython_rip_storm_motion(&u, &v, &heights, level_3km, level_10km, -35.0)
-                .unwrap();
+            wrfpython_rip_storm_motion(&u, &v, &heights, level_3km, level_10km, -35.0).unwrap();
 
         assert_close(north.0, 6.495_190_528_383_29);
         assert_close(north.1, -3.75);
@@ -843,15 +838,15 @@ mod tests {
 
     #[test]
     fn wrfpython_rip_srh_reproduces_signed_mirrored_golden_columns() {
-        let heights = [100.0, 1_000.0, 3_001.0, 5_000.0, 8_000.0, 10_001.0, 12_000.0];
+        let heights = [
+            100.0, 1_000.0, 3_001.0, 5_000.0, 8_000.0, 10_001.0, 12_000.0,
+        ];
         let u = [0.0, 5.0, 10.0, 10.0, 10.0, 10.0, 10.0];
         let v_north = [0.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0];
         let v_south = [0.0, -5.0, 0.0, 0.0, 0.0, 0.0, 0.0];
 
-        let north =
-            wrfpython_rip_srh_column(&u, &v_north, &heights, 0.0, 35.0, 3_000.0);
-        let south =
-            wrfpython_rip_srh_column(&u, &v_south, &heights, 0.0, -35.0, 3_000.0);
+        let north = wrfpython_rip_srh_column(&u, &v_north, &heights, 0.0, 35.0, 3_000.0);
+        let south = wrfpython_rip_srh_column(&u, &v_south, &heights, 0.0, -35.0, 3_000.0);
 
         assert_close(north, 87.5);
         assert_close(south, -87.5);
@@ -859,11 +854,12 @@ mod tests {
 
     #[test]
     fn wrfpython_rip_srh_uses_first_model_level_strictly_above_top() {
-        let heights = [100.0, 1_000.0, 3_000.0, 3_500.0, 8_000.0, 10_001.0, 12_000.0];
+        let heights = [
+            100.0, 1_000.0, 3_000.0, 3_500.0, 8_000.0, 10_001.0, 12_000.0,
+        ];
         let u = [0.0, 5.0, 10.0, 20.0, 10.0, 10.0, 10.0];
         let v = [0.0, 5.0, 0.0, 10.0, 0.0, 0.0, 0.0];
-        let (_, _, level_top) =
-            wrfpython_rip_level_bounds(&heights, 0.0, 3_000.0).unwrap();
+        let (_, _, level_top) = wrfpython_rip_level_bounds(&heights, 0.0, 3_000.0).unwrap();
 
         assert_eq!(level_top, 3);
     }
