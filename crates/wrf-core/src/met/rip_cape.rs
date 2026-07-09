@@ -557,6 +557,9 @@ fn finish_buoyancy_profile(scratch: &mut CapeWorkspace, lcl_index: usize) -> Lif
     }
 }
 
+// Keep the four parallel profile slices explicit: this mirrors the pinned RIP
+// kernel and avoids allocating a temporary profile-of-structs per parcel.
+#[allow(clippy::too_many_arguments)]
 fn lift_parcel(
     pressure_hpa: &[f64],
     temperature_k: &[f64],
@@ -904,9 +907,11 @@ mod tests {
 
     #[test]
     fn energy_reduction_uses_highest_el_and_first_strict_minimum() {
-        let mut scratch = CapeWorkspace::default();
-        scratch.buoyancy = vec![-1.0, -1.0, 0.0, 2.0, 0.0, -2.0, 0.0, 1.0, 0.0, -1.0];
-        scratch.relative_height = (0..10).map(|level| level as f64 * 100.0).collect();
+        let mut scratch = CapeWorkspace {
+            buoyancy: vec![-1.0, -1.0, 0.0, 2.0, 0.0, -2.0, 0.0, 1.0, 0.0, -1.0],
+            relative_height: (0..10).map(|level| level as f64 * 100.0).collect(),
+            ..Default::default()
+        };
         let result = finish_buoyancy_profile(&mut scratch, 0);
         assert_close(result.cape, 100.0, 1.0e-12);
         assert_close(result.cin, 150.0, 1.0e-12);
@@ -915,9 +920,11 @@ mod tests {
 
     #[test]
     fn no_equilibrium_level_is_missing_and_uses_top_as_lfc() {
-        let mut scratch = CapeWorkspace::default();
-        scratch.buoyancy = vec![-1.0, -0.5, -0.25];
-        scratch.relative_height = vec![0.0, 500.0, 1000.0];
+        let mut scratch = CapeWorkspace {
+            buoyancy: vec![-1.0, -0.5, -0.25],
+            relative_height: vec![0.0, 500.0, 1000.0],
+            ..Default::default()
+        };
         let result = finish_buoyancy_profile(&mut scratch, 0);
         assert!(result.cape.is_nan());
         assert!(result.cin.is_nan());
@@ -926,9 +933,11 @@ mod tests {
 
     #[test]
     fn cin_is_missing_when_cape_is_below_one_hundred() {
-        let mut scratch = CapeWorkspace::default();
-        scratch.buoyancy = vec![-0.2, 0.0, 0.8, 0.0, -0.2];
-        scratch.relative_height = vec![0.0, 100.0, 200.0, 300.0, 400.0];
+        let mut scratch = CapeWorkspace {
+            buoyancy: vec![-0.2, 0.0, 0.8, 0.0, -0.2],
+            relative_height: vec![0.0, 100.0, 200.0, 300.0, 400.0],
+            ..Default::default()
+        };
         let result = finish_buoyancy_profile(&mut scratch, 0);
         assert!(result.cape < 100.0);
         assert!(result.cin.is_nan());
