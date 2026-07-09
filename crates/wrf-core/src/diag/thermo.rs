@@ -48,10 +48,7 @@ pub fn compute_theta_e(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<
         .iter()
         .zip(tc.iter())
         .zip(qv.iter())
-        .map(|((p, t_c), q)| {
-            let td_c = crate::met::thermo::dewpoint_from_rh(*t_c, rh_from_q(*q, *p, *t_c));
-            crate::met::thermo::equivalent_potential_temperature(*p, *t_c, td_c) + 273.15
-        })
+        .map(|((p, t_c), q)| theta_e_from_model_state(*p, *t_c, *q))
         .collect();
     Ok(result)
 }
@@ -129,4 +126,22 @@ fn rh_from_q(q_kgkg: f64, p_hpa: f64, t_c: f64) -> f64 {
     let e_hpa = q * p_hpa / (0.622 + q);
     let es_hpa = 6.112 * (17.67 * t_c / (t_c + 243.5)).exp();
     (e_hpa / es_hpa * 100.0).clamp(0.0, 100.0)
+}
+
+fn theta_e_from_model_state(p_hpa: f64, t_c: f64, q_kgkg: f64) -> f64 {
+    let td_c = crate::met::thermo::dewpoint_from_rh(t_c, rh_from_q(q_kgkg, p_hpa, t_c));
+    crate::met::thermo::equivalent_potential_temperature(p_hpa, t_c, td_c)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::theta_e_from_model_state;
+
+    #[test]
+    fn theta_e_registered_units_are_kelvin_not_offset_twice() {
+        let theta_e = theta_e_from_model_state(1_000.0, 30.0, 0.014);
+
+        assert!((theta_e - 344.9322).abs() < 0.001);
+        assert!((250.0..450.0).contains(&theta_e));
+    }
 }

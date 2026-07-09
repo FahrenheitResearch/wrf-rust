@@ -111,14 +111,16 @@ pub fn compute_theta_w(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<
         .iter()
         .zip(tc.iter())
         .zip(qv.iter())
-        .map(|((p, t_c), q)| {
-            let q = q.max(1e-10);
-            let e = q * p / (0.622 + q);
-            let ln_e = (e / 6.112).max(1e-10).ln();
-            let td_c = (243.5 * ln_e) / (17.67 - ln_e);
-            crate::met::thermo::wet_bulb_potential_temperature(*p, *t_c, td_c) + 273.15
-        })
+        .map(|((p, t_c), q)| theta_w_from_model_state(*p, *t_c, *q))
         .collect())
+}
+
+fn theta_w_from_model_state(p_hpa: f64, t_c: f64, q_kgkg: f64) -> f64 {
+    let q = q_kgkg.max(1e-10);
+    let e = q * p_hpa / (0.622 + q);
+    let ln_e = (e / 6.112).max(1e-10).ln();
+    let td_c = (243.5 * ln_e) / (17.67 - ln_e);
+    crate::met::thermo::wet_bulb_potential_temperature(p_hpa, t_c, td_c)
 }
 
 /// Fosberg Fire Weather Index (dimensionless). `[ny, nx]`
@@ -710,12 +712,20 @@ fn wet_lift(p: f64, temp_c: f64, target_p: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::dcape_cache_key;
+    use super::{dcape_cache_key, theta_w_from_model_state};
 
     #[test]
     fn dcape_cache_key_tracks_time_and_lake_correction() {
         assert_ne!(dcape_cache_key(0, None), dcape_cache_key(1, None));
         assert_eq!(dcape_cache_key(0, None), dcape_cache_key(0, Some(0.0)));
         assert_ne!(dcape_cache_key(0, None), dcape_cache_key(0, Some(1_000.0)));
+    }
+
+    #[test]
+    fn theta_w_registered_units_are_kelvin_not_offset_twice() {
+        let theta_w = theta_w_from_model_state(850.0, 20.0, 0.008);
+
+        assert!((theta_w - 292.1105).abs() < 0.001);
+        assert!((250.0..400.0).contains(&theta_w));
     }
 }
