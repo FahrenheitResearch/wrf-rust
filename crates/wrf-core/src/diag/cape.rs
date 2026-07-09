@@ -52,7 +52,7 @@ fn unpack_cape_stack(
 
 /// Helper: extract the 3-D + 2-D fields needed for CAPE, call compute_cape_cin.
 /// Returns (cape_2d, cin_2d, lcl_2d, lfc_2d).
-fn compute_cape_fields(
+pub(crate) fn compute_cape_fields(
     f: &WrfFile,
     t: usize,
     parcel_type: &str,

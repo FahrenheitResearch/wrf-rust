@@ -172,24 +172,15 @@ pub fn compute_effective_bulk_wind_difference(
 ///
 /// SRH is computed through the canonical compute_srh_field path (earth-rotated + 10m prepend).
 pub fn compute_stp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let pres = f.full_pressure(t)?;
-    let tc = f.temperature_c(t)?;
-    let qv = f.qvapor(t)?;
     let h_agl = f.height_agl(t)?;
-    let psfc = f.psfc(t)?; // Pa -- compute_cape_cin converts internally
-    let t2 = f.t2_for_opts(t, opts)?; // K  -- compute_cape_cin converts internally
-    let q2 = f.q2_for_opts(t, opts)?;
     let u = f.u_destag(t)?;
     let v = f.v_destag(t)?;
     let nx = f.nx;
     let ny = f.ny;
     let nz = f.nz;
 
-    // Surface-based CAPE + LCL
-    // Pass raw Pa/K values -- compute_cape_cin converts internally
-    let (sbcape, _, lcl, _) = crate::met::composite::compute_cape_cin(
-        &pres, &tc, &qv, &h_agl, &psfc, &t2, &q2, nx, ny, nz, "sb",
-    );
+    let (sbcape, _, lcl, _) =
+        crate::diag::cape::compute_cape_fields(f, t, "sb", None, opts.lake_interp)?;
 
     // 0-1 km SRH via canonical path (earth-rotated winds + 10m prepend)
     let srh1 = crate::diag::srh::compute_srh_field(
@@ -216,23 +207,8 @@ pub fn compute_stp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
 ///
 /// Effective SRH uses earth-rotated winds with 10m prepend via compute_effective_srh.
 pub fn compute_stp_effective(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let pres = f.full_pressure(t)?;
-    let tc = f.temperature_c(t)?;
-    let qv = f.qvapor(t)?;
-    let h_agl = f.height_agl(t)?;
-    let psfc = f.psfc(t)?; // Pa -- compute_cape_cin converts internally
-    let t2 = f.t2_for_opts(t, opts)?; // K  -- compute_cape_cin converts internally
-    let q2 = f.q2_for_opts(t, opts)?;
-
-    let nx = f.nx;
-    let ny = f.ny;
-    let nz = f.nz;
-
-    // Mixed-layer CAPE, CIN, and LCL
-    // Pass raw Pa/K values -- compute_cape_cin converts internally
-    let (mlcape, mlcin, lcl, _) = crate::met::composite::compute_cape_cin(
-        &pres, &tc, &qv, &h_agl, &psfc, &t2, &q2, nx, ny, nz, "ml",
-    );
+    let (mlcape, mlcin, lcl, _) =
+        crate::diag::cape::compute_cape_fields(f, t, "ml", None, opts.lake_interp)?;
 
     // Effective-layer SRH via canonical path (earth-rotated winds + 10m prepend)
     let eff_srh = crate::diag::srh::compute_effective_srh(f, t, opts)?;
@@ -506,22 +482,8 @@ fn compute_tornadic_low_level_components(
 ///
 /// Uses MUCAPE, effective SRH, and effective bulk wind difference (EBWD).
 pub fn compute_scp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let pres = f.full_pressure(t)?;
-    let tc = f.temperature_c(t)?;
-    let qv = f.qvapor(t)?;
-    let h_agl = f.height_agl(t)?;
-    let psfc = f.psfc(t)?; // Pa -- compute_cape_cin converts internally
-    let t2 = f.t2_for_opts(t, opts)?; // K  -- compute_cape_cin converts internally
-    let q2 = f.q2_for_opts(t, opts)?;
-
-    let nx = f.nx;
-    let ny = f.ny;
-    let nz = f.nz;
-
-    // Pass raw Pa/K values -- compute_cape_cin converts internally
-    let (mucape, _, _, _) = crate::met::composite::compute_cape_cin(
-        &pres, &tc, &qv, &h_agl, &psfc, &t2, &q2, nx, ny, nz, "mu",
-    );
+    let (mucape, _, _, _) =
+        crate::diag::cape::compute_cape_fields(f, t, "mu", None, opts.lake_interp)?;
 
     let eff_srh = crate::diag::srh::compute_effective_srh(f, t, opts)?;
     let ebwd = compute_effective_bulk_wind_difference(f, t, opts)?;
@@ -549,22 +511,8 @@ pub fn compute_ecape_scp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult
 /// SRH depth is configurable via `opts.depth_m` (default 1000 m for 0-1 km EHI).
 /// SRH is computed through the canonical compute_srh_field path (earth-rotated + 10m prepend).
 pub fn compute_ehi(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let pres = f.full_pressure(t)?;
-    let tc = f.temperature_c(t)?;
-    let qv = f.qvapor(t)?;
-    let h_agl = f.height_agl(t)?;
-    let psfc = f.psfc(t)?; // Pa -- compute_cape_cin converts internally
-    let t2 = f.t2_for_opts(t, opts)?; // K  -- compute_cape_cin converts internally
-    let q2 = f.q2_for_opts(t, opts)?;
-
-    let nx = f.nx;
-    let ny = f.ny;
-    let nz = f.nz;
-
-    // Pass raw Pa/K values -- compute_cape_cin converts internally
-    let (sbcape, _, _, _) = crate::met::composite::compute_cape_cin(
-        &pres, &tc, &qv, &h_agl, &psfc, &t2, &q2, nx, ny, nz, "sb",
-    );
+    let (sbcape, _, _, _) =
+        crate::diag::cape::compute_cape_fields(f, t, "sb", None, opts.lake_interp)?;
 
     // SRH via canonical path (earth-rotated winds + 10m prepend)
     let srh_depth = opts.depth_m.unwrap_or(1000.0);
@@ -810,9 +758,6 @@ pub fn compute_ship(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<
     let tc = f.temperature_c(t)?;
     let qv = f.qvapor(t)?;
     let h_agl = f.height_agl(t)?;
-    let psfc = f.psfc(t)?;
-    let t2 = f.t2_for_opts(t, opts)?;
-    let q2 = f.q2_for_opts(t, opts)?;
     let u = f.u_destag(t)?;
     let v = f.v_destag(t)?;
 
@@ -821,10 +766,8 @@ pub fn compute_ship(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<
     let nz = f.nz;
     let nxy = nx * ny;
 
-    // MUCAPE
-    let (mucape, _, _, _) = crate::met::composite::compute_cape_cin(
-        &pres, &tc, &qv, &h_agl, &psfc, &t2, &q2, nx, ny, nz, "mu",
-    );
+    let (mucape, _, _, _) =
+        crate::diag::cape::compute_cape_fields(f, t, "mu", None, opts.lake_interp)?;
 
     // 0-6 km shear
     let shear6 = crate::met::composite::compute_shear(&u, &v, &h_agl, nx, ny, nz, 0.0, 6000.0);
@@ -996,14 +939,9 @@ pub fn compute_mmp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
 /// the denominator is based on the vector difference between the 0-500 m
 /// mean wind and the 0-6 km mean wind.
 pub fn compute_bri(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let pres = f.full_pressure(t)?;
     let pres_hpa = f.pressure_hpa(t)?;
-    let tc = f.temperature_c(t)?;
-    let qv = f.qvapor(t)?;
     let h_agl = f.height_agl(t)?;
-    let psfc = f.psfc(t)?; // Pa -- compute_cape_cin converts internally
-    let t2 = f.t2_for_opts(t, opts)?; // K  -- compute_cape_cin converts internally
-    let q2 = f.q2_for_opts(t, opts)?;
+    let psfc = f.psfc(t)?;
     let u = f.u_destag(t)?;
     let v = f.v_destag(t)?;
     let u10 = f.u10(t)?;
@@ -1014,10 +952,8 @@ pub fn compute_bri(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
     let nz = f.nz;
     let nxy = nx * ny;
 
-    // Pass raw Pa/K values -- compute_cape_cin converts internally
-    let (sbcape, _, _, _) = crate::met::composite::compute_cape_cin(
-        &pres, &tc, &qv, &h_agl, &psfc, &t2, &q2, nx, ny, nz, "sb",
-    );
+    let (sbcape, _, _, _) =
+        crate::diag::cape::compute_cape_fields(f, t, "sb", None, opts.lake_interp)?;
 
     let brn_shear: Vec<f64> = (0..nxy)
         .into_par_iter()
