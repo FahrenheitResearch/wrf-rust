@@ -488,7 +488,7 @@ pub fn compute_el(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f6
     let pt = resolve_parcel_type(opts, "sb");
 
     let mut el = vec![0.0f64; nxy];
-    el.iter_mut().enumerate().for_each(|(ij, el_v)| {
+    el.par_iter_mut().enumerate().for_each(|(ij, el_v)| {
         let mut p_prof = Vec::with_capacity(nz);
         let mut t_prof = Vec::with_capacity(nz);
         let mut td_prof = Vec::with_capacity(nz);
