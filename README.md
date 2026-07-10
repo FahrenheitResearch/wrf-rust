@@ -1,14 +1,37 @@
 # wrf-rust
 
-Rust-powered WRF post-processing with Python bindings. 85 diagnostic variables, built-in plotting, and parallel computation.
+Rust-powered WRF post-processing with Python bindings. 96 diagnostic variables, built-in plotting, and parallel computation.
 
 ## Install
 
 ```bash
-pip install wrf-rust
+python -m pip install --force-reinstall "wrf-rust==0.2.36"
 ```
 
 Pre-built wheels for Python 3.10-3.13 on Linux, macOS, and Windows. No Rust toolchain, no system libraries, no conda required.
+
+`0.2.36` is the conservative compatibility release for applications built
+against `0.2.35`, including WRF-Runner's `New-PC-Updates` branch. Because PyPI
+already contains numerically higher `0.4.x` releases, an unpinned
+`pip install -U wrf-rust` will not select `0.2.36`; pin the version exactly as
+shown above.
+
+## 0.2.36 Compatibility and Performance
+
+This release starts from the `v0.2.35` source and backports only
+output-preserving performance work: effective-inflow caching, parallel
+depth-limited CAPE and EL columns, cached CAPE reuse in severe composites,
+parallel HDF5 chunk decoding, reduced CAPE allocations, and removal of full
+rotated-wind volume copies. It does not include the later science-formula,
+diagnostic-registry, ECAPE-dependency, or Python return-contract changes.
+
+Validation on a real 2.39 GB, 800 x 800 x 79 WRF file found byte-identical
+results for all 96 registered diagnostics versus `v0.2.35`. A representative
+WRF-Runner batch with 18 plot workloads and six process workers improved from
+48.27 s to 35.25 s on a 24-thread Linux system (1.37x), while sampled aggregate
+peak RSS fell from 23.38 GB to 22.68 GB. The larger approximately 3.25x result
+measured elsewhere is a single-process, shared-`WrfFile` diagnostic benchmark;
+it is not an end-to-end WRF-Runner claim.
 
 ## Community Guide
 
