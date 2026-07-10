@@ -124,6 +124,9 @@ enum DType {
     F64,
     I32,
     U8,
+    /// One fixed-length HDF5 string element. The declared byte width is
+    /// load-bearing for scalar attributes such as WRF START_DATE (S19).
+    FixedString(usize),
 }
 
 impl DType {
@@ -133,6 +136,7 @@ impl DType {
             DType::F64 => 8,
             DType::I32 => 4,
             DType::U8 => 1,
+            DType::FixedString(size) => *size,
         }
     }
 }
@@ -572,7 +576,9 @@ impl PureRustFile {
                 .chunks_exact(4)
                 .map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f64)
                 .collect(),
-            DType::U8 => raw.iter().map(|&b| b as f64).collect(),
+            DType::U8 | DType::FixedString(_) => {
+                raw.iter().map(|&b| b as f64).collect()
+            }
         };
         Ok(out)
     }
@@ -610,7 +616,9 @@ impl PureRustFile {
                 .chunks_exact(4)
                 .map(|c| i32::from_le_bytes(c.try_into().unwrap()) as f64)
                 .collect(),
-            DType::U8 => raw.iter().map(|&b| b as f64).collect(),
+            DType::U8 | DType::FixedString(_) => {
+                raw.iter().map(|&b| b as f64).collect()
+            }
         };
         Ok(out)
     }
@@ -1490,20 +1498,36 @@ fn read_symbol_table_node(
 // ---------------------------------------------------------------------------
 
 fn parse_dataspace(data: &[u8]) -> WrfResult<Vec<usize>> {
-    if data.is_empty() {
-        return Ok(Vec::new());
+    if data.len() < 3 {
+        return Err(hdf5_err("Dataspace message too short"));
     }
     let version = data[0];
     let ndims = data[1] as usize;
     let _flags = data[2];
-    let dim_start = if version == 1 { 8 } else { 4 };
+    let dim_start = match version {
+        1 => 8usize,
+        2 => 4usize,
+        _ => {
+            return Err(hdf5_err(format!(
+                "Unsupported dataspace version {version}"
+            )));
+        }
+    };
+    let dims_bytes = ndims
+        .checked_mul(8)
+        .ok_or_else(|| hdf5_err("Dataspace dimension byte count overflow"))?;
+    let required = dim_start
+        .checked_add(dims_bytes)
+        .ok_or_else(|| hdf5_err("Dataspace message size overflow"))?;
+    if data.len() < required {
+        return Err(hdf5_err("Dataspace dimensions truncated"));
+    }
     let mut dims = Vec::with_capacity(ndims);
     for i in 0..ndims {
         let off = dim_start + i * 8;
-        if off + 8 > data.len() {
-            break;
-        }
-        dims.push(le_u64(&data[off..]) as usize);
+        let dim = usize::try_from(le_u64(&data[off..off + 8]))
+            .map_err(|_| hdf5_err("Dataspace dimension does not fit usize"))?;
+        dims.push(dim);
     }
     Ok(dims)
 }
@@ -1534,8 +1558,15 @@ fn parse_datatype(data: &[u8]) -> WrfResult<DType> {
             }
         }
         3 => {
-            // String type - treat as U8
-            Ok(DType::U8)
+            // Fixed-length string. Preserve the element width: a scalar S19
+            // attribute has one element containing 19 bytes, not 19 U8
+            // elements and certainly not one byte.
+            let size = usize::try_from(size)
+                .map_err(|_| hdf5_err(format!("String size {size} does not fit usize")))?;
+            if size == 0 {
+                return Err(hdf5_err("Fixed-length string has zero byte width"));
+            }
+            Ok(DType::FixedString(size))
         }
         _ => Err(hdf5_err(format!("Unsupported datatype class {class}"))),
     }
@@ -1846,12 +1877,17 @@ fn parse_attr_info_message(data: &[u8], heap: &mut Option<u64>, bt2: &mut Option
 }
 
 fn parse_attribute_message(data: &[u8]) -> WrfResult<(String, HdfAttributeValue)> {
-    if data.len() < 6 {
+    if data.is_empty() {
         return Err(hdf5_err("Attribute message too short"));
     }
     let version = data[0];
     if version < 1 || version > 3 {
         return Err(hdf5_err(format!("Unsupported attribute version {version}")));
+    }
+
+    let header_size = if version >= 3 { 9 } else { 8 };
+    if data.len() < header_size {
+        return Err(hdf5_err("Attribute message header truncated"));
     }
 
     let _flags = if version >= 2 { data[1] } else { 0 };
@@ -1860,97 +1896,113 @@ fn parse_attribute_message(data: &[u8]) -> WrfResult<(String, HdfAttributeValue)
     let dataspace_size = le_u16(&data[6..8]) as usize;
     let _encoding = if version >= 3 { data[8] } else { 0 };
 
-    let header_size = if version >= 3 { 9 } else { 8 };
     let mut pos = header_size;
 
     // Name (null-terminated)
-    if pos + name_size > data.len() {
+    let name_end = pos
+        .checked_add(name_size)
+        .ok_or_else(|| hdf5_err("Attribute name size overflow"))?;
+    if name_end > data.len() {
         return Err(hdf5_err("Attribute name overflow"));
     }
-    let name_bytes = &data[pos..pos + name_size];
+    let name_bytes = &data[pos..name_end];
     let name = String::from_utf8_lossy(name_bytes)
         .trim_end_matches('\0')
         .to_string();
-    pos += name_size;
+    pos = name_end;
 
     // v1 pads to 8-byte boundary
     if version == 1 {
-        pos = (pos + 7) & !7;
+        pos = pos
+            .checked_add(7)
+            .ok_or_else(|| hdf5_err("Attribute name alignment overflow"))?
+            & !7;
     }
 
     // Datatype
-    if pos + datatype_size > data.len() {
+    let datatype_end = pos
+        .checked_add(datatype_size)
+        .ok_or_else(|| hdf5_err("Attribute datatype size overflow"))?;
+    if datatype_end > data.len() {
         return Err(hdf5_err("Attribute datatype overflow"));
     }
-    let dt_data = &data[pos..pos + datatype_size];
-    let dtype = parse_datatype(dt_data).unwrap_or(DType::U8);
-    pos += datatype_size;
+    let dt_data = &data[pos..datatype_end];
+    let dtype = parse_datatype(dt_data)?;
+    pos = datatype_end;
 
     if version == 1 {
-        pos = (pos + 7) & !7;
+        pos = pos
+            .checked_add(7)
+            .ok_or_else(|| hdf5_err("Attribute datatype alignment overflow"))?
+            & !7;
     }
 
     // Dataspace
-    if pos + dataspace_size > data.len() {
+    let dataspace_end = pos
+        .checked_add(dataspace_size)
+        .ok_or_else(|| hdf5_err("Attribute dataspace size overflow"))?;
+    if dataspace_end > data.len() {
         return Err(hdf5_err("Attribute dataspace overflow"));
     }
-    let ds_data = &data[pos..pos + dataspace_size];
-    let dims = parse_dataspace(ds_data).unwrap_or_default();
-    pos += dataspace_size;
+    let ds_data = &data[pos..dataspace_end];
+    let dims = parse_dataspace(ds_data)?;
+    pos = dataspace_end;
 
     if version == 1 {
-        pos = (pos + 7) & !7;
+        pos = pos
+            .checked_add(7)
+            .ok_or_else(|| hdf5_err("Attribute dataspace alignment overflow"))?
+            & !7;
     }
 
     // Data
-    let total_elems: usize = if dims.is_empty() {
-        1
-    } else {
-        dims.iter().product()
-    };
-    let data_bytes = total_elems * dtype.size();
-    let remaining = &data[pos..];
+    let total_elems = dims.iter().try_fold(1usize, |total, &dim| {
+        total.checked_mul(dim)
+    });
+    let total_elems = total_elems.ok_or_else(|| hdf5_err("Attribute element count overflow"))?;
+    if total_elems == 0 {
+        return Err(hdf5_err("Zero-element attributes are unsupported"));
+    }
+    let data_bytes = total_elems
+        .checked_mul(dtype.size())
+        .ok_or_else(|| hdf5_err("Attribute data size overflow"))?;
+    let remaining = data
+        .get(pos..)
+        .ok_or_else(|| hdf5_err("Attribute data offset overflow"))?;
+    if remaining.len() < data_bytes {
+        return Err(hdf5_err(format!(
+            "Attribute data truncated: need {data_bytes} bytes, have {}",
+            remaining.len()
+        )));
+    }
 
     let val = match dtype {
         DType::F32 => {
-            if remaining.len() >= 4 {
-                HdfAttributeValue {
-                    f32_val: Some(f32::from_le_bytes(remaining[0..4].try_into().unwrap())),
-                    i32_val: None,
-                    string_val: None,
-                    f64_val: None,
-                }
-            } else {
-                return Err(hdf5_err("F32 attr data too short"));
+            HdfAttributeValue {
+                f32_val: Some(f32::from_le_bytes(remaining[0..4].try_into().unwrap())),
+                i32_val: None,
+                string_val: None,
+                f64_val: None,
             }
         }
         DType::F64 => {
-            if remaining.len() >= 8 {
-                HdfAttributeValue {
-                    f64_val: Some(f64::from_le_bytes(remaining[0..8].try_into().unwrap())),
-                    f32_val: None,
-                    i32_val: None,
-                    string_val: None,
-                }
-            } else {
-                return Err(hdf5_err("F64 attr data too short"));
+            HdfAttributeValue {
+                f64_val: Some(f64::from_le_bytes(remaining[0..8].try_into().unwrap())),
+                f32_val: None,
+                i32_val: None,
+                string_val: None,
             }
         }
         DType::I32 => {
-            if remaining.len() >= 4 {
-                HdfAttributeValue {
-                    i32_val: Some(i32::from_le_bytes(remaining[0..4].try_into().unwrap())),
-                    f32_val: None,
-                    string_val: None,
-                    f64_val: None,
-                }
-            } else {
-                return Err(hdf5_err("I32 attr data too short"));
+            HdfAttributeValue {
+                i32_val: Some(i32::from_le_bytes(remaining[0..4].try_into().unwrap())),
+                f32_val: None,
+                string_val: None,
+                f64_val: None,
             }
         }
-        DType::U8 => {
-            let end = data_bytes.min(remaining.len());
-            let s = String::from_utf8_lossy(&remaining[..end])
+        DType::U8 | DType::FixedString(_) => {
+            let s = String::from_utf8_lossy(&remaining[..data_bytes])
                 .trim_end_matches('\0')
                 .to_string();
             HdfAttributeValue {
@@ -2713,6 +2765,31 @@ fn copy_chunk_to_output_slice(
 mod tests {
     use super::*;
 
+    fn fixed_string_attribute_v3(name: &str, width: u32, value: &[u8]) -> Vec<u8> {
+        let mut name_bytes = name.as_bytes().to_vec();
+        name_bytes.push(0);
+
+        // HDF5 datatype class 3 (fixed string), version 1, with the declared
+        // element width in bytes 4..8.
+        let mut datatype = vec![0x13, 0, 0, 0];
+        datatype.extend_from_slice(&width.to_le_bytes());
+        // Version-2 scalar dataspace: zero dimensions.
+        let dataspace = [2u8, 0, 0, 0];
+
+        let mut message = Vec::new();
+        message.push(3); // Attribute message version.
+        message.push(0); // Flags.
+        message.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
+        message.extend_from_slice(&(datatype.len() as u16).to_le_bytes());
+        message.extend_from_slice(&(dataspace.len() as u16).to_le_bytes());
+        message.push(0); // UTF-8 name encoding.
+        message.extend_from_slice(&name_bytes);
+        message.extend_from_slice(&datatype);
+        message.extend_from_slice(&dataspace);
+        message.extend_from_slice(value);
+        message
+    }
+
     #[test]
     fn test_unshuffle_roundtrip() {
         let original = vec![
@@ -2730,6 +2807,38 @@ mod tests {
     fn test_le_helpers() {
         assert_eq!(le_u16(&[0x01, 0x02]), 0x0201);
         assert_eq!(le_u32(&[0x01, 0x02, 0x03, 0x04]), 0x04030201);
+    }
+
+    #[test]
+    fn test_fixed_string_datatype_preserves_declared_width() {
+        let datatype = [0x13, 0, 0, 0, 19, 0, 0, 0];
+        match parse_datatype(&datatype).expect("fixed string datatype") {
+            DType::FixedString(19) => {}
+            other => panic!("expected S19 fixed string, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_scalar_fixed_string_attribute_reads_complete_value() {
+        let value = b"1974-04-03_23:00:00";
+        let message = fixed_string_attribute_v3("START_DATE", value.len() as u32, value);
+
+        let (name, attr) = parse_attribute_message(&message).expect("S19 attribute");
+        assert_eq!(name, "START_DATE");
+        assert_eq!(attr.string_val.as_deref(), Some("1974-04-03_23:00:00"));
+    }
+
+    #[test]
+    fn test_truncated_fixed_string_attribute_is_rejected_without_panicking() {
+        let value = b"1974-04-03_23:00:00";
+        let message = fixed_string_attribute_v3("START_DATE", value.len() as u32, value);
+
+        for len in 0..message.len() {
+            assert!(
+                parse_attribute_message(&message[..len]).is_err(),
+                "truncation at byte {len} unexpectedly parsed"
+            );
+        }
     }
 
     #[test]
