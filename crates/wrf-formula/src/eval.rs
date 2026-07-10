@@ -2274,7 +2274,7 @@ impl<R: FieldResolver> Evaluator<'_, R> {
         }
         let result_unit = source_unit.derivative_by(&crate::parse_unit("s")?)?;
         match &mut value {
-            Value::Scalar(mut scalar) => {
+            Value::Scalar(scalar) => {
                 scalar.value = f64::NAN;
             }
             Value::Field(field) => {

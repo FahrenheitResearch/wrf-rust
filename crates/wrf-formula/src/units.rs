@@ -382,7 +382,7 @@ fn parse_simple_si_compound(text: &str) -> FormulaResult<Unit> {
                 FormulaError::new(ErrorKind::Unit, "unit exponent overflow")
             })?;
         }
-        let (base_dim, base_scale) = match base {
+        let (base_dim, base_scale): (Dimension, f64) = match base {
             "m" => (Dimension::LENGTH, 1.0),
             "km" => (Dimension::LENGTH, 1000.0),
             "kg" => (Dimension::MASS, 1.0),
