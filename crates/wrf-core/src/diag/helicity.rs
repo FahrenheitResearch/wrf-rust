@@ -1,6 +1,8 @@
 //! Updraft helicity diagnostic.
 //!
-//! Matches the wrf-python Fortran subroutine DCALCUH (calc_uh.f90):
+//! Follows the wrf-python Fortran subroutine `DCALCUH` (`calc_uh.f90`) for its
+//! derivative stencil, updraft gate, integration, and output halo. The layer
+//! height reference intentionally differs; see [`compute_uhel`] for details.
 //!
 //! 1. Compute tem1(k) = w_destag(k) * vorticity(k) at each scalar level,
 //!    where vorticity uses centered differences divided by the map scale
@@ -77,13 +79,28 @@ fn dcalcuh_output_column(i: usize, j: usize, nx: usize, ny: usize) -> bool {
 /// UH = integral from z_bot to z_top of (w * zeta_z) dz
 /// Default layer: 2-5 km AGL.
 ///
-/// Matches the wrf-python Fortran DCALCUH:
+/// Follows the wrf-python Fortran `DCALCUH` for:
 /// - Vorticity uses centered differences divided by map scale factor and the
 ///   same zero-initialized boundary/vertical stencil as `DCALCUH`.
 /// - A column-mean w is computed first; only columns with positive mean w
 ///   contribute to UH (matching the Fortran's updraft check).
 /// - The integrand is w*vort (pre-multiplied), integrated with the
 ///   trapezoidal rule.
+///
+/// # Vertical layer reference
+///
+/// `bottom_m` and `top_m` are true terrain-relative AGL bounds in wrf-rust:
+/// the integration coordinate is mass-level geopotential height minus terrain.
+/// The pinned NCAR wrapper instead passes staggered geopotential height to
+/// `DCALCUH`, whose kernel adds the requested bounds to `zp(i,j,2)`, the first
+/// staggered W level above terrain. See the pinned
+/// [wrapper](https://github.com/NCAR/wrf-python/blob/31c923335227b22fa656fd589a5342b91103e939/src/wrf/g_helicity.py#L183-L208)
+/// and [kernel bounds](https://github.com/NCAR/wrf-python/blob/31c923335227b22fa656fd589a5342b91103e939/fortran/calc_uh.f90#L82-L90).
+/// Consequently, wrf-rust does not claim exact `DCALCUH` vertical-bound parity.
+/// A representative 25--60 m first-level offset shifts NCAR's nominal 2--5 km
+/// layer upward by the same amount. For illustration, an integrand proportional
+/// to height changes by about 0.7--1.7% under that shift; a constant integrand
+/// is unchanged, and real-profile sensitivity depends on vertical structure.
 pub fn compute_uhel(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let w = f.w_destag(t)?;
     let u = f.u_destag(t)?;
