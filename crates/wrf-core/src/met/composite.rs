@@ -1078,14 +1078,30 @@ pub fn significant_hail_parameter(
 
 /// Derecho Composite Parameter (DCP).
 ///
-/// DCP = (DCAPE/980) * (MUCAPE/2000) * (SHEAR_06/20) * (MU_MR/11)
+/// DCP = (DCAPE/980) * (MUCAPE/2000) * (SHEAR_06/20 kt) * (MEAN_WIND_06/16 kt)
+///
+/// Wind inputs to this Rust API are in m/s and are converted to knots before
+/// applying the operational normalization values.
+///
+/// # Migration
+///
+/// This replaces the removed `derecho_composite_parameter` helper, whose
+/// fourth positional input was MU mixing ratio and therefore encoded a
+/// non-operational formula. Callers must migrate to this explicitly named
+/// helper and pass 0-6 km mean-wind speed in m/s as the fourth argument.
+/// The distinct name makes stale source fail to compile instead of silently
+/// interpreting mixing ratio as wind speed.
+///
+/// References:
+/// - <https://www.spc.noaa.gov/exper/mesoanalysis/help/help_dcp.html>
+/// - <https://www.nssl.noaa.gov/users/mcon/public_html/DCP_description.htm>
 ///
 /// All inputs are flattened 2D grids.
-pub fn derecho_composite_parameter(
+pub fn derecho_composite_parameter_from_mean_wind(
     dcape: &[f64],
     mu_cape: &[f64],
     shear06: &[f64],
-    mu_mixing_ratio: &[f64],
+    mean_wind06: &[f64],
     nx: usize,
     ny: usize,
 ) -> Vec<f64> {
@@ -1095,10 +1111,12 @@ pub fn derecho_composite_parameter(
         .map(|i| {
             let dcape_term = (dcape[i] / 980.0).max(0.0);
             let cape_term = (mu_cape[i] / 2000.0).max(0.0);
-            let shear_term = (shear06[i] / 20.0).max(0.0);
-            let mr_term = (mu_mixing_ratio[i] / 11.0).max(0.0);
+            let shear06_kt = shear06[i] / 0.514_444;
+            let mean_wind06_kt = mean_wind06[i] / 0.514_444;
+            let shear_term = (shear06_kt / 20.0).max(0.0);
+            let mean_wind_term = (mean_wind06_kt / 16.0).max(0.0);
 
-            dcape_term * cape_term * shear_term * mr_term
+            dcape_term * cape_term * shear_term * mean_wind_term
         })
         .collect()
 }
@@ -1658,6 +1676,37 @@ mod tests {
         );
 
         let expected = [1.0, 1.0, 0.5, 0.25];
+        for (actual, expected) in out.into_iter().zip(expected) {
+            assert_close(actual, expected);
+        }
+    }
+
+    #[test]
+    fn exported_dcp_mean_wind_helper_matches_the_spc_normalization() {
+        let out = derecho_composite_parameter_from_mean_wind(
+            &[980.0],
+            &[2000.0],
+            &[20.0 * 0.514_444],
+            &[16.0 * 0.514_444],
+            1,
+            1,
+        );
+
+        assert_close(out[0], 1.0);
+    }
+
+    #[test]
+    fn exported_dcp_mean_wind_helper_uses_mean_wind_not_mixing_ratio() {
+        let out = derecho_composite_parameter_from_mean_wind(
+            &[980.0; 3],
+            &[2000.0; 3],
+            &[20.0 * 0.514_444; 3],
+            &[0.0, 8.0 * 0.514_444, 16.0 * 0.514_444],
+            3,
+            1,
+        );
+
+        let expected = [0.0, 0.5, 1.0];
         for (actual, expected) in out.into_iter().zip(expected) {
             assert_close(actual, expected);
         }
