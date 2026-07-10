@@ -3,6 +3,7 @@
 
 use crate::compute::{ComputeOpts, StormMotionMethod};
 use crate::diag::cape::{effective_inflow_layer_grid, mu_parcel_mixing_ratio_field};
+use crate::diag::wind::rotate_grid_wind_to_earth;
 use crate::error::WrfResult;
 use crate::file::WrfFile;
 use rayon::prelude::*;
@@ -752,19 +753,29 @@ pub fn compute_critical_angle(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfR
 
         for k in 0..nz {
             let idx = k * nxy + ij;
-            u_prof.push(u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij]);
-            v_prof.push(u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij]);
+            let (u_earth, v_earth) = rotate_grid_wind_to_earth(
+                u_grid[idx],
+                v_grid[idx],
+                sina[ij],
+                cosa[ij],
+                latitude[ij],
+            );
+            u_prof.push(u_earth);
+            v_prof.push(v_earth);
             h_prof.push(h_agl[idx]);
             p_prof.push(pres_hpa[idx]);
         }
+
+        let (u10_earth, v10_earth) =
+            rotate_grid_wind_to_earth(u10_grid[ij], v10_grid[ij], sina[ij], cosa[ij], latitude[ij]);
 
         *val = critical_angle_from_profile(
             &u_prof,
             &v_prof,
             &h_prof,
             &p_prof,
-            u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij],
-            u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij],
+            u10_earth,
+            v10_earth,
             opts.storm_motion.as_ref().map(|sm| sm.at(ij)),
             resolved_storm_motion_method(opts),
             latitude[ij],

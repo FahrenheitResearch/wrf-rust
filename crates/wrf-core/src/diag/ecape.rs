@@ -10,6 +10,7 @@ use ecape_rs::{
 use rayon::prelude::*;
 
 use crate::compute::{ComputeOpts, StormMotion};
+use crate::diag::wind::rotate_grid_wind_to_earth;
 use crate::error::{WrfError, WrfResult};
 use crate::file::WrfFile;
 
@@ -392,6 +393,7 @@ fn compute_ecape_fields(
     let v10_grid = f.v10(t)?;
     let sina = f.sinalpha(t)?;
     let cosa = f.cosalpha(t)?;
+    let latitude = f.xlat(t)?;
 
     let nx = f.nx;
     let ny = f.ny;
@@ -402,15 +404,15 @@ fn compute_ecape_fields(
     let mut v_earth = vec![0.0f64; v_grid.len()];
     for idx in 0..u_grid.len() {
         let ij = idx % nxy;
-        u_earth[idx] = u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij];
-        v_earth[idx] = u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij];
+        (u_earth[idx], v_earth[idx]) =
+            rotate_grid_wind_to_earth(u_grid[idx], v_grid[idx], sina[ij], cosa[ij], latitude[ij]);
     }
 
     let mut u10_earth = vec![0.0f64; nxy];
     let mut v10_earth = vec![0.0f64; nxy];
     for ij in 0..nxy {
-        u10_earth[ij] = u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij];
-        v10_earth[ij] = u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij];
+        (u10_earth[ij], v10_earth[ij]) =
+            rotate_grid_wind_to_earth(u10_grid[ij], v10_grid[ij], sina[ij], cosa[ij], latitude[ij]);
     }
 
     let parcel_type = resolved.parcel;
