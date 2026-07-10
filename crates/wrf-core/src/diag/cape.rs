@@ -488,6 +488,13 @@ pub fn compute_mlcin(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec
     Ok(cin)
 }
 
+/// Native SPC-style most-unstable CAPE. `[ny, nx]`
+///
+/// Selects the single maximum-theta-e parcel level in the lowest 300 hPa
+/// (300 mb) of the surface-augmented column. It intentionally does not apply
+/// the 500 m parcel averaging used by [`compute_mcape_wrfpython`].
+///
+/// Reference: <https://www.spc.noaa.gov/exper/mesoanalysis/help/help_mucp.html>
 pub fn compute_mucape(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let (cape, _, _, _) = compute_cape_fields(f, t, "mu", opts.top_m, opts.lake_interp)?;
     Ok(cape)
@@ -1100,6 +1107,14 @@ pub fn compute_cape2d_wrfpython(f: &WrfFile, t: usize, opts: &ComputeOpts) -> Wr
     Ok(wrfpython_cape2d_stack(f, t, opts)?.to_vec())
 }
 
+/// Strict NCAR wrf-python maximum-parcel CAPE. `[ny, nx]`
+///
+/// Searches model levels strictly below 3 km AGL for maximum theta-e, then
+/// constructs the lifted parcel from a pressure-weighted 500 m layer around
+/// the selected level, clipped at the surface. This is the MCAPE component of
+/// `cape_2d`; it is deliberately distinct from native [`compute_mucape`].
+///
+/// Reference: <https://github.com/NCAR/wrf-python/blob/31c923335227b22fa656fd589a5342b91103e939/fortran/rip_cape.f90#L728-L800>
 pub fn compute_mcape_wrfpython(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     wrfpython_cape2d_component(f, t, opts, 0)
 }

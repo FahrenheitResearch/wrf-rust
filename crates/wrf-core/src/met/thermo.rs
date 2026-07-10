@@ -297,8 +297,14 @@ pub fn get_mixed_layer_parcel(
     (sfc_p, avg_t, parcel_td)
 }
 
-/// Returns Most Unstable Parcel (highest theta-e in the lowest `depth` hPa).
-/// Returns (p, t, td) all in (hPa, Celsius, Celsius).
+/// Returns the native SPC-style most-unstable parcel: the single highest
+/// theta-e level in the lowest `depth` hPa.
+///
+/// Native MUCAPE calls this with `depth = 300`; it does not perform NCAR RIP's
+/// separate 500 m pressure-layer averaging. Returns `(p, t, td)` in
+/// `(hPa, Celsius, Celsius)`.
+///
+/// Reference: <https://www.spc.noaa.gov/exper/mesoanalysis/help/help_mucp.html>
 pub fn get_most_unstable_parcel(
     p_prof: &[f64],
     t_prof: &[f64],

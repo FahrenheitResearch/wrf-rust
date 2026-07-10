@@ -304,7 +304,7 @@ pub static VARS: &[VarDef] = &[
     VarDef {
         name: "mucape",
         aliases: &["most_unstable_cape"],
-        description: "Most-unstable CAPE",
+        description: "Native SPC-style MUCAPE: max-theta-e level in the lowest 300 hPa",
         default_units: "J/kg",
         dim: VarDim::TwoD,
         compute: dcape::compute_mucape,
@@ -416,7 +416,8 @@ pub static VARS: &[VarDef] = &[
     VarDef {
         name: "mcape_wrfpython",
         aliases: &["mcape_ncar"],
-        description: "Strict NCAR wrf-python maximum-parcel CAPE",
+        description:
+            "Strict NCAR MCAPE: max theta-e below 3 km AGL with a 500 m pressure-weighted mean",
         default_units: "J/kg",
         dim: VarDim::TwoD,
         compute: dcape::compute_mcape_wrfpython,
@@ -1098,6 +1099,16 @@ mod tests {
             get_var_def("cape_3d_wrfpython").unwrap().name,
             "cape3d_wrfpython"
         );
+
+        let native_mu = get_var_def("most_unstable_cape").unwrap();
+        let strict_mcape = get_var_def("mcape_ncar").unwrap();
+        assert_eq!(native_mu.name, "mucape");
+        assert_eq!(strict_mcape.name, "mcape_wrfpython");
+        assert!(native_mu.description.contains("lowest 300 hPa"));
+        assert!(strict_mcape.description.contains("below 3 km AGL"));
+        assert!(strict_mcape
+            .description
+            .contains("500 m pressure-weighted mean"));
     }
 
     #[test]

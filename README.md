@@ -392,6 +392,15 @@ The existing `cape`, `cin`, `cape2d`/`cape_2d`, and `cape3d`/`cape_3d`
 variables retain wrf-rust's configurable parcel semantics. They are not aliases
 for NCAR's historical RIP algorithm.
 
+The similarly named most-unstable products intentionally use different parcel
+conventions. Native `mucape` follows the SPC convention: choose the single
+maximum-theta-e parcel level in the lowest 300 hPa (300 mb) of the
+surface-augmented column. Strict `mcape_wrfpython` instead reproduces NCAR RIP:
+search model levels strictly below 3 km AGL for maximum theta-e, then form the
+lifted parcel from a pressure-weighted 500 m layer around that level (clipped
+at the surface). Use the name matching the required convention; the two fields
+are not expected to be numerically interchangeable.
+
 Use `cape2d_wrfpython` (alias `cape_2d_wrfpython`) for the exact four-component
 NCAR order `[MCAPE, MCIN, LCL, LFC]`, or request the single-unit components
 `mcape_wrfpython`, `mcin_wrfpython`, `lcl_wrfpython`, and `lfc_wrfpython`.
