@@ -20,8 +20,8 @@ pub use compile::{compile, compile_with_options, CompiledFormula};
 pub use error::{ErrorKind, FormulaError, FormulaResult, Span};
 pub use model::{
     Axis, BoundaryPolicy, CompileOptions, EvaluationOptions, ExecutionPlan, FormulaOutput,
-    GridConvention, GridLocation, HeightDatum, MissingPolicy, NonFinitePolicy, ParameterSpec,
-    ParameterValues, Requirement, ResourceLimits, VectorBasis,
+    FormulaProvenance, GridConvention, GridLocation, HeightDatum, MissingPolicy, NonFinitePolicy,
+    ParameterSpec, ParameterValues, Requirement, ResourceLimits, VectorBasis,
 };
 pub use recipe::{Recipe, RecipeReference, RecipeRequirements, MAX_RECIPE_BYTES};
 pub use resolver::{FieldRequest, FieldResolver, GridMetadata, ResolvedField};
