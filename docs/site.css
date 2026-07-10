@@ -215,6 +215,7 @@ tbody td {
 tbody tr:last-child td { border-bottom: none; }
 
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.nowrap { white-space: nowrap; }
 
 table code { background: none; padding: 0; }
 

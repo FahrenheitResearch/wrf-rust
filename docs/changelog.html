@@ -65,42 +65,42 @@ compatibility, and analytic WRF coordinate transforms
     <tr><th>Version</th><th>Date</th><th>Summary</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>0.2.35</code></td><td>2026-04-23</td><td>Maintenance release</td></tr>
-    <tr><td><code>0.2.34</code></td><td>2026-04-14</td><td>Maintenance release</td></tr>
-    <tr><td><code>0.2.33</code></td><td>2026-04-14</td><td>Maintenance release</td></tr>
-    <tr><td><code>0.2.32</code></td><td>2026-04-13</td><td>Maintenance release</td></tr>
-    <tr><td><code>0.2.31</code></td><td>2026-04-13</td><td>Cache CAPE/Bunkers families; acknowledge Solarpower07</td></tr>
-    <tr><td><code>0.2.30</code></td><td>2026-04-13</td><td>Maintenance release</td></tr>
-    <tr><td><code>0.2.29</code></td><td>2026-04-13</td><td>Maintenance release</td></tr>
-    <tr><td><code>0.2.28</code></td><td>2026-04-12</td><td>Maintenance release</td></tr>
-    <tr><td><code>0.2.26</code></td><td>2026-04-12</td><td>Maintenance release</td></tr>
-    <tr><td><code>0.2.25</code></td><td>2026-03-25</td><td>Clear intermediate cache after each getvar to reduce memory</td></tr>
-    <tr><td><code>0.2.24</code></td><td>2026-03-25</td><td>Time-slice HDF5 reads to reduce peak memory</td></tr>
-    <tr><td><code>0.2.23</code></td><td>2026-03-22</td><td>interplevel returns NaN for out-of-range levels instead of clamping</td></tr>
-    <tr><td><code>0.2.22</code></td><td>2026-03-19</td><td>Remove rayon to fix ProcessPoolExecutor hang</td></tr>
-    <tr><td><code>0.2.21</code></td><td>2026-03-17</td><td>Match wrf-python DBZ defaults; expose use_varint/use_liqskin</td></tr>
-    <tr><td><code>0.2.20</code></td><td>2026-03-17</td><td>DBZ variable intercepts; plot fixes</td></tr>
-    <tr><td><code>0.2.19</code></td><td>2026-03-17</td><td>Rewrite DBZ and UH to match Fortran reference exactly</td></tr>
-    <tr><td><code>0.2.18</code></td><td>2026-03-17</td><td>Fix reflectivity, UH, and SLP computations</td></tr>
-    <tr><td><code>0.2.17</code></td><td>2026-03-17</td><td>Prefer WRF native REFL_10CM and UP_HELI_MAX</td></tr>
-    <tr><td><code>0.2.16</code></td><td>2026-03-17</td><td>Full SHIP formula; stale lapse rates delegate to generic path</td></tr>
-    <tr><td><code>0.2.15</code></td><td>2026-03-17</td><td>Add tv2m (2-m virtual temperature) with lake_interp</td></tr>
-    <tr><td><code>0.2.14</code></td><td>2026-03-17</td><td>Lapse rate uses 2 m data at surface; supports lake_interp</td></tr>
-    <tr><td><code>0.2.13</code></td><td>2026-03-17</td><td>lake_interp flows through STP/SCP/EHI/SHIP/BRI</td></tr>
-    <tr><td><code>0.2.12</code></td><td>2026-03-17</td><td>interplevel supports 2-D target arrays; SRH exact match</td></tr>
-    <tr><td><code>0.2.11</code></td><td>2026-03-17</td><td>Match SRH exactly to Solarpower07's implementation</td></tr>
-    <tr><td><code>0.2.10</code></td><td>2026-03-17</td><td>Unify all SRH/Bunkers paths; fix 5 consistency issues</td></tr>
-    <tr><td><code>0.2.9</code></td><td>2026-03-17</td><td>SRH: switch to non-pressure-weighted mean wind (SHARPpy mean_wind_npw)</td></tr>
-    <tr><td><code>0.2.8</code></td><td>2026-03-16</td><td>Maintenance release</td></tr>
-    <tr><td><code>0.2.7</code></td><td>2026-03-16</td><td>Maintenance release</td></tr>
-    <tr><td><code>0.2.6</code></td><td>2026-03-16</td><td>Raw variable unit conversion for RAINNC/T2/PSFC and others</td></tr>
-    <tr><td><code>0.2.5</code></td><td>2026-03-16</td><td>Fix 7 bugs from code review; add dam unit</td></tr>
-    <tr><td><code>0.2.4</code></td><td>2026-03-16</td><td>Fix SRH sign convention; raw variable fallback; t2</td></tr>
-    <tr><td><code>0.2.3</code></td><td>2026-03-16</td><td>Add t2; fix hybrid HDF5; interplevel/get_cartopy</td></tr>
-    <tr><td><code>0.2.2</code></td><td>2026-03-16</td><td>Fix hybrid HDF5; add interplevel/get_cartopy/latlon_coords</td></tr>
-    <tr><td><code>0.2.1</code></td><td>2026-03-16</td><td>Fix hybrid HDF5 files: v0 superblock + v2 object headers</td></tr>
-    <tr><td><code>0.2.0</code></td><td>2026-03-16</td><td>Self-contained: vendored math, lake interpolation, solar7 colormaps</td></tr>
-    <tr><td><code>0.1.0</code></td><td>2026-03-16</td><td>Pure-Rust reader default; fix Sync for PyO3; verify output matches</td></tr>
+    <tr><td><code>0.2.35</code></td><td class="nowrap">2026-04-23</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.34</code></td><td class="nowrap">2026-04-14</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.33</code></td><td class="nowrap">2026-04-14</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.32</code></td><td class="nowrap">2026-04-13</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.31</code></td><td class="nowrap">2026-04-13</td><td>Cache CAPE/Bunkers families; acknowledge Solarpower07</td></tr>
+    <tr><td><code>0.2.30</code></td><td class="nowrap">2026-04-13</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.29</code></td><td class="nowrap">2026-04-13</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.28</code></td><td class="nowrap">2026-04-12</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.26</code></td><td class="nowrap">2026-04-12</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.25</code></td><td class="nowrap">2026-03-25</td><td>Clear intermediate cache after each getvar to reduce memory</td></tr>
+    <tr><td><code>0.2.24</code></td><td class="nowrap">2026-03-25</td><td>Time-slice HDF5 reads to reduce peak memory</td></tr>
+    <tr><td><code>0.2.23</code></td><td class="nowrap">2026-03-22</td><td>interplevel returns NaN for out-of-range levels instead of clamping</td></tr>
+    <tr><td><code>0.2.22</code></td><td class="nowrap">2026-03-19</td><td>Remove rayon to fix ProcessPoolExecutor hang</td></tr>
+    <tr><td><code>0.2.21</code></td><td class="nowrap">2026-03-17</td><td>Match wrf-python DBZ defaults; expose use_varint/use_liqskin</td></tr>
+    <tr><td><code>0.2.20</code></td><td class="nowrap">2026-03-17</td><td>DBZ variable intercepts; plot fixes</td></tr>
+    <tr><td><code>0.2.19</code></td><td class="nowrap">2026-03-17</td><td>Rewrite DBZ and UH to match Fortran reference exactly</td></tr>
+    <tr><td><code>0.2.18</code></td><td class="nowrap">2026-03-17</td><td>Fix reflectivity, UH, and SLP computations</td></tr>
+    <tr><td><code>0.2.17</code></td><td class="nowrap">2026-03-17</td><td>Prefer WRF native REFL_10CM and UP_HELI_MAX</td></tr>
+    <tr><td><code>0.2.16</code></td><td class="nowrap">2026-03-17</td><td>Full SHIP formula; stale lapse rates delegate to generic path</td></tr>
+    <tr><td><code>0.2.15</code></td><td class="nowrap">2026-03-17</td><td>Add tv2m (2-m virtual temperature) with lake_interp</td></tr>
+    <tr><td><code>0.2.14</code></td><td class="nowrap">2026-03-17</td><td>Lapse rate uses 2 m data at surface; supports lake_interp</td></tr>
+    <tr><td><code>0.2.13</code></td><td class="nowrap">2026-03-17</td><td>lake_interp flows through STP/SCP/EHI/SHIP/BRI</td></tr>
+    <tr><td><code>0.2.12</code></td><td class="nowrap">2026-03-17</td><td>interplevel supports 2-D target arrays; SRH exact match</td></tr>
+    <tr><td><code>0.2.11</code></td><td class="nowrap">2026-03-17</td><td>Match SRH exactly to Solarpower07's implementation</td></tr>
+    <tr><td><code>0.2.10</code></td><td class="nowrap">2026-03-17</td><td>Unify all SRH/Bunkers paths; fix 5 consistency issues</td></tr>
+    <tr><td><code>0.2.9</code></td><td class="nowrap">2026-03-17</td><td>SRH: switch to non-pressure-weighted mean wind (SHARPpy mean_wind_npw)</td></tr>
+    <tr><td><code>0.2.8</code></td><td class="nowrap">2026-03-16</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.7</code></td><td class="nowrap">2026-03-16</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.6</code></td><td class="nowrap">2026-03-16</td><td>Raw variable unit conversion for RAINNC/T2/PSFC and others</td></tr>
+    <tr><td><code>0.2.5</code></td><td class="nowrap">2026-03-16</td><td>Fix 7 bugs from code review; add dam unit</td></tr>
+    <tr><td><code>0.2.4</code></td><td class="nowrap">2026-03-16</td><td>Fix SRH sign convention; raw variable fallback; t2</td></tr>
+    <tr><td><code>0.2.3</code></td><td class="nowrap">2026-03-16</td><td>Add t2; fix hybrid HDF5; interplevel/get_cartopy</td></tr>
+    <tr><td><code>0.2.2</code></td><td class="nowrap">2026-03-16</td><td>Fix hybrid HDF5; add interplevel/get_cartopy/latlon_coords</td></tr>
+    <tr><td><code>0.2.1</code></td><td class="nowrap">2026-03-16</td><td>Fix hybrid HDF5 files: v0 superblock + v2 object headers</td></tr>
+    <tr><td><code>0.2.0</code></td><td class="nowrap">2026-03-16</td><td>Self-contained: vendored math, lake interpolation, solar7 colormaps</td></tr>
+    <tr><td><code>0.1.0</code></td><td class="nowrap">2026-03-16</td><td>Pure-Rust reader default; fix Sync for PyO3; verify output matches</td></tr>
   </tbody>
 </table>
 </div>
