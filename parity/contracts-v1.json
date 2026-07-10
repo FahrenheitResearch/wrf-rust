@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "contract_version": "2026-07-09-stage2-strict-cape-srh-vorticity-f32-reference",
+  "contract_version": "2026-07-09-wave2-thermo-reference",
   "purpose": "Differential field contracts for replacing wrf-python without blindly preserving known scientific defects.",
   "axis_names": {
     "2d": ["south_north", "west_east"],
@@ -25,6 +25,71 @@
     }
   },
   "variables": [
+    {
+      "id": "height",
+      "family": "base_state",
+      "priority": "P0",
+      "wrf_rust": {"name": "height", "aliases": ["z", "height_msl"], "options": {}},
+      "wrf_python": {"extractor": "getvar", "name": "height", "aliases": ["z"], "options": {"msl": true, "units": "m"}},
+      "units": "m",
+      "dimensions": ["bottom_top", "south_north", "west_east"],
+      "component_order": [],
+      "comparison": {"mode": "required", "reference_precision": "float32", "tolerance": {"atol": 0.0001, "rtol": 2e-07, "relative_floor": 1.0}},
+      "reference_kernel": "NCAR wrf-python 1.3.4.1 commit 31c923335227b22fa656fd589a5342b91103e939 g_geoht.py with WRF 9.81 m s-2 gravity",
+      "intentional_deviations": []
+    },
+    {
+      "id": "td",
+      "family": "thermodynamics",
+      "priority": "P0",
+      "wrf_rust": {"name": "td", "aliases": ["dp", "dewpoint"], "options": {}},
+      "wrf_python": {"extractor": "getvar", "name": "dp", "aliases": ["td"], "options": {"units": "degC"}},
+      "units": "degC",
+      "dimensions": ["bottom_top", "south_north", "west_east"],
+      "component_order": [],
+      "comparison": {"mode": "required", "reference_precision": "float32", "tolerance": {"atol": 1e-06, "rtol": 0.0, "relative_floor": 1.0}},
+      "reference_kernel": "NCAR wrf-python 1.3.4.1 commit 31c923335227b22fa656fd589a5342b91103e939 wrf_user.f90:DCOMPUTETD",
+      "intentional_deviations": []
+    },
+    {
+      "id": "rh",
+      "family": "thermodynamics",
+      "priority": "P0",
+      "wrf_rust": {"name": "rh", "aliases": ["relative_humidity"], "options": {}},
+      "wrf_python": {"extractor": "getvar", "name": "rh", "aliases": [], "options": {}},
+      "units": "%",
+      "dimensions": ["bottom_top", "south_north", "west_east"],
+      "component_order": [],
+      "comparison": {"mode": "required", "reference_precision": "float32", "tolerance": {"atol": 1e-06, "rtol": 1.5e-06, "relative_floor": 1.0}},
+      "reference_kernel": "NCAR wrf-python 1.3.4.1 commit 31c923335227b22fa656fd589a5342b91103e939 wrf_user.f90:DCOMPUTERH",
+      "intentional_deviations": []
+    },
+    {
+      "id": "dp2m",
+      "family": "thermodynamics",
+      "priority": "P0",
+      "wrf_rust": {"name": "dp2m", "aliases": ["td2", "td2m", "dewpoint_2m"], "options": {}},
+      "wrf_python": {"extractor": "getvar", "name": "dp2m", "aliases": ["td2"], "options": {"units": "degC"}},
+      "units": "degC",
+      "dimensions": ["south_north", "west_east"],
+      "component_order": [],
+      "comparison": {"mode": "required", "reference_precision": "float32", "tolerance": {"atol": 1e-06, "rtol": 0.0, "relative_floor": 1.0}},
+      "reference_kernel": "NCAR wrf-python 1.3.4.1 commit 31c923335227b22fa656fd589a5342b91103e939 wrf_user.f90:DCOMPUTETD",
+      "intentional_deviations": []
+    },
+    {
+      "id": "rh2m",
+      "family": "thermodynamics",
+      "priority": "P0",
+      "wrf_rust": {"name": "rh2m", "aliases": ["rh2", "relative_humidity_2m"], "options": {}},
+      "wrf_python": {"extractor": "getvar", "name": "rh2m", "aliases": ["rh2"], "options": {}},
+      "units": "%",
+      "dimensions": ["south_north", "west_east"],
+      "component_order": [],
+      "comparison": {"mode": "required", "reference_precision": "float32", "tolerance": {"atol": 0.0, "rtol": 0.0, "relative_floor": 1.0}},
+      "reference_kernel": "NCAR wrf-python 1.3.4.1 commit 31c923335227b22fa656fd589a5342b91103e939 wrf_user.f90:DCOMPUTERH",
+      "intentional_deviations": []
+    },
     {
       "id": "theta",
       "family": "thermodynamics",

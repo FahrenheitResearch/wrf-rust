@@ -10,6 +10,12 @@ pub mod projection;
 pub mod units;
 pub mod variables;
 
+/// WRF/NCAR gravitational acceleration used by diagnostics derived from model fields.
+///
+/// WRF constructs geopotential with 9.81 m s^-2, and wrf-python exposes the same
+/// value from `fortran/wrf_constants.f90`.
+pub(crate) const WRF_GRAVITY_M_S2: f64 = 9.81;
+
 #[cfg(feature = "pure-rust-reader")]
 pub mod classic_netcdf_reader;
 #[cfg(feature = "pure-rust-reader")]

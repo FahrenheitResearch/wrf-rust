@@ -1,6 +1,8 @@
 //! Updraft helicity diagnostic.
 //!
-//! Matches the wrf-python Fortran subroutine DCALCUH (calc_uh.f90):
+//! Follows the wrf-python Fortran subroutine `DCALCUH` (`calc_uh.f90`) for its
+//! derivative stencil, updraft gate, integration, and output halo. The layer
+//! height reference intentionally differs; see [`compute_uhel`] for details.
 //!
 //! 1. Compute tem1(k) = w_destag(k) * vorticity(k) at each scalar level,
 //!    where vorticity uses centered differences divided by the map scale
@@ -25,17 +27,86 @@ fn lerp_at(z: f64, z0: f64, z1: f64, v0: f64, v1: f64) -> f64 {
     }
 }
 
+/// Vertical vorticity on the exact horizontal/vertical stencil used by
+/// NCAR wrf-python 1.3.4.1 `DCALCUH`.
+///
+/// The Fortran kernel initializes the work array to zero and only fills
+/// 1-based `k=2..nz-2`, `j=2..ny-1`, and `i=2..nx-1`. Keeping those untouched
+/// cells at zero is observable in the two-cell output halo and must not be
+/// replaced with one-sided derivatives when parity with `uhel` is requested.
+///
+/// For `DCALCUH` parity, the centered derivatives deliberately preserve the
+/// kernel's single `/MAPFAC_M` divisor. They are not rewritten to use the
+/// staggered-map-factor and squared-mass-factor metric form used by WRF's
+/// separate AVO/PVO kernel. See the pinned
+/// [DCALCUH formula](https://github.com/NCAR/wrf-python/blob/31c923335227b22fa656fd589a5342b91103e939/fortran/calc_uh.f90#L67-L74).
+fn dcalcuh_vorticity(
+    u: &[f64],
+    v: &[f64],
+    mapfct: &[f64],
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    dx: f64,
+    dy: f64,
+) -> Vec<f64> {
+    let nxy = nx * ny;
+    let mut vorticity = vec![0.0; nz * nxy];
+    if nx < 3 || ny < 3 || nz < 3 {
+        return vorticity;
+    }
+
+    let twodx = 2.0 * dx;
+    let twody = 2.0 * dy;
+    for k in 1..nz.saturating_sub(2) {
+        let offset = k * nxy;
+        for j in 1..ny - 1 {
+            for i in 1..nx - 1 {
+                let ij = j * nx + i;
+                let map_factor = mapfct[ij];
+                let dvdx = (v[offset + ij + 1] - v[offset + ij - 1]) / (twodx * map_factor);
+                let dudy = (u[offset + ij + nx] - u[offset + ij - nx]) / (twody * map_factor);
+                vorticity[offset + ij] = dvdx - dudy;
+            }
+        }
+    }
+
+    vorticity
+}
+
+#[inline]
+fn dcalcuh_output_column(i: usize, j: usize, nx: usize, ny: usize) -> bool {
+    // Fortran: DO i=2,nx-2 and DO j=2,ny-2 (1-based, inclusive).
+    i >= 1 && i < nx.saturating_sub(2) && j >= 1 && j < ny.saturating_sub(2)
+}
+
 /// Updraft helicity (m^2/s^2). `[ny, nx]`
 ///
 /// UH = integral from z_bot to z_top of (w * zeta_z) dz
 /// Default layer: 2-5 km AGL.
 ///
-/// Matches the wrf-python Fortran DCALCUH:
-/// - Vorticity uses centered differences divided by map scale factor.
+/// Follows the wrf-python Fortran `DCALCUH` for:
+/// - Vorticity uses centered differences divided by map scale factor and the
+///   same zero-initialized boundary/vertical stencil as `DCALCUH`.
 /// - A column-mean w is computed first; only columns with positive mean w
 ///   contribute to UH (matching the Fortran's updraft check).
 /// - The integrand is w*vort (pre-multiplied), integrated with the
 ///   trapezoidal rule.
+///
+/// # Vertical layer reference
+///
+/// `bottom_m` and `top_m` are true terrain-relative AGL bounds in wrf-rust:
+/// the integration coordinate is mass-level geopotential height minus terrain.
+/// The pinned NCAR wrapper instead passes staggered geopotential height to
+/// `DCALCUH`, whose kernel adds the requested bounds to `zp(i,j,2)`, the first
+/// staggered W level above terrain. See the pinned
+/// [wrapper](https://github.com/NCAR/wrf-python/blob/31c923335227b22fa656fd589a5342b91103e939/src/wrf/g_helicity.py#L183-L208)
+/// and [kernel bounds](https://github.com/NCAR/wrf-python/blob/31c923335227b22fa656fd589a5342b91103e939/fortran/calc_uh.f90#L82-L90).
+/// Consequently, wrf-rust does not claim exact `DCALCUH` vertical-bound parity.
+/// A representative 25--60 m first-level offset shifts NCAR's nominal 2--5 km
+/// layer upward by the same amount. For illustration, an integrand proportional
+/// to height changes by about 0.7--1.7% under that shift; a constant integrand
+/// is unchanged, and real-profile sensitivity depends on vertical structure.
 pub fn compute_uhel(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let w = f.w_destag(t)?;
     let u = f.u_destag(t)?;
@@ -57,45 +128,9 @@ pub fn compute_uhel(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<
     // if the variable is not present in the file.
     let mapfct: Vec<f64> = f.read_var("MAPFAC_M", t).unwrap_or_else(|_| vec![1.0; nxy]);
 
-    // Compute vorticity at each scalar level, dividing by map scale factor
-    // to match the Fortran: dv/(2*dx*mapfct) - du/(2*dy*mapfct).
-    let twodx = 2.0 * dx;
-    let twody = 2.0 * dy;
-    let mut vort_3d = vec![0.0f64; nz * nxy];
-    vort_3d.chunks_mut(nxy).enumerate().for_each(|(k, plane)| {
-        let u_plane = &u[k * nxy..(k + 1) * nxy];
-        let v_plane = &v[k * nxy..(k + 1) * nxy];
-        for j in 0..ny {
-            for i in 0..nx {
-                let ij = j * nx + i;
-                let m = mapfct[ij];
-
-                // dv/dx: centered differences, forward/backward at boundaries
-                let dvdx = if nx < 2 {
-                    0.0
-                } else if i == 0 {
-                    (v_plane[j * nx + 1] - v_plane[j * nx]) / (dx * m)
-                } else if i == nx - 1 {
-                    (v_plane[j * nx + nx - 1] - v_plane[j * nx + nx - 2]) / (dx * m)
-                } else {
-                    (v_plane[j * nx + i + 1] - v_plane[j * nx + i - 1]) / (twodx * m)
-                };
-
-                // du/dy: centered differences, forward/backward at boundaries
-                let dudy = if ny < 2 {
-                    0.0
-                } else if j == 0 {
-                    (u_plane[nx + i] - u_plane[i]) / (dy * m)
-                } else if j == ny - 1 {
-                    (u_plane[(ny - 1) * nx + i] - u_plane[(ny - 2) * nx + i]) / (dy * m)
-                } else {
-                    (u_plane[(j + 1) * nx + i] - u_plane[(j - 1) * nx + i]) / (twody * m)
-                };
-
-                plane[ij] = dvdx - dudy;
-            }
-        }
-    });
+    // Exact zero-initialized DCALCUH derivative stencil. Reference:
+    // https://github.com/NCAR/wrf-python/blob/31c923335227b22fa656fd589a5342b91103e939/fortran/calc_uh.f90#L55-L78
+    let vort_3d = dcalcuh_vorticity(&u, &v, &mapfct, nx, ny, nz, dx, dy);
 
     // Pre-multiply: tem1(k) = w_destag(k) * vorticity(k)
     let mut tem1 = vec![0.0f64; nz * nxy];
@@ -106,6 +141,12 @@ pub fn compute_uhel(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<
     // Integrate per column, checking column-mean w first (Fortran DCALCUH logic).
     let mut uhel = vec![0.0f64; nxy];
     uhel.iter_mut().enumerate().for_each(|(ij, uh_val)| {
+        let i = ij % nx;
+        let j = ij / nx;
+        if !dcalcuh_output_column(i, j, nx, ny) {
+            return;
+        }
+
         // --- Step 1: compute column-mean w over [z_bot, z_top] ---
         let mut w_sum = 0.0f64;
         let mut depth = 0.0f64;
@@ -197,4 +238,51 @@ pub fn compute_uhel(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<
     });
 
     Ok(uhel)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dcalcuh_output_column, dcalcuh_vorticity};
+
+    #[test]
+    fn dcalcuh_keeps_fortran_work_array_boundaries_zero() {
+        let (nx, ny, nz) = (5, 5, 5);
+        let nxy = nx * ny;
+        let u = vec![0.0; nz * nxy];
+        let mut v = vec![0.0; nz * nxy];
+        for k in 0..nz {
+            for j in 0..ny {
+                for i in 0..nx {
+                    v[k * nxy + j * nx + i] = i as f64;
+                }
+            }
+        }
+
+        let vorticity = dcalcuh_vorticity(&u, &v, &vec![1.0; nxy], nx, ny, nz, 1.0, 1.0);
+
+        assert_eq!(vorticity[2 * nx + 2], 0.0, "lowest scalar level is zero");
+        assert_eq!(vorticity[nxy + 2 * nx], 0.0, "west boundary is zero");
+        assert_eq!(vorticity[nxy + 2 * nx + 2], 1.0);
+        assert_eq!(
+            vorticity[(nz - 2) * nxy + 2 * nx + 2],
+            0.0,
+            "top two scalar levels are zero"
+        );
+    }
+
+    #[test]
+    fn dcalcuh_output_uses_the_asymmetric_two_cell_fortran_halo() {
+        let expected = [
+            [false, false, false, false, false],
+            [false, true, true, false, false],
+            [false, true, true, false, false],
+            [false, false, false, false, false],
+            [false, false, false, false, false],
+        ];
+        for (j, row) in expected.iter().enumerate() {
+            for (i, expected_value) in row.iter().enumerate() {
+                assert_eq!(dcalcuh_output_column(i, j, 5, 5), *expected_value);
+            }
+        }
+    }
 }

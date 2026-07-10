@@ -12,7 +12,6 @@ use rayon::prelude::*;
 
 /// Physical constants
 const RD: f64 = 287.058;
-const G: f64 = 9.80665;
 const ZEROCNK: f64 = 273.15;
 const ROCP: f64 = 0.28571426;
 
@@ -154,11 +153,7 @@ pub fn pressure_weighted_bunkers_storm_motion(
 
 /// Compute dewpoint (Celsius) from mixing ratio (kg/kg) and pressure (hPa).
 pub fn dewpoint_from_q(q: f64, p_hpa: f64) -> f64 {
-    let q = q.max(1.0e-10); // avoid log(0)
-    let e = q * p_hpa / (0.622 + q); // vapor pressure in hPa
-    let e = e.max(1.0e-10);
-    let ln_e = (e / 6.112).ln();
-    (243.5 * ln_e) / (17.67 - ln_e)
+    metfuncs::dewpoint_from_mixing_ratio(q, p_hpa)
 }
 
 // ---------------------------------------------------------------------------
@@ -582,9 +577,13 @@ pub fn compute_shear(
 // Significant Tornado Parameter
 // ---------------------------------------------------------------------------
 
-/// Significant Tornado Parameter (STP).
+/// Fixed-layer Significant Tornado Parameter (STP).
 ///
-/// STP = (CAPE/1500) * ((2000 - LCL)/1000) * (SRH_1km/150) * min(SHEAR_6km/20, 1.5)
+/// The LCL term is 1 below 1 km and 0 above 2 km. The 0--6-km
+/// bulk-wind-difference term is 0 below 12.5 m/s and capped at 1.5
+/// at 30 m/s, matching SHARPpy 1.4.0a5 `stp_fixed`.
+///
+/// Reference: <https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/params.py#L643-L690>
 ///
 /// Inputs are pre-computed 2D fields, each of size `n` (ny * nx).
 pub fn compute_stp(cape: &[f64], lcl: &[f64], srh_1km: &[f64], shear_6km: &[f64]) -> Vec<f64> {
@@ -593,9 +592,21 @@ pub fn compute_stp(cape: &[f64], lcl: &[f64], srh_1km: &[f64], shear_6km: &[f64]
 
     for idx in 0..n {
         let cape_term = (cape[idx] / 1500.0).max(0.0);
-        let lcl_term = ((2000.0 - lcl[idx]) / 1000.0).clamp(0.0, 2.0);
+        let lcl_term = if lcl[idx] <= 1000.0 {
+            1.0
+        } else if lcl[idx] >= 2000.0 {
+            0.0
+        } else {
+            (2000.0 - lcl[idx]) / 1000.0
+        };
         let srh_term = (srh_1km[idx] / 150.0).max(0.0);
-        let shear_term = (shear_6km[idx] / 20.0).min(1.5).max(0.0);
+        let shear_term = if shear_6km[idx] < 12.5 {
+            0.0
+        } else if shear_6km[idx] >= 30.0 {
+            1.5
+        } else {
+            shear_6km[idx] / 20.0
+        };
 
         stp.push(cape_term * lcl_term * srh_term * shear_term);
     }
@@ -764,7 +775,7 @@ pub fn compute_pw(
                 let q_avg = 0.5 * (q_prof[k].max(0.0) + q_prof[k + 1].max(0.0));
                 pw_val += q_avg * dp;
             }
-            pw_val / G // kg/m^2 = mm
+            pw_val / crate::WRF_GRAVITY_M_S2 // kg/m^2 = mm
         })
         .collect()
 }
@@ -1026,17 +1037,29 @@ pub fn boyden_index(z1000: f64, z700: f64, t700: f64) -> f64 {
 // Severe Weather Composites (grid-based)
 // ===========================================================================
 
-/// Significant Hail Parameter (SHIP).
+/// SPC mesoanalysis / SHARPpy 2014 Significant Hail Parameter (SHIP).
 ///
-/// SHIP = (MUCAPE * MR * LR_700_500 * (-T500) * SHEAR_06) / 42_000_000
+/// The MU-parcel mixing ratio is constrained to 11--13.6 g/kg, 0-6 km shear
+/// to 7--27 m/s, and T500 to no warmer than -5.5 C before evaluating:
+///
+/// `SHIP = -(MUCAPE * MU_MR * LR_700_500 * T500 * SHEAR_06) / 42_000_000`
+///
+/// The result is then multiplied by MUCAPE/1300 when MUCAPE is below
+/// 1300 J/kg, by LR/5.8 when the lapse rate is below 5.8 C/km, and by the
+/// freezing-level height/2400 when the freezing level is below 2400 m AGL.
+///
+/// References:
+/// - <https://www.spc.noaa.gov/exper/mesoanalysis/help/help_sigh.html>
+/// - <https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/params.py#L485-L575>
 ///
 /// All inputs are flattened 2D grids of size nx*ny.
 pub fn significant_hail_parameter(
-    cape: &[f64],
-    shear06: &[f64],
+    mu_cape: &[f64],
+    shear_0_6km: &[f64],
     t500: &[f64],
     lr_700_500: &[f64],
-    mr: &[f64],
+    mu_mixing_ratio: &[f64],
+    freezing_level_agl: &[f64],
     nx: usize,
     ny: usize,
 ) -> Vec<f64> {
@@ -1044,18 +1067,45 @@ pub fn significant_hail_parameter(
     (0..n)
         .into_par_iter()
         .map(|i| {
-            let mucape = cape[i].max(0.0);
-            let mr_val = mr[i].max(0.0);
-            let lr = lr_700_500[i].max(0.0);
-            let t5 = (-t500[i]).max(0.0);
-            let s06 = shear06[i].max(0.0);
+            let mucape = mu_cape[i];
+            let mixing_ratio = mu_mixing_ratio[i];
+            let lapse_rate = lr_700_500[i];
+            let t500_c = t500[i];
+            let shear = shear_0_6km[i];
+            let freezing_level = freezing_level_agl[i];
 
-            let ship = (mucape * mr_val * lr * t5 * s06) / 42_000_000.0;
+            if !mucape.is_finite()
+                || !mixing_ratio.is_finite()
+                || !lapse_rate.is_finite()
+                || !t500_c.is_finite()
+                || !shear.is_finite()
+                || !freezing_level.is_finite()
+                || mucape <= 0.0
+                || lapse_rate <= 0.0
+                || freezing_level < 0.0
+            {
+                return 0.0;
+            }
 
-            if mucape < 1300.0 {
-                ship * (mucape / 1300.0)
+            let mixing_ratio = mixing_ratio.clamp(11.0, 13.6);
+            let shear = shear.clamp(7.0, 27.0);
+            let t500_c = t500_c.min(-5.5);
+            let mut ship = -(mucape * mixing_ratio * lapse_rate * t500_c * shear) / 42_000_000.0;
+
+            if mucape < 1_300.0 {
+                ship *= mucape / 1_300.0;
+            }
+            if lapse_rate < 5.8 {
+                ship *= lapse_rate / 5.8;
+            }
+            if freezing_level < 2_400.0 {
+                ship *= freezing_level / 2_400.0;
+            }
+
+            if ship.is_finite() {
+                ship.max(0.0)
             } else {
-                ship
+                0.0
             }
         })
         .collect()
@@ -1063,14 +1113,30 @@ pub fn significant_hail_parameter(
 
 /// Derecho Composite Parameter (DCP).
 ///
-/// DCP = (DCAPE/980) * (MUCAPE/2000) * (SHEAR_06/20) * (MU_MR/11)
+/// DCP = (DCAPE/980) * (MUCAPE/2000) * (SHEAR_06/20 kt) * (MEAN_WIND_06/16 kt)
+///
+/// Wind inputs to this Rust API are in m/s and are converted to knots before
+/// applying the operational normalization values.
+///
+/// # Migration
+///
+/// This replaces the removed `derecho_composite_parameter` helper, whose
+/// fourth positional input was MU mixing ratio and therefore encoded a
+/// non-operational formula. Callers must migrate to this explicitly named
+/// helper and pass 0-6 km mean-wind speed in m/s as the fourth argument.
+/// The distinct name makes stale source fail to compile instead of silently
+/// interpreting mixing ratio as wind speed.
+///
+/// References:
+/// - <https://www.spc.noaa.gov/exper/mesoanalysis/help/help_dcp.html>
+/// - <https://www.nssl.noaa.gov/users/mcon/public_html/DCP_description.htm>
 ///
 /// All inputs are flattened 2D grids.
-pub fn derecho_composite_parameter(
+pub fn derecho_composite_parameter_from_mean_wind(
     dcape: &[f64],
     mu_cape: &[f64],
     shear06: &[f64],
-    mu_mixing_ratio: &[f64],
+    mean_wind06: &[f64],
     nx: usize,
     ny: usize,
 ) -> Vec<f64> {
@@ -1080,25 +1146,34 @@ pub fn derecho_composite_parameter(
         .map(|i| {
             let dcape_term = (dcape[i] / 980.0).max(0.0);
             let cape_term = (mu_cape[i] / 2000.0).max(0.0);
-            let shear_term = (shear06[i] / 20.0).max(0.0);
-            let mr_term = (mu_mixing_ratio[i] / 11.0).max(0.0);
+            let shear06_kt = shear06[i] / 0.514_444;
+            let mean_wind06_kt = mean_wind06[i] / 0.514_444;
+            let shear_term = (shear06_kt / 20.0).max(0.0);
+            let mean_wind_term = (mean_wind06_kt / 16.0).max(0.0);
 
-            dcape_term * cape_term * shear_term * mr_term
+            dcape_term * cape_term * shear_term * mean_wind_term
         })
         .collect()
 }
 
-/// Enhanced Supercell Composite Parameter (SCP).
+/// CIN-scaled Supercell Composite Parameter (SCP).
 ///
-/// SCP = (MUCAPE / 1000) * (SRH / 50) * (SHEAR_06 / 40) * CIN_term
+/// SCP = (MUCAPE / 1000) * (ESRH / 50) * (EBWD / 20) * CIN_term
 ///
 /// CIN_term = 1 if MUCIN > -40, else -40/MUCIN
+///
+/// The EBWD term is zero below 10 m/s, increases as EBWD/20 from
+/// 10--20 m/s, and is capped at one above 20 m/s.
+///
+/// References:
+/// - <https://www.spc.noaa.gov/exper/mesoanalysis/help/help_scp.html>
+/// - <https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/params.py#L694-L729>
 ///
 /// All inputs are flattened 2D grids.
 pub fn supercell_composite_parameter(
     mu_cape: &[f64],
     srh: &[f64],
-    shear_06: &[f64],
+    ebwd: &[f64],
     mu_cin: &[f64],
     nx: usize,
     ny: usize,
@@ -1109,7 +1184,13 @@ pub fn supercell_composite_parameter(
         .map(|i| {
             let cape_term = (mu_cape[i] / 1000.0).max(0.0);
             let srh_term = (srh[i] / 50.0).max(0.0);
-            let shear_term = (shear_06[i] / 40.0).max(0.0);
+            let shear_term = if ebwd[i] < 10.0 {
+                0.0
+            } else if ebwd[i] > 20.0 {
+                1.0
+            } else {
+                ebwd[i] / 20.0
+            };
 
             let cin_term = if mu_cin[i] > -40.0 {
                 1.0
@@ -1122,15 +1203,26 @@ pub fn supercell_composite_parameter(
         .collect()
 }
 
-/// Critical Angle between storm-relative inflow and 0-500m shear vector.
+/// Critical angle between storm-relative inflow and the 0-500 m shear vector.
 ///
-/// Returns angle in degrees (0-180). Values near 90 degrees favor tornadogenesis.
+/// Returns the angle in degrees in `[0, 180]`. The surface wind is required to
+/// construct the storm-relative inflow vector. The shear inputs are vector
+/// differences (`wind_500m - wind_surface`), not absolute 500 m winds.
+/// Returns `NaN` when either vector is degenerate, matching SHARPpy's masked
+/// result for an undefined angle.
 ///
 /// - u_storm, v_storm: Storm motion components (m/s)
+/// - u_surface, v_surface: Surface wind components (m/s)
 /// - u_shear, v_shear: 0-500m shear vector components (m/s)
+///
+/// This follows the definitions used by
+/// [SHARPpy 1.4.0a5](https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/winds.py#L477-L516)
+/// and [MetPy](https://github.com/Unidata/MetPy/blob/433bdd18cc807efc2507e91094776403edee5973/src/metpy/calc/indices.py#L654-L735).
 pub fn critical_angle(
     u_storm: &[f64],
     v_storm: &[f64],
+    u_surface: &[f64],
+    v_surface: &[f64],
     u_shear: &[f64],
     v_shear: &[f64],
     nx: usize,
@@ -1140,21 +1232,20 @@ pub fn critical_angle(
     (0..n)
         .into_par_iter()
         .map(|i| {
-            let inflow_u = -u_storm[i];
-            let inflow_v = -v_storm[i];
-            let shear_u = u_shear[i];
-            let shear_v = v_shear[i];
-
-            let dot = inflow_u * shear_u + inflow_v * shear_v;
-            let mag_inflow = (inflow_u * inflow_u + inflow_v * inflow_v).sqrt();
-            let mag_shear = (shear_u * shear_u + shear_v * shear_v).sqrt();
-
-            if mag_inflow < 0.01 || mag_shear < 0.01 {
+            let inflow_u = u_storm[i] - u_surface[i];
+            let inflow_v = v_storm[i] - v_surface[i];
+            if inflow_u.hypot(inflow_v) < 1.0e-10 || u_shear[i].hypot(v_shear[i]) < 1.0e-10 {
                 return f64::NAN;
             }
 
-            let cos_angle = (dot / (mag_inflow * mag_shear)).clamp(-1.0, 1.0);
-            cos_angle.acos().to_degrees()
+            crate::met::wind::critical_angle(
+                u_storm[i],
+                v_storm[i],
+                u_surface[i],
+                v_surface[i],
+                u_surface[i] + u_shear[i],
+                v_surface[i] + v_shear[i],
+            )
         })
         .collect()
 }
@@ -1582,6 +1673,164 @@ mod tests {
         assert_close(out[0], 0.0);
         assert_close(out[1], 0.75);
         assert_close(out[2], 1.0);
+    }
+
+    #[test]
+    fn fixed_stp_helper_applies_sharppy_lcl_and_shear_limits() {
+        let out = compute_stp(
+            &[1500.0; 9],
+            &[
+                999.0, 1000.0, 1500.0, 2000.0, 2001.0, 1000.0, 1000.0, 1000.0, 1000.0,
+            ],
+            &[150.0; 9],
+            &[20.0, 20.0, 20.0, 20.0, 20.0, 12.4, 12.5, 30.0, 30.1],
+        );
+
+        let expected = [1.0, 1.0, 0.5, 0.0, 0.0, 0.0, 0.625, 1.5, 1.5];
+        for (actual, expected) in out.into_iter().zip(expected) {
+            assert_close(actual, expected);
+        }
+    }
+
+    #[test]
+    fn exported_ship_helper_matches_nominal_sharppy_reference() {
+        let out = significant_hail_parameter(
+            &[2_000.0],
+            &[20.0],
+            &[-15.0],
+            &[7.0],
+            &[12.0],
+            &[3_000.0],
+            1,
+            1,
+        );
+
+        assert_close(out[0], 1.2);
+    }
+
+    #[test]
+    fn exported_ship_helper_applies_sharppy_term_bounds() {
+        let out = significant_hail_parameter(
+            &[2_000.0],
+            &[50.0],
+            &[-2.0],
+            &[7.0],
+            &[5.0],
+            &[3_000.0],
+            1,
+            1,
+        );
+
+        assert_close(out[0], 0.5445);
+    }
+
+    #[test]
+    fn exported_ship_helper_applies_all_conditional_corrections() {
+        let out = significant_hail_parameter(
+            &[650.0],
+            &[20.0],
+            &[-10.0],
+            &[2.9],
+            &[12.0],
+            &[1_200.0],
+            1,
+            1,
+        );
+
+        assert_close(out[0], 0.013_464_285_714_285_7);
+    }
+
+    #[test]
+    fn exported_scp_helper_applies_spc_ebwd_limits() {
+        let out = supercell_composite_parameter(
+            &[1000.0; 5],
+            &[50.0; 5],
+            &[9.0, 10.0, 15.0, 20.0, 21.0],
+            &[-20.0; 5],
+            5,
+            1,
+        );
+
+        let expected = [0.0, 0.5, 0.75, 1.0, 1.0];
+        for (actual, expected) in out.into_iter().zip(expected) {
+            assert_close(actual, expected);
+        }
+    }
+
+    #[test]
+    fn exported_scp_helper_retains_the_spc_mucin_scaling() {
+        let out = supercell_composite_parameter(
+            &[1000.0; 4],
+            &[50.0; 4],
+            &[20.0; 4],
+            &[-20.0, -40.0, -80.0, -160.0],
+            4,
+            1,
+        );
+
+        let expected = [1.0, 1.0, 0.5, 0.25];
+        for (actual, expected) in out.into_iter().zip(expected) {
+            assert_close(actual, expected);
+        }
+    }
+
+    #[test]
+    fn exported_dcp_mean_wind_helper_matches_the_spc_normalization() {
+        let out = derecho_composite_parameter_from_mean_wind(
+            &[980.0],
+            &[2000.0],
+            &[20.0 * 0.514_444],
+            &[16.0 * 0.514_444],
+            1,
+            1,
+        );
+
+        assert_close(out[0], 1.0);
+    }
+
+    #[test]
+    fn exported_dcp_mean_wind_helper_uses_mean_wind_not_mixing_ratio() {
+        let out = derecho_composite_parameter_from_mean_wind(
+            &[980.0; 3],
+            &[2000.0; 3],
+            &[20.0 * 0.514_444; 3],
+            &[0.0, 8.0 * 0.514_444, 16.0 * 0.514_444],
+            3,
+            1,
+        );
+
+        let expected = [0.0, 0.5, 1.0];
+        for (actual, expected) in out.into_iter().zip(expected) {
+            assert_close(actual, expected);
+        }
+    }
+
+    #[test]
+    fn exported_critical_angle_helper_matches_calm_surface_reference() {
+        let out = critical_angle(&[10.0], &[0.0], &[0.0], &[0.0], &[10.0], &[10.0], 1, 1);
+
+        assert_close(out[0], 45.0);
+    }
+
+    #[test]
+    fn exported_critical_angle_helper_accounts_for_nonzero_surface_wind() {
+        let out = critical_angle(&[10.0], &[0.0], &[5.0], &[5.0], &[0.0], &[10.0], 1, 1);
+
+        assert_close(out[0], 135.0);
+    }
+
+    #[test]
+    fn exported_critical_angle_is_undefined_when_storm_equals_surface_wind() {
+        let out = critical_angle(&[5.0], &[2.0], &[5.0], &[2.0], &[10.0], &[0.0], 1, 1);
+
+        assert!(out[0].is_nan());
+    }
+
+    #[test]
+    fn exported_critical_angle_is_undefined_for_zero_low_level_shear() {
+        let out = critical_angle(&[10.0], &[0.0], &[0.0], &[0.0], &[0.0], &[0.0], 1, 1);
+
+        assert!(out[0].is_nan());
     }
 
     #[test]

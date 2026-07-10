@@ -6,13 +6,14 @@
 
 use crate::compute::{ComputeOpts, StormMotionMethod};
 use crate::diag::cape::{build_surface_augmented_thermo_column, effective_inflow_layer_grid};
+use crate::diag::wind::rotate_grid_wind_to_earth;
 use crate::error::{WrfError, WrfResult};
 use crate::file::WrfFile;
 use rayon::prelude::*;
 
 const SURFACE_LAYER_HEIGHT_M: f64 = 0.0;
 const BUNKERS_STACK_FIELDS: usize = 6;
-const WRFPYTHON_GRAVITY_M_S2: f64 = 9.81;
+const WRFPYTHON_GRAVITY_M_S2: f64 = crate::WRF_GRAVITY_M_S2;
 const WRFPYTHON_MEAN_BOTTOM_M: f64 = 3_000.0;
 const WRFPYTHON_MEAN_TOP_M: f64 = 10_000.0;
 const WRFPYTHON_STORM_SPEED_FACTOR: f64 = 0.75;
@@ -337,14 +338,28 @@ pub fn compute_srh_field(
             let mut u_prof = Vec::with_capacity(nz + 1);
             let mut v_prof = Vec::with_capacity(nz + 1);
             let mut h_prof = Vec::with_capacity(nz + 1);
-            u_prof.push(u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij]);
-            v_prof.push(u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij]);
+            let (u10_earth, v10_earth) = rotate_grid_wind_to_earth(
+                u10_grid[ij],
+                v10_grid[ij],
+                sina[ij],
+                cosa[ij],
+                latitude[ij],
+            );
+            u_prof.push(u10_earth);
+            v_prof.push(v10_earth);
             h_prof.push(SURFACE_LAYER_HEIGHT_M);
 
             for k in 0..nz {
                 let idx = k * nxy + ij;
-                u_prof.push(u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij]);
-                v_prof.push(u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij]);
+                let (u_earth, v_earth) = rotate_grid_wind_to_earth(
+                    u_grid[idx],
+                    v_grid[idx],
+                    sina[ij],
+                    cosa[ij],
+                    latitude[ij],
+                );
+                u_prof.push(u_earth);
+                v_prof.push(v_earth);
                 h_prof.push(h_agl[idx]);
             }
 
@@ -366,8 +381,15 @@ pub fn compute_srh_field(
 
         // Level 0: 10m winds anchored to the surface, with surface pressure.
         for ij in 0..nxy {
-            u_aug.push(u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij]);
-            v_aug.push(u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij]);
+            let (u_earth, v_earth) = rotate_grid_wind_to_earth(
+                u10_grid[ij],
+                v10_grid[ij],
+                sina[ij],
+                cosa[ij],
+                latitude[ij],
+            );
+            u_aug.push(u_earth);
+            v_aug.push(v_earth);
             h_aug.push(SURFACE_LAYER_HEIGHT_M);
             p_aug.push(psfc_hpa[ij]);
         }
@@ -375,8 +397,15 @@ pub fn compute_srh_field(
         for k in 0..nz {
             let off = k * nxy;
             for ij in 0..nxy {
-                u_aug.push(u_grid[off + ij] * cosa[ij] - v_grid[off + ij] * sina[ij]);
-                v_aug.push(u_grid[off + ij] * sina[ij] + v_grid[off + ij] * cosa[ij]);
+                let (u_earth, v_earth) = rotate_grid_wind_to_earth(
+                    u_grid[off + ij],
+                    v_grid[off + ij],
+                    sina[ij],
+                    cosa[ij],
+                    latitude[ij],
+                );
+                u_aug.push(u_earth);
+                v_aug.push(v_earth);
                 h_aug.push(h_agl[off + ij]);
                 p_aug.push(pres_hpa[off + ij]);
             }
@@ -492,6 +521,7 @@ fn compute_bunkers_columns(
     let psfc_hpa: Vec<f64> = f.psfc(t)?.iter().map(|p| p / 100.0).collect();
     let u10_grid = f.u10(t)?;
     let v10_grid = f.v10(t)?;
+    let latitude = f.xlat(t)?;
 
     let nx = f.nx;
     let ny = f.ny;
@@ -513,15 +543,29 @@ fn compute_bunkers_columns(
             let mut v_prof = Vec::with_capacity(nz + 1);
             let mut h_prof = Vec::with_capacity(nz + 1);
             let mut p_prof = Vec::with_capacity(nz + 1);
-            u_prof.push(u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij]);
-            v_prof.push(u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij]);
+            let (u10_earth, v10_earth) = rotate_grid_wind_to_earth(
+                u10_grid[ij],
+                v10_grid[ij],
+                sina[ij],
+                cosa[ij],
+                latitude[ij],
+            );
+            u_prof.push(u10_earth);
+            v_prof.push(v10_earth);
             h_prof.push(SURFACE_LAYER_HEIGHT_M);
             p_prof.push(psfc_hpa[ij]);
 
             for k in 0..nz {
                 let idx = k * nxy + ij;
-                u_prof.push(u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij]);
-                v_prof.push(u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij]);
+                let (u_earth, v_earth) = rotate_grid_wind_to_earth(
+                    u_grid[idx],
+                    v_grid[idx],
+                    sina[ij],
+                    cosa[ij],
+                    latitude[ij],
+                );
+                u_prof.push(u_earth);
+                v_prof.push(v_earth);
                 h_prof.push(h_agl[idx]);
                 p_prof.push(pres_hpa[idx]);
             }
@@ -675,12 +719,26 @@ pub fn compute_effective_srh(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfRe
 
             let mut u_prof = Vec::with_capacity(nz + 1);
             let mut v_prof = Vec::with_capacity(nz + 1);
-            u_prof.push(u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij]);
-            v_prof.push(u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij]);
+            let (u10_earth, v10_earth) = rotate_grid_wind_to_earth(
+                u10_grid[ij],
+                v10_grid[ij],
+                sina[ij],
+                cosa[ij],
+                latitude[ij],
+            );
+            u_prof.push(u10_earth);
+            v_prof.push(v10_earth);
             for k in 0..nz {
                 let idx = k * nxy + ij;
-                u_prof.push(u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij]);
-                v_prof.push(u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij]);
+                let (u_earth, v_earth) = rotate_grid_wind_to_earth(
+                    u_grid[idx],
+                    v_grid[idx],
+                    sina[ij],
+                    cosa[ij],
+                    latitude[ij],
+                );
+                u_prof.push(u_earth);
+                v_prof.push(v_earth);
             }
 
             let (sm_u, sm_v) = if let Some(sm) = custom_sm {
@@ -739,6 +797,7 @@ pub fn compute_mean_wind(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult
     let h_agl = f.height_agl(t)?;
     let u10_grid = f.u10(t)?;
     let v10_grid = f.v10(t)?;
+    let latitude = f.xlat(t)?;
 
     let nx = f.nx;
     let ny = f.ny;
@@ -758,14 +817,28 @@ pub fn compute_mean_wind(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult
             let mut u_prof = Vec::with_capacity(nz + 1);
             let mut v_prof = Vec::with_capacity(nz + 1);
             let mut h_prof = Vec::with_capacity(nz + 1);
-            u_prof.push(u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij]);
-            v_prof.push(u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij]);
+            let (u10_earth, v10_earth) = rotate_grid_wind_to_earth(
+                u10_grid[ij],
+                v10_grid[ij],
+                sina[ij],
+                cosa[ij],
+                latitude[ij],
+            );
+            u_prof.push(u10_earth);
+            v_prof.push(v10_earth);
             h_prof.push(SURFACE_LAYER_HEIGHT_M);
 
             for k in 0..nz {
                 let idx = k * nxy + ij;
-                u_prof.push(u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij]);
-                v_prof.push(u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij]);
+                let (u_earth, v_earth) = rotate_grid_wind_to_earth(
+                    u_grid[idx],
+                    v_grid[idx],
+                    sina[ij],
+                    cosa[ij],
+                    latitude[ij],
+                );
+                u_prof.push(u_earth);
+                v_prof.push(v_earth);
                 h_prof.push(h_agl[idx]);
             }
 

@@ -28,11 +28,11 @@ pub fn compute_rh2m(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<
         .zip(q2.iter())
         .zip(psfc.iter())
         .map(|((t_k, q), p_pa)| {
-            let t_c = t_k - 273.15;
-            let p_hpa = p_pa / 100.0;
-            let e = q * p_hpa / (0.622 + q);
-            let es = 6.112 * (17.67 * t_c / (t_c + 243.5)).exp();
-            (e / es * 100.0).clamp(0.0, 100.0)
+            crate::diag::thermo::wrf_relative_humidity_from_mixing_ratio(
+                *q,
+                *p_pa / 100.0,
+                *t_k - 273.15,
+            )
         })
         .collect())
 }
@@ -45,14 +45,12 @@ pub fn compute_dp2m(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<
     Ok(q2
         .iter()
         .zip(psfc.iter())
-        .map(|(q, p_pa)| {
-            let q = q.max(1e-10);
-            let p_hpa = p_pa / 100.0;
-            let e = q * p_hpa / (0.622 + q);
-            let ln_e = (e / 6.112).max(1e-10).ln();
-            (243.5 * ln_e) / (17.67 - ln_e)
-        })
+        .map(|(q, p_pa)| dewpoint_2m_from_model_state(*q, *p_pa))
         .collect())
+}
+
+fn dewpoint_2m_from_model_state(q_kgkg: f64, p_pa: f64) -> f64 {
+    crate::met::thermo::dewpoint_from_mixing_ratio(q_kgkg, p_pa / 100.0)
 }
 
 /// Water vapor mixing ratio (kg/kg). `[nz, ny, nx]`
@@ -69,4 +67,16 @@ pub fn compute_specific_humidity(
 ) -> WrfResult<Vec<f64>> {
     let qv = f.qvapor(t)?;
     Ok(qv.iter().map(|q| q / (1.0 + q)).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dewpoint_2m_from_model_state;
+
+    #[test]
+    fn two_meter_dewpoint_uses_wrf_vapor_pressure_floor() {
+        let dewpoint = dewpoint_2m_from_model_state(0.0, 100_000.0);
+
+        assert!((dewpoint + 80.447_858_788_617_48).abs() < 1.0e-12);
+    }
 }

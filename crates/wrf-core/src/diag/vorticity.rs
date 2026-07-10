@@ -10,7 +10,7 @@ use crate::compute::ComputeOpts;
 use crate::error::{WrfError, WrfResult};
 use crate::file::WrfFile;
 
-const WRF_G: f64 = 9.81;
+const WRF_G: f64 = crate::WRF_GRAVITY_M_S2;
 const AVO_DISPLAY_SCALE: f64 = 1.0e5;
 const PVO_FIRST_SCALE: f64 = 10_000.0;
 const PVO_SECOND_SCALE: f64 = 100.0;

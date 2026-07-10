@@ -3,6 +3,7 @@
 
 use crate::compute::{ComputeOpts, StormMotionMethod};
 use crate::diag::cape::{effective_inflow_layer_grid, mu_parcel_mixing_ratio_field};
+use crate::diag::wind::rotate_grid_wind_to_earth;
 use crate::error::WrfResult;
 use crate::file::WrfFile;
 use rayon::prelude::*;
@@ -80,8 +81,38 @@ fn ehi_from_components(cape: &[f64], srh: &[f64]) -> Vec<f64> {
     crate::met::composite::compute_ehi(cape, srh)
 }
 
+/// Three-term SHARPpy SCP retained for the intentionally distinct ECAPE analog.
 fn scp_from_components(cape: &[f64], effective_srh: &[f64], ebwd: &[f64]) -> Vec<f64> {
     crate::met::composite::compute_scp(cape, effective_srh, ebwd)
+}
+
+/// Current SPC SCP, including the MUCIN magnitude-reduction term.
+fn scp_spc_from_components(
+    mucape: &[f64],
+    effective_srh: &[f64],
+    ebwd: &[f64],
+    mucin: &[f64],
+) -> Vec<f64> {
+    crate::met::composite::supercell_composite_parameter(
+        mucape,
+        effective_srh,
+        ebwd,
+        mucin,
+        mucape.len(),
+        1,
+    )
+}
+
+type CapeFieldSlices<'a> = (&'a [f64], &'a [f64], &'a [f64], &'a [f64]);
+
+/// Select the MUCAPE/MUCIN components from `compute_cape_fields`' four-field
+/// return value and apply the registered SPC definition.
+fn registered_scp_from_cape_fields(
+    (mucape, mucin, _mu_lcl, _mu_lfc): CapeFieldSlices<'_>,
+    effective_srh: &[f64],
+    ebwd: &[f64],
+) -> Vec<f64> {
+    scp_spc_from_components(mucape, effective_srh, ebwd, mucin)
 }
 
 fn build_augmented_wind_profile(
@@ -249,21 +280,30 @@ pub fn compute_stp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
 /// Uses MIXED-LAYER parcel for CAPE, LCL, and CIN.
 /// Uses effective inflow layer SRH and effective bulk wind difference (EBWD).
 /// Includes CIN term: (200 + mlCIN) / 150.
+/// The parameter is zero when the effective inflow layer is elevated above the
+/// surface, following the SPC operational definition.
 ///
 /// STP_eff = (mlCAPE/1500) * ((2000-mlLCL)/1000) * (ESRH/150) * (EBWD/20) * ((200+mlCIN)/150)
 ///
 /// Effective SRH uses earth-rotated winds with 10m prepend via compute_effective_srh.
+/// Reference: <https://www.spc.noaa.gov/exper/mesoanalysis/help/help_stpc.html>
 pub fn compute_stp_effective(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let (mlcape, mlcin, lcl, _) =
         crate::diag::cape::compute_cape_fields(f, t, "ml", None, opts.lake_interp)?;
+
+    let effective_layers = effective_inflow_layer_grid(f, t, opts)?;
 
     // Effective-layer SRH via canonical path (earth-rotated winds + 10m prepend)
     let eff_srh = crate::diag::srh::compute_effective_srh(f, t, opts)?;
     let ebwd = compute_effective_bulk_wind_difference(f, t, opts)?;
 
-    Ok(stp_eff_from_components(
-        &mlcape, &lcl, &mlcin, &eff_srh, &ebwd,
-    ))
+    let mut stp = stp_eff_from_components(&mlcape, &lcl, &mlcin, &eff_srh, &ebwd);
+    for (ij, value) in stp.iter_mut().enumerate() {
+        let effective_base_idx = effective_layers.layer(ij).map(|layer| layer.base_idx);
+        *value = effective_stp_surface_gate(*value, effective_base_idx);
+    }
+
+    Ok(stp)
 }
 
 /// Generic STP dispatcher: uses opts.layer_type to choose fixed or effective.
@@ -343,6 +383,16 @@ fn stp_eff_from_components(
             cape_term * lcl_term * srh_term * shear_term * cin_term
         })
         .collect()
+}
+
+/// The effective-layer profile is augmented with the 2 m surface parcel at
+/// index zero. Any higher base index therefore identifies elevated inflow.
+fn effective_stp_surface_gate(stp: f64, effective_base_idx: Option<usize>) -> f64 {
+    if effective_base_idx == Some(0) {
+        stp
+    } else {
+        0.0
+    }
 }
 
 fn vtp_mod_from_components(
@@ -427,14 +477,13 @@ fn tehi_from_components(
     let mut out = Vec::with_capacity(n);
 
     for i in 0..n {
-        let mut ml3cape_term = if ml3cape[i] > 300.0 {
+        let ml3cape_term = if mlcape[i] > 1500.0 {
+            1.0
+        } else if ml3cape[i] > 300.0 {
             1.5
         } else {
             ml3cape[i] / 200.0
         };
-        if mlcape[i] > 1500.0 {
-            ml3cape_term = ml3cape_term.max(1.0);
-        }
 
         let tehi =
             ((srh1[i] * mlcape[i]) / 160000.0) * ml3cape_term * fixed_layer_shear_term(shear6[i]);
@@ -527,15 +576,28 @@ fn compute_tornadic_low_level_components(
 
 /// Supercell Composite Parameter (dimensionless). `[ny, nx]`
 ///
-/// Uses MUCAPE, effective SRH, and effective bulk wind difference (EBWD).
+/// Uses MUCAPE, effective SRH, effective bulk wind difference (EBWD), and the
+/// current SPC MUCIN factor: 1.0 at and above -40 J/kg, then -40/MUCIN for
+/// stronger inhibition. The experimental ECAPE analog intentionally retains
+/// its separately documented three-term definition.
+///
+/// Reference: <https://www.spc.noaa.gov/exper/mesoanalysis/help/help_scp.html>
 pub fn compute_scp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let (mucape, _, _, _) =
-        crate::diag::cape::compute_cape_fields(f, t, "mu", None, opts.lake_interp)?;
+    let cape_fields = crate::diag::cape::compute_cape_fields(f, t, "mu", None, opts.lake_interp)?;
 
     let eff_srh = crate::diag::srh::compute_effective_srh(f, t, opts)?;
     let ebwd = compute_effective_bulk_wind_difference(f, t, opts)?;
 
-    Ok(scp_from_components(&mucape, &eff_srh, &ebwd))
+    Ok(registered_scp_from_cape_fields(
+        (
+            &cape_fields.0,
+            &cape_fields.1,
+            &cape_fields.2,
+            &cape_fields.3,
+        ),
+        &eff_srh,
+        &ebwd,
+    ))
 }
 
 /// Experimental ECAPE-based Supercell Composite Parameter (dimensionless). `[ny, nx]`
@@ -609,6 +671,15 @@ pub fn compute_ecape_ehi(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult
 /// - the entire index is set to 0.0 if mlLCL > 1700 m AGL,
 ///   mlCIN < -100 J/kg, sbCIN < -200 J/kg, or TEHI < 0
 ///
+/// Interpretation note:
+/// The current official SPC help page says the mlCAPE3 term is "set to 1.0"
+/// above the total-mlCAPE threshold. This is implemented as an assignment,
+/// not as a lower bound. The science audit found no public archival algorithm
+/// or paper that documents a different interpretation, so this implementation
+/// follows the official page literally.
+///
+/// Reference: <https://www.spc.noaa.gov/exper/mesoanalysis/help/help_tehi.html>
+///
 /// Naming note:
 /// On the SPC mesoanalysis page, `tehi` is Tornadic 0-1 km EHI.
 /// `tts` is Tornadic Tilting and Stretching.
@@ -648,7 +719,21 @@ pub fn compute_tts(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
     ))
 }
 
-/// Modified Violent Tornado Parameter (dimensionless). `[ny, nx]`
+/// Repository-specific Modified Violent Tornado Parameter (dimensionless).
+/// `[ny, nx]`
+///
+/// # Identity
+///
+/// This is **not** the Violent Tornado Parameter (VTP) published by Hampshire
+/// et al. (2018) or the VTP currently described by SPC. Its canonical
+/// diagnostic name is intentionally `vtp_mod`; the distinct name and the
+/// numerical behavior below are preserved for compatibility.
+///
+/// The published VTP is:
+///
+/// `VTP = (MLCAPE/1500) * (ESRH/150) * (EBWD/20) * ((2000-MLLCL)/1000) * ((200+MLCIN)/150) * (ML3CAPE/50) * (LR_0_3KM/6.5)`
+///
+/// This repository's modified parameter is:
 ///
 /// VTP_mod = P1 * P2
 ///
@@ -694,10 +779,43 @@ pub fn compute_tts(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
 /// - LR700_500: 700-500 mb lapse rate in degC/km, with positive values
 ///   indicating decreasing temperature with height
 ///
+/// # Published versus modified factors
+///
+/// The paper and current SPC page share the MLCIN term, including its
+/// -200/-50 J/kg bounds, with this modified product. The paper also shares the
+/// ML3CAPE/50 term capped at 2.0. The current SPC prose instead literally sets
+/// the **lapse-rate** term to 2.0 when ML3CAPE exceeds 100 J/kg, leaving the
+/// ML3CAPE/50 term itself uncapped. All three definitions use MLCAPE, ESRH,
+/// EBWD, and MLLCL, but this modified version changes their constants/bounds:
+///
+/// - MLCAPE uses 1700 rather than the published 1500 J/kg normalization.
+/// - ESRH uses 250 rather than 150 m^2/s^2.
+/// - EBWD uses a 30 m/s normalization, is zero through 20 m/s, and reaches
+///   its 1.5 cap at 45 m/s. Published/current SPC VTP uses 20 m/s and reaches
+///   the 1.5 cap above 30 m/s; the paper zeros EBWD below 12 m/s, while the
+///   current SPC page uses 12.5 m/s.
+/// - MLLCL uses `(1750-MLLCL)/750`, with 750/1750 m bounds, rather than
+///   `(2000-MLLCL)/1000`, with 1000/2000 m bounds.
+/// - The published 0-3 km lapse-rate factor `LR_0_3KM/6.5` is replaced by a
+///   700-500 mb lapse-rate transform, `(LR700_500-4.5)/2`, bounded to 0-2.
+/// - Current SPC VTP is zero for an elevated effective-inflow base; this
+///   repository-specific modified parameter has no such gate.
+///
 /// Source ambiguity note:
+/// The current SPC HTML contradicts the paper about the 3CAPE cap: Hampshire
+/// et al. cap the 3CAPE factor at 2, while SPC's prose sets the 0-3-km
+/// lapse-rate factor to 2 when 3CAPE exceeds 100 J/kg. Tests encode both
+/// readings separately; `vtp_mod` silently adopts neither one.
+///
 /// The source note mentions `MLLR > 8.5` for the lapse-rate cap, but this
 /// repo has no distinct `MLLR` field. This implementation therefore applies
 /// that cap to the same lapse-rate term used in the formula, `LR700_500`.
+///
+/// References:
+/// - Hampshire, N. L., R. M. Mosier, T. M. Ryan, and D. E. Cavanaugh, 2018:
+///   [Relationship of Low-Level Instability and Tornado Damage Rating Based on
+///   Observed Soundings](https://doi.org/10.15191/nwajom.2018.0601).
+/// - [Current SPC VTP help](https://www.spc.noaa.gov/exper/mesoanalysis/help/help_vtp.html).
 pub fn compute_vtp_mod(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let mut ml_opts = opts.clone();
     ml_opts.parcel_type = Some("ml".into());
@@ -752,19 +870,29 @@ pub fn compute_critical_angle(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfR
 
         for k in 0..nz {
             let idx = k * nxy + ij;
-            u_prof.push(u_grid[idx] * cosa[ij] - v_grid[idx] * sina[ij]);
-            v_prof.push(u_grid[idx] * sina[ij] + v_grid[idx] * cosa[ij]);
+            let (u_earth, v_earth) = rotate_grid_wind_to_earth(
+                u_grid[idx],
+                v_grid[idx],
+                sina[ij],
+                cosa[ij],
+                latitude[ij],
+            );
+            u_prof.push(u_earth);
+            v_prof.push(v_earth);
             h_prof.push(h_agl[idx]);
             p_prof.push(pres_hpa[idx]);
         }
+
+        let (u10_earth, v10_earth) =
+            rotate_grid_wind_to_earth(u10_grid[ij], v10_grid[ij], sina[ij], cosa[ij], latitude[ij]);
 
         *val = critical_angle_from_profile(
             &u_prof,
             &v_prof,
             &h_prof,
             &p_prof,
-            u10_grid[ij] * cosa[ij] - v10_grid[ij] * sina[ij],
-            u10_grid[ij] * sina[ij] + v10_grid[ij] * cosa[ij],
+            u10_earth,
+            v10_earth,
             opts.storm_motion.as_ref().map(|sm| sm.at(ij)),
             resolved_storm_motion_method(opts),
             latitude[ij],
@@ -1118,6 +1246,96 @@ mod tests {
         );
     }
 
+    fn vtp_mllcl_term(mllcl: f64) -> f64 {
+        if mllcl < 1000.0 {
+            1.0
+        } else if mllcl > 2000.0 {
+            0.0
+        } else {
+            (2000.0 - mllcl) / 1000.0
+        }
+    }
+
+    fn vtp_mlcin_term(mlcin: f64) -> f64 {
+        if mlcin < -200.0 {
+            0.0
+        } else if mlcin > -50.0 {
+            1.0
+        } else {
+            (200.0 + mlcin) / 150.0
+        }
+    }
+
+    /// Hampshire et al. (2018) VTP scalar reference. The paper inherits the
+    /// STP term bounds, zeros EBWD below 12 m/s, and caps the 3CAPE factor at
+    /// 2. It does not state the later SPC elevated-inflow gate.
+    /// Reference: https://doi.org/10.15191/nwajom.2018.0601
+    #[allow(clippy::too_many_arguments)]
+    fn published_vtp_reference(
+        mlcape: f64,
+        esrh: f64,
+        ebwd: f64,
+        mllcl: f64,
+        mlcin: f64,
+        ml3cape: f64,
+        lapse_rate_0_3km: f64,
+    ) -> f64 {
+        let ebwd_term = if ebwd < 12.0 {
+            0.0
+        } else {
+            (ebwd / 20.0).min(1.5)
+        };
+        let ml3cape_term = (ml3cape / 50.0).min(2.0);
+
+        (mlcape / 1500.0)
+            * (esrh / 150.0)
+            * ebwd_term
+            * vtp_mllcl_term(mllcl)
+            * vtp_mlcin_term(mlcin)
+            * ml3cape_term
+            * (lapse_rate_0_3km / 6.5)
+    }
+
+    /// Literal current-SPC VTP scalar reference. Unlike the paper, the HTML
+    /// zeros EBWD below 12.5 m/s, adds the elevated-inflow gate, and says to
+    /// set the *lapse-rate* term to 2 when 3CAPE exceeds 100 J/kg. This oracle
+    /// preserves that wording instead of silently correcting a possible typo.
+    /// Reference: https://www.spc.noaa.gov/exper/mesoanalysis/help/help_vtp.html
+    #[allow(clippy::too_many_arguments)]
+    fn current_spc_vtp_reference(
+        mlcape: f64,
+        esrh: f64,
+        ebwd: f64,
+        mllcl: f64,
+        mlcin: f64,
+        ml3cape: f64,
+        lapse_rate_0_3km: f64,
+        effective_inflow_base_at_surface: bool,
+    ) -> f64 {
+        if !effective_inflow_base_at_surface {
+            return 0.0;
+        }
+
+        let ebwd_term = if ebwd < 12.5 {
+            0.0
+        } else {
+            (ebwd / 20.0).min(1.5)
+        };
+        let lapse_rate_term = if ml3cape > 100.0 {
+            2.0
+        } else {
+            lapse_rate_0_3km / 6.5
+        };
+
+        (mlcape / 1500.0)
+            * (esrh / 150.0)
+            * ebwd_term
+            * vtp_mllcl_term(mllcl)
+            * vtp_mlcin_term(mlcin)
+            * (ml3cape / 50.0)
+            * lapse_rate_term
+    }
+
     #[test]
     fn ship_spc_2014_matches_nominal_reference_scalar() {
         let ship = ship_spc_2014_from_components(2_000.0, 12.0, 7.0, -15.0, 20.0, 3_000.0);
@@ -1201,6 +1419,26 @@ mod tests {
     }
 
     #[test]
+    fn effective_stp_is_zero_for_an_elevated_inflow_base() {
+        let ungated = stp_eff_from_components(
+            &[1500.0; 2],
+            &[1000.0; 2],
+            &[-50.0; 2],
+            &[150.0; 2],
+            &[20.0; 2],
+        );
+
+        let surface_based = effective_stp_surface_gate(ungated[0], Some(0));
+        let elevated = effective_stp_surface_gate(ungated[1], Some(1));
+
+        assert_close(ungated[0], 1.0);
+        assert_close(surface_based, 1.0);
+        // Identical ingredients with an elevated base are reduced from 1.0 to
+        // 0.0: a 100% magnitude reduction required by the SPC definition.
+        assert_close(elevated, 0.0);
+    }
+
+    #[test]
     fn fixed_stp_uses_operational_shear_gates() {
         let stp = stp_fixed_from_components(
             &[1500.0, 1500.0, 1500.0],
@@ -1234,6 +1472,41 @@ mod tests {
     }
 
     #[test]
+    fn registered_scp_cape_tuple_seam_selects_the_mucin_component() {
+        let cape_fields = (
+            [1000.0; 3],
+            [-40.0, -80.0, -160.0],
+            [1000.0; 3],
+            [2000.0; 3],
+        );
+        let effective_srh = [50.0; 3];
+        let ebwd = [20.0; 3];
+
+        let three_term = scp_from_components(&cape_fields.0, &effective_srh, &ebwd);
+        let registered = registered_scp_from_cape_fields(
+            (
+                &cape_fields.0,
+                &cape_fields.1,
+                &cape_fields.2,
+                &cape_fields.3,
+            ),
+            &effective_srh,
+            &ebwd,
+        );
+
+        // The second tuple component is deliberately non-neutral MUCIN. The
+        // third and fourth components are LCL/LFC-like positive heights, so
+        // selecting either one (or reverting to the three-term helper) would
+        // incorrectly leave every value at 1.0.
+        for value in three_term {
+            assert_close(value, 1.0);
+        }
+        assert_close(registered[0], 1.0);
+        assert_close(registered[1], 0.5);
+        assert_close(registered[2], 0.25);
+    }
+
+    #[test]
     fn tehi_matches_spc_beta_formula() {
         let tehi = tehi_from_components(
             &[200.0],
@@ -1249,18 +1522,37 @@ mod tests {
     }
 
     #[test]
-    fn tehi_uses_mlcape3_floor_when_total_mlcape_is_large() {
+    fn tehi_sets_ml3cape_term_to_one_only_above_mlcape_threshold() {
         let tehi = tehi_from_components(
-            &[160.0],
-            &[1600.0],
-            &[50.0],
-            &[20.0],
-            &[1000.0],
-            &[-50.0],
-            &[-50.0],
+            &[160.0; 2],
+            &[1499.0, 1501.0],
+            &[100.0; 2],
+            &[20.0; 2],
+            &[1000.0; 2],
+            &[-50.0; 2],
+            &[-50.0; 2],
         );
 
-        assert_close(tehi[0], 1.6);
+        assert_close(tehi[0], 0.7495);
+        assert_close(tehi[1], 1.501);
+    }
+
+    #[test]
+    fn tehi_high_ml3cape_cap_is_overridden_above_mlcape_threshold() {
+        let tehi = tehi_from_components(
+            &[160.0; 2],
+            &[1500.0, 1600.0],
+            &[400.0; 2],
+            &[20.0; 2],
+            &[1000.0; 2],
+            &[-50.0; 2],
+            &[-50.0; 2],
+        );
+
+        assert_close(tehi[0], 2.25);
+        // The literal 1.0 assignment yields 1.6, not the 2.4 that a 1.0
+        // lower-bound interpretation would retain from the 1.5 cap.
+        assert_close(tehi[1], 1.6);
     }
 
     #[test]
@@ -1330,8 +1622,8 @@ mod tests {
     }
 
     #[test]
-    fn vtp_mod_matches_in_range_formula() {
-        let vtp = vtp_mod_from_components(
+    fn vtp_mod_is_distinct_from_published_vtp_for_an_illustrative_profile() {
+        let modified = vtp_mod_from_components(
             &[1700.0],
             &[250.0],
             &[30.0],
@@ -1341,7 +1633,63 @@ mod tests {
             &[6.5],
         );
 
-        assert_close(vtp[0], 2.0 / 3.0);
+        // Use the same numeric lapse rate for the different layers so both
+        // lapse multipliers are one and the changed constants stay visible.
+        let published = published_vtp_reference(1700.0, 250.0, 30.0, 1000.0, -100.0, 50.0, 6.5);
+
+        assert_close(modified[0], 2.0 / 3.0);
+        assert_close(published, 17.0 / 9.0);
+    }
+
+    #[test]
+    fn published_vtp_reference_pins_paper_bounds_and_layers() {
+        let reference = |ebwd, mllcl, mlcin, ml3cape, lapse_rate_0_3km| {
+            published_vtp_reference(1500.0, 150.0, ebwd, mllcl, mlcin, ml3cape, lapse_rate_0_3km)
+        };
+
+        // Nominal value and the paper's EBWD zero/cap behavior.
+        assert_close(reference(20.0, 1000.0, -50.0, 50.0, 6.5), 1.0);
+        assert_close(reference(11.9, 1000.0, -50.0, 50.0, 6.5), 0.0);
+        assert_close(reference(31.0, 1000.0, -50.0, 50.0, 6.5), 1.5);
+
+        // Published MLLCL and MLCIN term bounds.
+        assert_close(reference(20.0, 900.0, -50.0, 50.0, 6.5), 1.0);
+        assert_close(reference(20.0, 1500.0, -50.0, 50.0, 6.5), 0.5);
+        assert_close(reference(20.0, 2100.0, -50.0, 50.0, 6.5), 0.0);
+        assert_close(reference(20.0, 1000.0, -201.0, 50.0, 6.5), 0.0);
+        assert_close(reference(20.0, 1000.0, -100.0, 50.0, 6.5), 2.0 / 3.0);
+        assert_close(reference(20.0, 1000.0, -49.0, 50.0, 6.5), 1.0);
+
+        // The paper caps 3CAPE itself and keeps the 0-3-km lapse-rate term.
+        assert_close(reference(20.0, 1000.0, -50.0, 25.0, 6.5), 0.5);
+        assert_close(reference(20.0, 1000.0, -50.0, 150.0, 6.5), 2.0);
+        assert_close(reference(20.0, 1000.0, -50.0, 50.0, 3.25), 0.5);
+    }
+
+    #[test]
+    fn current_spc_vtp_reference_pins_literal_html_rules() {
+        let reference = |ebwd, ml3cape, lapse_rate_0_3km, surface_based| {
+            current_spc_vtp_reference(
+                1500.0,
+                150.0,
+                ebwd,
+                1000.0,
+                -50.0,
+                ml3cape,
+                lapse_rate_0_3km,
+                surface_based,
+            )
+        };
+
+        assert_close(reference(20.0, 50.0, 6.5, true), 1.0);
+        assert_close(reference(12.4, 50.0, 6.5, true), 0.0);
+        assert_close(reference(31.0, 50.0, 6.5, true), 1.5);
+
+        // At exactly 100 J/kg, the normal lapse-rate term remains. Above 100,
+        // SPC's literal prose sets that term to 2 and does not cap 3CAPE.
+        assert_close(reference(20.0, 100.0, 3.25, true), 1.0);
+        assert_close(reference(20.0, 150.0, 3.25, true), 6.0);
+        assert_close(reference(20.0, 50.0, 6.5, false), 0.0);
     }
 
     #[test]

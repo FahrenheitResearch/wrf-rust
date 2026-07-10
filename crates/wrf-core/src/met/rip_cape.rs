@@ -11,7 +11,7 @@ const LOOKUP_SIZE: usize = 150;
 const LOOKUP_SCALE: f64 = 100_000.0;
 const LOOKUP_MISSING: f64 = 1.0e9;
 
-pub(crate) const G: f64 = 9.81;
+pub(crate) const G: f64 = crate::WRF_GRAVITY_M_S2;
 pub(crate) const RD: f64 = 287.0;
 pub(crate) const CP: f64 = 1004.5;
 pub(crate) const GAMMA: f64 = RD / CP;
@@ -827,6 +827,39 @@ mod tests {
             (actual - expected).abs() <= tolerance,
             "actual={actual}, expected={expected}, tolerance={tolerance}"
         );
+    }
+
+    fn saturated_theta_e_at_1000_hpa(theta_w_c: f64) -> f64 {
+        let temperature = theta_w_c + CELKEL;
+        let vapor_pressure =
+            EZERO * (ESLCON1 * (temperature - CELKEL) / (temperature - ESLCON2)).exp();
+        let mixing_ratio = EPS * vapor_pressure / (1000.0 - vapor_pressure);
+        // A parcel saturated at 1000 hPa is already at its LCL.
+        equivalent_potential_temperature(temperature, 1000.0, mixing_ratio, temperature)
+    }
+
+    #[test]
+    fn wobus_satlift_matches_documented_ncar_table_accuracy() {
+        // theta-w (C), pressure (hPa), Wobus temperature (K), NCAR table (K).
+        // The 700-, 300-, and 190-hPa rows are the largest differences found
+        // in those pressure bands on the representative -40..40 C by 10-hPa grid.
+        let cases = [
+            (-20.0, 850.0, 242.756_654_241_680, 242.711_632_398_885),
+            (0.0, 700.0, 252.588_141_714_542, 253.078_140_155_707),
+            (20.0, 500.0, 264.678_529_908_059, 264.366_496_623_889),
+            (16.0, 300.0, 227.977_774_363_201, 227.300_805_020_826),
+            (40.0, 190.0, 266.643_743_001_737, 265.463_497_199_297),
+        ];
+
+        for (theta_w_c, pressure_hpa, expected_wobus, expected_ncar) in cases {
+            let theta_e = saturated_theta_e_at_1000_hpa(theta_w_c);
+            let ncar = temperature_on_pseudoadiabat(theta_e, pressure_hpa).unwrap();
+            let wobus = crate::met::thermo::satlift(pressure_hpa, theta_w_c) + CELKEL;
+
+            assert_close(wobus, expected_wobus, 1.0e-9);
+            assert_close(ncar, expected_ncar, 1.0e-9);
+            assert!((wobus - ncar).abs() <= 1.2);
+        }
     }
 
     #[test]

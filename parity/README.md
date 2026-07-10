@@ -33,6 +33,17 @@ profile/recipe adapter is added.
   contract, including scalar/2-D `interplevel`, handle-based coordinate helpers,
   projection construction, and its literal `getvar` calls.
 
+## SHARPpy severe-weather acceptance
+
+The independent severe-weather adapter lives in [`parity/sharppy`](sharppy/README.md).
+It installs the hash-pinned PyPI package `SHARPpy==1.4.0a5`, verifies that its
+relevant sources match official tag `v1.4.0a5` commit `a5405e2`, and compares
+23 live SHARPpy calls with public `wrf-core` helpers. Fixed STP, neutral-CIN
+three-term SCP, SHIP, DCP, and critical angle are covered. Current-SPC SCP CIN,
+TEHI, and VTP-only terms absent from that SHARPpy release remain explicit,
+cited Rust-test gates. The dedicated runner emits a fail-closed JSON report and
+SHA-256 sidecar under the ignored `parity-results/` directory.
+
 The strict CAPE contracts are derived from pinned wrf-python 1.3.4.1
 `g_cape.py`, `rip_cape.f90`, and `psadilookup.dat`. The strict Rust names retain
 the upstream `cape_2d` order (`MCAPE`, `MCIN`, `LCL`, `LFC`), levelwise
@@ -114,9 +125,10 @@ must use the identical selection, fixture, time index, and contract document.
 ### Quantized reference outputs
 
 `comparison.reference_precision: "float32"` declares that the compared
-wrf-python field was quantized by its compiled wrapper before extraction. The
-comparator first verifies that every finite reference value lies exactly on the
-float32 lattice. It then adds only the directional half-ULP rounding allowance:
+wrf-python field was produced through float32 output or intermediate staging,
+whether in a compiled wrapper or NumPy code. The comparator first verifies that
+every finite reference value lies exactly on the float32 lattice. It then adds
+only the directional half-ULP rounding allowance:
 the spacing to the immediately lower float32 neighbor for a lower candidate,
 or to the immediately higher neighbor for a higher candidate. This distinction
 matters at power-of-two binade boundaries, where the two spacings differ.
@@ -127,6 +139,11 @@ use zero algorithmic tolerance because all 50,560,000 values in each field
 match the pinned wrf-python output exactly after casting the Rust result to
 float32. Their report rows include `reference_precision` and
 `max_reference_quantization_allowance` so the applied policy remains auditable.
+The required height, RH, and dewpoint contracts also model float32 intermediate
+and output staging, then allow only a sub-reference-precision arithmetic
+envelope. Observed differences on the registered 50,560,000-cell fixture were
+at most 0.00341 m for height, 0.000132 percentage points for RH, and 4.40e-6
+degC for dewpoint.
 
 ## WRF-Runner acceptance
 
@@ -155,6 +172,11 @@ faithful multi-process call-sequence driver.
 
 ## Resolved parity
 
+- Model height, 3-D and 2-m relative humidity, and 3-D and 2-m dewpoint are
+  required full-field comparisons. They pin WRF's 9.81 m/s^2 geopotential
+  conversion and NCAR `DCOMPUTERH`/`DCOMPUTETD`, including the 0.001-hPa
+  vapor-pressure floor. On the registered fixture all 152,960,000 values pass
+  their explicit float32-aware tolerances.
 - AVO and PVO directly mirror pinned wrf-python 1.3.4.1 commit
   `31c923335227b22fa656fd589a5342b91103e939`
   `DCOMPUTEABSVORT`/`DCOMPUTEPV` kernels: raw C-grid winds, stagger-specific
@@ -176,8 +198,11 @@ faithful multi-process call-sequence driver.
 
 ## Remaining gaps
 
-- `theta_w`, SB/ML parcel diagnostics, shear, Bunkers motion, SHIP, STP, and
-  SCP need an independent profile or operational-recipe reference adapter.
+- `theta_w`, native SB/ML parcel diagnostics, shear, and end-to-end Bunkers
+  profile paths still need broader independent profile coverage. The pinned
+  SHARPpy adapter now covers public-helper fixed STP, neutral-CIN SCP, SHIP,
+  DCP, and critical angle; current-SPC-only terms remain cited Rust formula
+  gates because SHARPpy 1.4.0a5 does not implement them.
 - Strict NCAR CAPE now has required component contracts, but those gates still
   need multiple high-terrain, shallow-cap, no-EL, and elevated-parcel fixtures
   in the pinned Linux reference environment.

@@ -1,14 +1,34 @@
-/// Meteorological thermodynamic functions ported from wrfsolar's metfuncs.py.
-/// Pure math - no external dependencies. All functions are direct ports of the
-/// SHARPpy-derived implementations used in the Python codebase.
-///
-/// Vendored from wx-math crate for self-contained builds.
+//! Thermodynamic helpers for wrf-rust's native diagnostic path.
+//!
+//! This module has mixed lineage; it is not a wholesale SHARPpy port. The
+//! Wobus, dry-lift, vapor-pressure, and mixing-ratio routines retain
+//! SPC/SHARPpy ancestry through wrfsolar/wx-math, while parcel integration and
+//! several Bolton-style utilities are local implementations.
+//!
+//! Approximation boundaries are intentional and observable:
+//!
+//! - [`virtual_temp`] uses `T_v = T * (1 + 0.61 w)`. Pinned SHARPpy uses
+//!   `T * (1 + w/epsilon) / (1 + w)`; at 300 K and `w = 0.014 kg/kg`, this
+//!   module's approximation is 0.044508 K warmer.
+//! - [`thetae`] is a Celsius-valued native latent-heat exponential, not
+//!   SHARPpy's lift-to-100-hPa routine and not the registered `theta_e`
+//!   diagnostic's Kelvin-valued Bolton calculation. Against pinned SHARPpy it
+//!   is 6.173, 5.522, and 8.000 K lower at `(p, T, Td)` values of
+//!   `(1000 hPa, 30 C, 20 C)`, `(850 hPa, 20 C, 15 C)`, and
+//!   `(950 hPa, 35 C, 25 C)`, respectively.
+//! - Strict wrf-python CAPE bypasses these native parcel approximations and
+//!   routes through `met::rip_cape`, which pins NCAR's constants, exact virtual
+//!   temperature relation, and Bolton pseudoadiabat lookup.
+//!
+//! References:
+//! - <https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/thermo.py>
+//! - <https://github.com/NCAR/wrf-python/blob/31c923335227b22fa656fd589a5342b91103e939/fortran/rip_cape.f90#L37-L154>
 
 // --- Physical Constants ---
 pub const RD: f64 = 287.058; // Dry air gas constant (J/(kg*K))
 pub const RV: f64 = 461.5; // Water vapor gas constant (J/(kg*K))
 pub const CP: f64 = 1005.7; // Specific heat at constant pressure (J/(kg*K))
-pub const G: f64 = 9.80665; // Gravitational acceleration (m/s^2)
+pub const G: f64 = crate::WRF_GRAVITY_M_S2; // WRF gravitational acceleration (m/s^2)
 pub const ROCP: f64 = 0.28571426; // Rd/Cp
 pub const ZEROCNK: f64 = 273.15; // 0 Celsius in Kelvin
 pub const MISSING: f64 = -9999.0;
@@ -20,8 +40,16 @@ pub const T0_STD: f64 = 288.15; // Standard sea level temperature (K)
 
 // --- SHARPpy Thermodynamic Approximations ---
 
-/// Wobus function for computing moist adiabats.
-/// Input: temperature in Celsius.
+/// SPC/SHARPpy-lineage Wobus correction for approximate moist adiabats.
+///
+/// Input and output are Celsius. This intentionally retains the
+/// pressure-independent polynomial used by SHARPpy's native parcel routines;
+/// it is not an exact pseudoadiabatic solver. Davies-Jones (2008) reports that
+/// the Wobus approximation can err by about 1.2 K in the warm regime.
+///
+/// References:
+/// - <https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/thermo.py#L224-L275>
+/// - <https://doi.org/10.1175/2007MWR2224.1>
 pub fn wobf(t: f64) -> f64 {
     let t = t - 20.0;
     if t <= 0.0 {
@@ -40,9 +68,18 @@ pub fn wobf(t: f64) -> f64 {
     }
 }
 
-/// Lifts a saturated parcel.
-/// p: Pressure (hPa), thetam: Saturation Potential Temperature (Celsius).
-/// Uses 7 Newton-Raphson iterations.
+/// Lifts a saturated parcel with the SPC/SHARPpy-lineage Wobus approximation.
+///
+/// `p` is pressure in hPa and `thetam` is saturated potential temperature in
+/// Celsius. The fixed seven-step solve is the native diagnostic path; strict
+/// wrf-python CAPE uses the separate pinned NCAR Bolton lookup in `rip_cape`.
+/// A representative regression against that table measures differences of
+/// 0.490 K at 700 hPa, 0.677 K at 300 hPa, and 1.180 K at 190 hPa, consistent
+/// with the published approximately 1.2-K warm-regime accuracy bound.
+///
+/// References:
+/// - <https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/thermo.py#L278-L363>
+/// - <https://github.com/NCAR/wrf-python/blob/31c923335227b22fa656fd589a5342b91103e939/src/wrf/data/psadilookup.dat>
 pub fn satlift(p: f64, thetam: f64) -> f64 {
     if (p - 1000.0).abs() <= 0.001 {
         return thetam;
@@ -152,12 +189,21 @@ pub fn interp_linear(x: f64, x1: f64, x2: f64, y1: f64, y2: f64) -> f64 {
     y1 + (x - x1) * (y2 - y1) / (x2 - x1)
 }
 
-/// Interpolate height at a target pressure from pressure and height profiles
-/// (both in decreasing pressure order, i.e. surface first).
+/// Interpolate height in log-pressure coordinates.
+///
+/// Profiles are in decreasing pressure order (surface first), matching
+/// SHARPpy's `interp.hght` convention.
+/// Reference: <https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/interp.py#L34-L54>
 pub fn get_height_at_pres(target_p: f64, p_prof: &[f64], h_prof: &[f64]) -> f64 {
     for i in 0..p_prof.len() - 1 {
         if p_prof[i] >= target_p && target_p >= p_prof[i + 1] {
-            return interp_linear(target_p, p_prof[i], p_prof[i + 1], h_prof[i], h_prof[i + 1]);
+            return interp_linear(
+                target_p.ln(),
+                p_prof[i].ln(),
+                p_prof[i + 1].ln(),
+                h_prof[i],
+                h_prof[i + 1],
+            );
         }
     }
     // Bounds check
@@ -193,9 +239,18 @@ pub fn get_env_at_pres(
 
 // --- Parcel Selectors ---
 
-/// Returns Mixed Layer Parcel matching SHARPpy's calculation method.
-/// Uses 1-2-1 weighting scheme (surface and top weight 1, inner levels weight 2).
-/// Returns (p_start, t_start, td_start) all in (hPa, Celsius, Celsius).
+/// Returns the mixed-layer parcel using pinned SHARPpy 1.4.0a5's `exact=True`
+/// native-level convention.
+///
+/// The surface and interpolated top boundaries have weight 1 and every native
+/// interior level has weight 2. This is deliberately a level-count 1-2-1 mean,
+/// not a pressure-thickness integral, so nonuniform vertical grids can produce
+/// different parcels. Returns `(p_start, t_start, td_start)` in
+/// `(hPa, Celsius, Celsius)`.
+///
+/// References:
+/// - <https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/params.py#L1132-L1169>
+/// - <https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/params.py#L1224-L1265>
 pub fn get_mixed_layer_parcel(
     p_prof: &[f64],
     t_prof: &[f64],
@@ -251,8 +306,14 @@ pub fn get_mixed_layer_parcel(
     (sfc_p, avg_t, parcel_td)
 }
 
-/// Returns Most Unstable Parcel (highest theta-e in the lowest `depth` hPa).
-/// Returns (p, t, td) all in (hPa, Celsius, Celsius).
+/// Returns the native SPC-style most-unstable parcel: the single highest
+/// theta-e level in the lowest `depth` hPa.
+///
+/// Native MUCAPE calls this with `depth = 300`; it does not perform NCAR RIP's
+/// separate 500 m pressure-layer averaging. Returns `(p, t, td)` in
+/// `(hPa, Celsius, Celsius)`.
+///
+/// Reference: <https://www.spc.noaa.gov/exper/mesoanalysis/help/help_mucp.html>
 pub fn get_most_unstable_parcel(
     p_prof: &[f64],
     t_prof: &[f64],
@@ -801,6 +862,20 @@ pub fn cape_cin_core(
 // Saturation / Moisture Functions
 // =============================================================================
 
+const WRFPYTHON_DEWPOINT_VAPOR_PRESSURE_FLOOR_HPA: f64 = 0.001;
+
+/// Dewpoint (Celsius) from water-vapor mixing ratio (kg/kg) and pressure (hPa).
+///
+/// Matches wrf-python's `DCOMPUTETD`, including its nonnegative mixing-ratio
+/// clamp, 0.001-hPa vapor-pressure floor, and diagnostic-specific constants.
+/// Reference: <https://github.com/NCAR/wrf-python/blob/31c923335227b22fa656fd589a5342b91103e939/fortran/wrf_user.f90#L945-L970>
+pub fn dewpoint_from_mixing_ratio(q_kgkg: f64, p_hpa: f64) -> f64 {
+    let q = q_kgkg.max(0.0);
+    let e_hpa = (q * p_hpa / (0.622 + q)).max(WRFPYTHON_DEWPOINT_VAPOR_PRESSURE_FLOOR_HPA);
+    let ln_e = e_hpa.ln();
+    (243.5 * ln_e - 440.8) / (19.48 - ln_e)
+}
+
 /// Saturation vapor pressure (hPa) using Bolton (1980) formula.
 /// Input: temperature in Celsius.
 pub fn saturation_vapor_pressure(t_c: f64) -> f64 {
@@ -946,8 +1021,9 @@ pub fn el(p_profile: &[f64], t_profile: &[f64], td_profile: &[f64]) -> Option<(f
 #[cfg(test)]
 mod tests {
     use super::{
-        cape_cin_core, drylift, get_env_at_pres, mixratio, parcel_virtual_temperature, satlift,
-        virtual_temp, wobf, WrfEnergyTrace, ROCP, ZEROCNK,
+        cape_cin_core, dewpoint_from_mixing_ratio, drylift, get_env_at_pres, get_height_at_pres,
+        get_mixed_layer_parcel, mixratio, parcel_virtual_temperature, satlift, virtual_temp, wobf,
+        WrfEnergyTrace, ROCP, ZEROCNK,
     };
 
     const PRESSURE: [f64; 14] = [
@@ -987,6 +1063,54 @@ mod tests {
 
     fn surface_cape(temperature: &[f64], top_m: Option<f64>) -> (f64, f64, f64, f64) {
         parcel_cape(temperature, "sb", top_m)
+    }
+
+    #[test]
+    fn height_interpolation_is_exact_for_an_exponential_pressure_profile() {
+        const SCALE_HEIGHT_M: f64 = 8_000.0;
+        let pressure = [1_000.0_f64, 900.0, 800.0];
+        let height = pressure.map(|p| SCALE_HEIGHT_M * (1_000.0 / p).ln());
+        let expected = SCALE_HEIGHT_M * (1_000.0 / 950.0_f64).ln();
+
+        let actual = get_height_at_pres(950.0, &pressure, &height);
+
+        assert!((actual - expected).abs() < 1.0e-10);
+        assert_eq!(get_height_at_pres(1_050.0, &pressure, &height), height[0]);
+        assert_eq!(get_height_at_pres(750.0, &pressure, &height), height[2]);
+    }
+
+    #[test]
+    fn mixed_layer_preserves_sharppy_level_count_weighting_on_nonuniform_grid() {
+        let pressure = [1_000.0_f64, 990.0, 900.0];
+        // Theta varies linearly with pressure, but the 990-hPa native level is
+        // much closer to the surface than to the layer top.
+        let theta = [300.0_f64, 300.625, 306.25];
+        let temperature: [f64; 3] =
+            std::array::from_fn(|i| theta[i] * (pressure[i] / 1_000.0).powf(ROCP) - ZEROCNK);
+        let dewpoint = [10.0; 3];
+
+        let (_, level_count_temperature, _) =
+            get_mixed_layer_parcel(&pressure, &temperature, &dewpoint, 100.0);
+
+        let pressure_integral = (0..pressure.len() - 1)
+            .map(|i| 0.5 * (theta[i] + theta[i + 1]) * (pressure[i] - pressure[i + 1]))
+            .sum::<f64>();
+        let pressure_mean_theta = pressure_integral / (pressure[0] - pressure[2]);
+        let pressure_mean_temperature = pressure_mean_theta - ZEROCNK;
+
+        assert!((level_count_temperature - (301.875 - ZEROCNK)).abs() < 1.0e-12);
+        assert!((level_count_temperature - pressure_mean_temperature + 1.25).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn dewpoint_matches_wrf_floor_below_and_above_threshold() {
+        let floor_dewpoint = -80.447_858_788_617_48;
+
+        assert!((dewpoint_from_mixing_ratio(0.0, 100.0) - floor_dewpoint).abs() < 1.0e-12);
+        assert!((dewpoint_from_mixing_ratio(2.0e-6, 100.0) - floor_dewpoint).abs() < 1.0e-12);
+        assert!(
+            (dewpoint_from_mixing_ratio(1.0e-5, 100.0) + 77.460_279_490_702_79).abs() < 1.0e-12
+        );
     }
 
     #[test]
