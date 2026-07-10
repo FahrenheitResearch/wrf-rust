@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Measured wrf-rust performance: methodology, per-product baseline timings on a real 800x800x79 WRF case, thread scaling, and the 0.3.0 optimizations behind the ~3.3x diagnostic-pipeline speedup.">
+<title>Performance — wrf-rust</title>
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+
+<header class="masthead">
+  <p class="site-title"><a href="index.html">wrf-rust</a><span class="version">0.3.0</span></p>
+  <p class="tagline">WRF post-processing diagnostics, reimplemented in Rust, with a wrf-python-compatible Python API.</p>
+  <nav class="site-nav">
+    <a href="index.html">Overview</a>
+    <a href="diagnostics.html">Diagnostics</a>
+    <a href="validation.html">Validation</a>
+    <a href="performance.html" aria-current="page">Performance</a>
+    <a href="changelog.html">Changelog</a>
+  </nav>
+</header>
+
+<main>
+
+<h1>Performance</h1>
+
+<p class="lede">The 0.3.0 release makes the severe-weather diagnostic pipeline
+about <strong>3.3&#215; faster</strong> on large grids. The numbers below come
+from a measured audit on one real high-resolution WRF file — methodology first,
+then the baseline that was measured, then what changed. This is a single-file
+pipeline benchmark on stated hardware, not a general benchmark suite.</p>
+
+<h2 id="method">1&#8194;Methodology</h2>
+
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr><th>Item</th><th>Value</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Input file</td>
+        <td>Real <code>wrfout_d03</code>, 2,388,958,814 bytes, one time step</td></tr>
+    <tr><td>Grid</td>
+        <td>800 &#215; 800 &#215; 79 (nx &#215; ny &#215; nz), dx = dy = 250 m</td></tr>
+    <tr><td>Hardware</td>
+        <td>Intel Core Ultra 7 (24 threads), 123 GB RAM, Linux</td></tr>
+    <tr><td>File placement</td>
+        <td>tmpfs (RAM) — "cold" timings exclude disk I/O and isolate decode +
+            compute</td></tr>
+    <tr><td>Build</td>
+        <td><code>cargo build --release</code>, one <code>WrfFile</code> handle
+            shared across all products</td></tr>
+    <tr><td>Workload</td>
+        <td>79-product severe/diagnostic set (all registered 2-D diagnostics
+            except the ECAPE-heavy group), in a real consumer's processing
+            order; per-product wall timing plus
+            <code>/usr/bin/time&#160;-v</code> totals</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="baseline">2&#8194;Measured baseline (pre-0.3.0)</h2>
+
+<p>The audited baseline for the full 79-product pass at 24 threads:
+<strong>185.3 s wall</strong>, 2740 s user (1484% CPU), peak RSS 7.47 GB.
+Two structural costs dominated:</p>
+
+<ul>
+  <li><strong>Effective-inflow-layer (EIL) products: 89.2 s (48% of wall).</strong>
+      The EIL scan runs up to nz full moist ascents per column and was
+      recomputed — twice inside some products — for every consumer
+      (<code>stp_effective</code>, <code>scp</code>, <code>vtp_mod</code>,
+      <code>effective_srh</code>, <code>ebwd</code>,
+      <code>effective_inflow</code>, <code>effective_cape</code>): about ten
+      full-grid scans at roughly 8.8 s each.</li>
+  <li><strong>Depth-limited CAPE products: 39.1 s (21%).</strong> The
+      <code>top_m</code> CAPE path ran single-threaded, so each of the six
+      0&#8211;3 km / 0&#8211;6 km CAPE variants cost 6&#8211;7 s while the
+      unlimited path was grid-parallel.</li>
+</ul>
+
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr><th>Product</th><th class="num">Wall (s)</th><th>Dominant cost</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>stp_effective</code></td><td class="num">18.32</td><td>Two uncached EIL scans</td></tr>
+    <tr><td><code>scp</code></td><td class="num">18.25</td><td>Two uncached EIL scans</td></tr>
+    <tr><td><code>vtp_mod</code></td><td class="num">17.52</td><td>Two uncached EIL scans</td></tr>
+    <tr><td><code>ncape</code></td><td class="num">9.77</td><td>Full entraining-parcel grid solve</td></tr>
+    <tr><td><code>effective_srh</code></td><td class="num">8.97</td><td>EIL scan</td></tr>
+    <tr><td><code>ebwd</code></td><td class="num">8.80</td><td>EIL scan</td></tr>
+    <tr><td><code>effective_inflow</code></td><td class="num">8.78</td><td>EIL scan</td></tr>
+    <tr><td><code>effective_cape</code></td><td class="num">8.53</td><td>EIL scan</td></tr>
+    <tr><td><code>slp</code></td><td class="num">7.26</td><td>First-touch 3-D reads and decode</td></tr>
+    <tr><td><code>sb6cape</code> &#8230; <code>mu3cape</code> (6 products)</td><td class="num">6.05&#8211;7.01 each</td><td>Sequential depth-limited CAPE</td></tr>
+    <tr><td><code>el</code></td><td class="num">5.89</td><td>Sequential column loop</td></tr>
+    <tr><td><code>dcape</code> + <code>dcp</code></td><td class="num">10.59</td><td>DCP did not reuse DCAPE</td></tr>
+    <tr><td><code>sbcape</code></td><td class="num">0.85</td><td>Grid-parallel ascent (shared with <code>sbcin</code> via stack cache)</td></tr>
+    <tr><td>cached companions (<code>sbcin</code>, <code>lcl</code>, <code>lfc</code>, &#8230;)</td><td class="num">&#8776;0.001&#8211;0.003</td><td>Cache hits</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3 id="scaling">Thread scaling (baseline, same 79-product set)</h3>
+
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr><th class="num">Threads</th><th class="num">Wall (s)</th><th class="num">CPU</th><th class="num">Peak RSS</th></tr>
+  </thead>
+  <tbody>
+    <tr><td class="num">24</td><td class="num">185.3</td><td class="num">1484%</td><td class="num">7.47 GB</td></tr>
+    <tr><td class="num">12</td><td class="num">276.0</td><td class="num">907%</td><td class="num">7.47 GB</td></tr>
+    <tr><td class="num">6</td><td class="num">456.3</td><td class="num">513%</td><td class="num">7.47 GB</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>4&#215; the threads bought 2.46&#215; at baseline because roughly 45 s of the
+pass was single-threaded product code (the six depth-limited CAPEs plus
+<code>el</code>); the parallel remainder scaled at about 2.9&#215; for 4&#215;
+threads, limited by memory bandwidth and serial read sections. Peak memory is
+thread-independent (it is the per-timestep intermediate cache).</p>
+
+<h3 id="coldwarm">Cold vs warm (baseline, fresh file handle per product)</h3>
+
+<p>With a fresh <code>WrfFile</code> per product, first-call cost is dominated
+by dependency loading — reading and deriving the 3-D thermodynamic stack costs
+6&#8211;8 s once, after which most products are sub-second. Selected pairs
+(cold / warm, seconds): <code>slp</code> 7.10 / 0.016, <code>sbcape</code>
+7.79 / 0.001, <code>srh1</code> 7.83 / 0.76, <code>maxdbz</code> 7.42 / 2.56,
+<code>stp_effective</code> 27.25 / 17.83, <code>ncape</code> 19.20 / 0.002.</p>
+
+<h2 id="changes">3&#8194;What changed in 0.3.0</h2>
+
+<ul>
+  <li><strong>EIL caching.</strong> The effective-inflow-layer scan result is
+      cached per time step and reused by every consumer, collapsing about ten
+      full-grid scans into one and removing the double scan inside individual
+      products.</li>
+  <li><strong>Parallelized depth-limited CAPE and EL.</strong> The
+      <code>top_m</code> CAPE path and the equilibrium-level grid now use the
+      same column-parallel scheme as the unlimited CAPE path.</li>
+  <li><strong>Composite reuse.</strong> Severe composites route through the
+      cached CAPE stacks instead of private recomputation, and DCP reuses the
+      cached DCAPE plane.</li>
+  <li><strong>Parallel HDF5 chunk decompression.</strong> Independent
+      deflate+shuffle chunks decompress in parallel, accelerating cold 3-D
+      reads.</li>
+  <li><strong>Reduced per-column allocations</strong> in the CAPE/parcel core.</li>
+</ul>
+
+<h2 id="result">4&#8194;Result and honest scope</h2>
+
+<p>On the pipeline class above, the audit's identified savings and the release
+verification put the same 79-product pass in the <strong>&#8776;57 s
+class</strong> at 24 threads, against the measured 185.3 s baseline —
+the &#8776;3.3&#215; figure in the <a href="changelog.html">0.3.0 release
+notes</a>. No science changes were mixed into the optimization work; results
+remain gated by the <a href="validation.html">parity harness</a>.</p>
+
+<p>Scope statements, so the numbers are not over-read:</p>
+
+<ul>
+  <li>One real file, one grid size, one hardware configuration, warm OS page
+      cache. Different grids, storage, and thread counts will scale
+      differently.</li>
+  <li>The workload is the 79-product non-ECAPE severe set; the ECAPE-heavy group
+      is a separate, intrinsically more expensive pass.</li>
+  <li>Per-product timings in section 2 are <em>baseline</em> (pre-fix)
+      measurements, published to document where the time went and to make the
+      optimization targets falsifiable.</li>
+  <li>Timings cover <code>getvar</code> computation from an open file handle;
+      they exclude Python interpreter startup, plotting, and any downstream
+      storage.</li>
+</ul>
+
+</main>
+
+<footer class="site-footer">
+  <p>wrf-rust is MIT-licensed research software by
+    <a href="https://github.com/FahrenheitResearch">FahrenheitResearch</a>.
+    Thanks to Solarpower07 for color tables, product styling, and guidance on
+    severe-weather diagnostics.</p>
+  <p><a href="https://github.com/FahrenheitResearch/wrf-rust">GitHub</a> &#183;
+     <a href="https://pypi.org/project/wrf-rust/">PyPI</a> &#183;
+     <a href="https://github.com/FahrenheitResearch/bowecho">BowEcho</a> &#183;
+     <a href="community-guide/index.html">Community WRF setup guide</a></p>
+  <p>Documentation generated from repository sources at v0.3.0
+     (<code>351b8f3</code>).</p>
+</footer>
+
+</body>
+</html>

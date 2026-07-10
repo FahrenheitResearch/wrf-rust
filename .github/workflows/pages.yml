@@ -32,7 +32,7 @@ jobs:
       - name: Syntax check docs scripts
         run: find docs -type f \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -n 1 node --check
       - name: Run docs tests
-        run: node --test docs/community-guide/tests/*.test.mjs
+        run: node --test docs/tests/*.test.mjs docs/community-guide/tests/*.test.mjs
 
   build:
     runs-on: ubuntu-latest

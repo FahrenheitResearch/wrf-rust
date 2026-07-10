@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="wrf-rust: a Rust reimplementation of wrf-python's getvar diagnostics, with a Python API, 125 registered diagnostic variables, differential parity against pinned wrf-python, and a measured diagnostic-pipeline speedup on real WRF output.">
+<title>wrf-rust — WRF post-processing in Rust</title>
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+
+<header class="masthead">
+  <p class="site-title"><a href="index.html">wrf-rust</a><span class="version">0.3.0</span></p>
+  <p class="tagline">WRF post-processing diagnostics, reimplemented in Rust, with a wrf-python-compatible Python API.</p>
+  <nav class="site-nav">
+    <a href="index.html" aria-current="page">Overview</a>
+    <a href="diagnostics.html">Diagnostics</a>
+    <a href="validation.html">Validation</a>
+    <a href="performance.html">Performance</a>
+    <a href="changelog.html">Changelog</a>
+  </nav>
+</header>
+
+<main>
+
+<h1>A Rust reimplementation of wrf-python's <code>getvar</code> diagnostics</h1>
+
+<p class="lede">
+<strong>wrf-rust</strong> reads WRF-ARW output files with a pure-Rust NetCDF-4/HDF5
+reader and computes the meteorological diagnostics that NCAR's
+<a href="https://github.com/NCAR/wrf-python">wrf-python</a> provides through
+<code>getvar()</code> — pressure, height, thermodynamics, CAPE/CIN families,
+storm-relative helicity, severe-weather composites, reflectivity, and more —
+plus diagnostics wrf-python does not have, such as effective-inflow-layer
+products and entraining CAPE. It ships as a Python package
+(<code>pip install wrf-rust</code>, imported as <code>wrf</code>) backed by the
+<code>wrf-core</code> Rust crate.</p>
+
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr><th>Property</th><th>Value</th><th>Detail</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Registered diagnostics</td>
+      <td class="num">125</td>
+      <td><a href="diagnostics.html">Complete reference table</a>, generated from the source registry at v0.3.0</td>
+    </tr>
+    <tr>
+      <td>Reference parity</td>
+      <td class="num">0 failures</td>
+      <td><a href="validation.html">Differential harness</a> against pinned wrf-python 1.3.4.1 and SHARPpy 1.4.0a5</td>
+    </tr>
+    <tr>
+      <td>Pipeline speedup (0.3.0)</td>
+      <td class="num">&#8776;3.3&#215;</td>
+      <td><a href="performance.html">79-product severe set</a> on a real 800&#215;800&#215;79 case: 185.3 s &#8594; &#8776;57 s class at 24 threads</td>
+    </tr>
+    <tr>
+      <td>Interfaces</td>
+      <td>Python + Rust</td>
+      <td>PyPI package <a href="https://pypi.org/project/wrf-rust/"><code>wrf-rust</code></a>; Rust crates under <code>crates/</code></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="install">1&#8194;Installation</h2>
+
+<p>The Python package installs a module named <code>wrf</code>. No system NetCDF or
+HDF5 installation is required for normal wheel builds; the default reader path is
+pure Rust.</p>
+
+<pre><code>pip install wrf-rust</code></pre>
+
+<p>For local development against the repository:</p>
+
+<pre><code>git clone https://github.com/FahrenheitResearch/wrf-rust.git
+cd wrf-rust
+pip install maturin
+maturin develop --release</code></pre>
+
+<h2 id="python">2&#8194;Quickstart: Python</h2>
+
+<p>The API mirrors wrf-python's <code>getvar</code> conventions: open a file,
+request a variable by name, optionally convert units or select all time steps.
+Results are NumPy arrays, <code>(ny, nx)</code> for 2-D fields and
+<code>(nz, ny, nx)</code> for 3-D fields.</p>
+
+<pre><code>from wrf import WrfFile, getvar, ALL_TIMES
+
+f = WrfFile("wrfout_d01_2024-01-01_00:00:00")
+
+temp = getvar(f, "temp", timeidx=0, units="degC")   # (nz, ny, nx)
+cape = getvar(f, "sbcape", timeidx=0)               # (ny, nx), J/kg
+srh  = getvar(f, "srh1", timeidx=0)                 # 0-1 km SRH, Bunkers
+slp  = getvar(f, "slp", timeidx=ALL_TIMES, units="hPa")
+
+# Strict NCAR wrf-python/RIP compatibility paths are separately named:
+srh_ncar = getvar(f, "srh_wrfpython", timeidx=0, depth_m=3000)
+ecape    = getvar(f, "ecape", timeidx=0, storm_motion_type="bunkers_rm")</code></pre>
+
+<p>Layer-configurable diagnostics accept explicit bounds, and raw WRF variables
+fall through by name:</p>
+
+<pre><code>shear = getvar(f, "bulk_shear", bottom_m=0, top_m=6000)
+lr    = getvar(f, "lapse_rate", bottom_p=700, top_p=500)
+srh   = getvar(f, "srh", depth_m=1500, storm_motion=(12.0, 8.0))
+rain  = getvar(f, "RAINNC", units="in")             # raw variable fallback</code></pre>
+
+<p><code>list_variables()</code> returns every registered name with description and
+default units; <code>available_variables()</code> prints the same as a table.
+<code>interplevel</code>, <code>latlon_coords</code>, <code>get_cartopy</code>,
+<code>ll_to_xy</code>/<code>xy_to_ll</code>, and multi-file concatenation follow
+wrf-python semantics.</p>
+
+<h2 id="rust">3&#8194;Quickstart: Rust</h2>
+
+<p>The same registry is callable from Rust through the <code>wrf-core</code> crate.
+<code>getvar</code> returns a <code>VarOutput</code> holding a flat
+<code>Vec&lt;f64&gt;</code>, its shape, the unit string, and a description.</p>
+
+<pre><code>use wrf_core::{getvar, ComputeOpts, WrfFile};
+
+let file = WrfFile::open("wrfout_d01_2024-01-01_00:00:00")?;
+let opts = ComputeOpts::default();
+
+let slp = getvar(&amp;file, "slp", Some(0), &amp;opts)?;
+assert_eq!(slp.shape, vec![file.ny, file.nx]);
+assert_eq!(slp.units, "hPa");</code></pre>
+
+<h2 id="scope">4&#8194;Compatibility and scope</h2>
+
+<p>wrf-rust separates two kinds of fidelity rather than conflating them:</p>
+
+<ul>
+  <li><strong>Strict compatibility paths.</strong> Variables named
+  <code>cape2d_wrfpython</code>, <code>cape3d_wrfpython</code>,
+  <code>srh_wrfpython</code>, and their components reproduce NCAR wrf-python
+  1.3.4.1/RIP behavior exactly: parcel selection, 500 m pressure averaging, the
+  pinned pseudoadiabat table, positive-CIN magnitude, missing-value rules, and
+  output ordering. Parcel overrides and extensions are rejected on these paths.</li>
+  <li><strong>Native diagnostics.</strong> The default <code>sbcape</code>/<code>mlcape</code>/<code>mucape</code>
+  families are parcel-explicit; SRH defaults to modern Bunkers storm motion;
+  severe composites follow current SPC definitions. Where wrf-rust deliberately
+  departs from wrf-python, the departure is documented and tested against the
+  appropriate scientific authority — see <a href="validation.html">Validation</a>.</li>
+</ul>
+
+<p>Unit strings are case-insensitive and cover temperature, pressure, speed,
+length, precipitation depth, and moisture categories (for example
+<code>degC</code>, <code>hPa</code>, <code>kt</code>, <code>ft</code>,
+<code>in</code>, <code>g/kg</code>).</p>
+
+<h2 id="consumers">5&#8194;Consumers</h2>
+
+<p><a href="https://github.com/FahrenheitResearch/bowecho">BowEcho</a>, a desktop
+weather radar and satellite application, is the flagship consumer: it uses
+wrf-rust for WRF import, severe-weather diagnostic suites, isobaric volumes, and
+a synthetic-radar forward operator over WRF output. The repository also contains
+Rust-native rendering (<code>wrf-products</code>, <code>wrf-render</code>),
+sounding extraction (<code>wrf-sounding</code>), and ensemble reductions
+(<code>wrf-ensemble</code>) built on the same core.</p>
+
+<h2 id="further">6&#8194;Further reading</h2>
+
+<ul>
+  <li><a href="https://github.com/FahrenheitResearch/wrf-rust">Repository</a> and
+      <a href="https://pypi.org/project/wrf-rust/">PyPI package</a></li>
+  <li><a href="https://github.com/FahrenheitResearch/wrf-rust/blob/main/docs/ARCHITECTURE.md">Architecture</a> — crate boundaries and ownership</li>
+  <li><a href="https://github.com/FahrenheitResearch/wrf-rust/blob/main/docs/ENSEMBLES.md">Ensembles</a> — same-grid member reductions</li>
+  <li><a href="https://github.com/FahrenheitResearch/wrf-rust/blob/main/docs/MIGRATION_FROM_RUSTWX.md">Migration from rustwx</a> — porting history</li>
+  <li><a href="https://github.com/FahrenheitResearch/wrf-rust/blob/main/parity/README.md">Differential parity framework</a> — the acceptance methodology summarized on the <a href="validation.html">Validation</a> page</li>
+</ul>
+
+</main>
+
+<footer class="site-footer">
+  <p>wrf-rust is MIT-licensed research software by
+    <a href="https://github.com/FahrenheitResearch">FahrenheitResearch</a>.
+    Thanks to Solarpower07 for color tables, product styling, and guidance on
+    severe-weather diagnostics.</p>
+  <p><a href="https://github.com/FahrenheitResearch/wrf-rust">GitHub</a> &#183;
+     <a href="https://pypi.org/project/wrf-rust/">PyPI</a> &#183;
+     <a href="https://github.com/FahrenheitResearch/bowecho">BowEcho</a> &#183;
+     <a href="community-guide/index.html">Community WRF setup guide</a></p>
+  <p>Documentation generated from repository sources at v0.3.0
+     (<code>351b8f3</code>).</p>
+</footer>
+
+</body>
+</html>
