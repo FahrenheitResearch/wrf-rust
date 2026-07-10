@@ -239,9 +239,18 @@ pub fn get_env_at_pres(
 
 // --- Parcel Selectors ---
 
-/// Returns Mixed Layer Parcel matching SHARPpy's calculation method.
-/// Uses 1-2-1 weighting scheme (surface and top weight 1, inner levels weight 2).
-/// Returns (p_start, t_start, td_start) all in (hPa, Celsius, Celsius).
+/// Returns the mixed-layer parcel using pinned SHARPpy 1.4.0a5's `exact=True`
+/// native-level convention.
+///
+/// The surface and interpolated top boundaries have weight 1 and every native
+/// interior level has weight 2. This is deliberately a level-count 1-2-1 mean,
+/// not a pressure-thickness integral, so nonuniform vertical grids can produce
+/// different parcels. Returns `(p_start, t_start, td_start)` in
+/// `(hPa, Celsius, Celsius)`.
+///
+/// References:
+/// - <https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/params.py#L1132-L1169>
+/// - <https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/params.py#L1224-L1265>
 pub fn get_mixed_layer_parcel(
     p_prof: &[f64],
     t_prof: &[f64],
@@ -1013,8 +1022,8 @@ pub fn el(p_profile: &[f64], t_profile: &[f64], td_profile: &[f64]) -> Option<(f
 mod tests {
     use super::{
         cape_cin_core, dewpoint_from_mixing_ratio, drylift, get_env_at_pres, get_height_at_pres,
-        mixratio, parcel_virtual_temperature, satlift, virtual_temp, wobf, WrfEnergyTrace, ROCP,
-        ZEROCNK,
+        get_mixed_layer_parcel, mixratio, parcel_virtual_temperature, satlift, virtual_temp, wobf,
+        WrfEnergyTrace, ROCP, ZEROCNK,
     };
 
     const PRESSURE: [f64; 14] = [
@@ -1068,6 +1077,29 @@ mod tests {
         assert!((actual - expected).abs() < 1.0e-10);
         assert_eq!(get_height_at_pres(1_050.0, &pressure, &height), height[0]);
         assert_eq!(get_height_at_pres(750.0, &pressure, &height), height[2]);
+    }
+
+    #[test]
+    fn mixed_layer_preserves_sharppy_level_count_weighting_on_nonuniform_grid() {
+        let pressure = [1_000.0_f64, 990.0, 900.0];
+        // Theta varies linearly with pressure, but the 990-hPa native level is
+        // much closer to the surface than to the layer top.
+        let theta = [300.0_f64, 300.625, 306.25];
+        let temperature: [f64; 3] =
+            std::array::from_fn(|i| theta[i] * (pressure[i] / 1_000.0).powf(ROCP) - ZEROCNK);
+        let dewpoint = [10.0; 3];
+
+        let (_, level_count_temperature, _) =
+            get_mixed_layer_parcel(&pressure, &temperature, &dewpoint, 100.0);
+
+        let pressure_integral = (0..pressure.len() - 1)
+            .map(|i| 0.5 * (theta[i] + theta[i + 1]) * (pressure[i] - pressure[i + 1]))
+            .sum::<f64>();
+        let pressure_mean_theta = pressure_integral / (pressure[0] - pressure[2]);
+        let pressure_mean_temperature = pressure_mean_theta - ZEROCNK;
+
+        assert!((level_count_temperature - (301.875 - ZEROCNK)).abs() < 1.0e-12);
+        assert!((level_count_temperature - pressure_mean_temperature + 1.25).abs() < 1.0e-12);
     }
 
     #[test]
