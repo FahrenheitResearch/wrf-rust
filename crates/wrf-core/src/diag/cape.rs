@@ -133,12 +133,9 @@ pub(crate) fn compute_cape_fields(
                 let p_hpa = pres[idx] / 100.0;
                 p_prof.push(p_hpa); // hPa
                 t_prof.push(tc[idx]); // Celsius
-                                      // Compute Td from q and p
-                let q = qv[idx].max(1e-10);
-                let e = q * p_hpa / (0.622 + q);
-                let ln_e = (e / 6.112).max(1e-10).ln();
-                let td = (243.5 * ln_e) / (17.67 - ln_e);
-                td_prof.push(td); // Celsius
+                td_prof.push(crate::met::thermo::dewpoint_from_mixing_ratio(
+                    qv[idx], p_hpa,
+                )); // Celsius
                 h_prof.push(h_agl[idx]); // m AGL
             }
 
@@ -578,10 +575,10 @@ pub fn compute_el(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f6
             let idx = k * nxy + ij;
             p_prof.push(pres_hpa[idx]);
             t_prof.push(tc[idx]);
-            let q = qv[idx].max(1e-10);
-            let e = q * pres_hpa[idx] / (0.622 + q);
-            let ln_e = (e / 6.112).max(1e-10).ln();
-            td_prof.push((243.5 * ln_e) / (17.67 - ln_e));
+            td_prof.push(crate::met::thermo::dewpoint_from_mixing_ratio(
+                qv[idx],
+                pres_hpa[idx],
+            ));
             h_prof.push(h_agl[idx]);
         }
 
@@ -667,10 +664,10 @@ pub fn compute_cape3d(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<V
                 let idx = kk * nxy + ij;
                 p_prof.push(pres_hpa[idx]);
                 t_prof.push(tc[idx]);
-                let q = qv[idx].max(1e-10);
-                let e = q * pres_hpa[idx] / (0.622 + q);
-                let ln_e = (e / 6.112).max(1e-10).ln();
-                td_prof.push((243.5 * ln_e) / (17.67 - ln_e));
+                td_prof.push(crate::met::thermo::dewpoint_from_mixing_ratio(
+                    qv[idx],
+                    pres_hpa[idx],
+                ));
                 h_prof.push(h_agl[idx]);
             }
 
@@ -1181,10 +1178,10 @@ fn compute_cape_fields_custom(
                 let idx = k * nxy + ij;
                 p_prof.push(pres_hpa[idx]);
                 t_prof.push(tc[idx]);
-                let q = qv[idx].max(1e-10);
-                let e = q * pres_hpa[idx] / (0.622 + q);
-                let ln_e = (e / 6.112).max(1e-10).ln();
-                td_prof.push((243.5 * ln_e) / (17.67 - ln_e));
+                td_prof.push(crate::met::thermo::dewpoint_from_mixing_ratio(
+                    qv[idx],
+                    pres_hpa[idx],
+                ));
                 h_prof.push(h_agl[idx]);
             }
 
@@ -1319,10 +1316,10 @@ pub fn compute_el_generic(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResul
                 let idx = k * nxy + ij;
                 p_prof.push(pres_hpa[idx]);
                 t_prof.push(tc[idx]);
-                let q = qv[idx].max(1e-10);
-                let e = q * pres_hpa[idx] / (0.622 + q);
-                let ln_e = (e / 6.112).max(1e-10).ln();
-                td_prof.push((243.5 * ln_e) / (17.67 - ln_e));
+                td_prof.push(crate::met::thermo::dewpoint_from_mixing_ratio(
+                    qv[idx],
+                    pres_hpa[idx],
+                ));
                 h_prof.push(h_agl[idx]);
             }
 

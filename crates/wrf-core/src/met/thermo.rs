@@ -810,6 +810,20 @@ pub fn cape_cin_core(
 // Saturation / Moisture Functions
 // =============================================================================
 
+const WRFPYTHON_DEWPOINT_VAPOR_PRESSURE_FLOOR_HPA: f64 = 0.001;
+
+/// Dewpoint (Celsius) from water-vapor mixing ratio (kg/kg) and pressure (hPa).
+///
+/// Matches wrf-python's `DCOMPUTETD`, including its nonnegative mixing-ratio
+/// clamp, 0.001-hPa vapor-pressure floor, and diagnostic-specific constants.
+/// Reference: <https://github.com/NCAR/wrf-python/blob/31c923335227b22fa656fd589a5342b91103e939/fortran/wrf_user.f90#L945-L970>
+pub fn dewpoint_from_mixing_ratio(q_kgkg: f64, p_hpa: f64) -> f64 {
+    let q = q_kgkg.max(0.0);
+    let e_hpa = (q * p_hpa / (0.622 + q)).max(WRFPYTHON_DEWPOINT_VAPOR_PRESSURE_FLOOR_HPA);
+    let ln_e = e_hpa.ln();
+    (243.5 * ln_e - 440.8) / (19.48 - ln_e)
+}
+
 /// Saturation vapor pressure (hPa) using Bolton (1980) formula.
 /// Input: temperature in Celsius.
 pub fn saturation_vapor_pressure(t_c: f64) -> f64 {
@@ -955,8 +969,9 @@ pub fn el(p_profile: &[f64], t_profile: &[f64], td_profile: &[f64]) -> Option<(f
 #[cfg(test)]
 mod tests {
     use super::{
-        cape_cin_core, drylift, get_env_at_pres, get_height_at_pres, mixratio,
-        parcel_virtual_temperature, satlift, virtual_temp, wobf, WrfEnergyTrace, ROCP, ZEROCNK,
+        cape_cin_core, dewpoint_from_mixing_ratio, drylift, get_env_at_pres, get_height_at_pres,
+        mixratio, parcel_virtual_temperature, satlift, virtual_temp, wobf, WrfEnergyTrace, ROCP,
+        ZEROCNK,
     };
 
     const PRESSURE: [f64; 14] = [
@@ -1010,6 +1025,17 @@ mod tests {
         assert!((actual - expected).abs() < 1.0e-10);
         assert_eq!(get_height_at_pres(1_050.0, &pressure, &height), height[0]);
         assert_eq!(get_height_at_pres(750.0, &pressure, &height), height[2]);
+    }
+
+    #[test]
+    fn dewpoint_matches_wrf_floor_below_and_above_threshold() {
+        let floor_dewpoint = -80.447_858_788_617_48;
+
+        assert!((dewpoint_from_mixing_ratio(0.0, 100.0) - floor_dewpoint).abs() < 1.0e-12);
+        assert!((dewpoint_from_mixing_ratio(2.0e-6, 100.0) - floor_dewpoint).abs() < 1.0e-12);
+        assert!(
+            (dewpoint_from_mixing_ratio(1.0e-5, 100.0) + 77.460_279_490_702_79).abs() < 1.0e-12
+        );
     }
 
     #[test]

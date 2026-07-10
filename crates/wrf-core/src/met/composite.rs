@@ -153,11 +153,7 @@ pub fn pressure_weighted_bunkers_storm_motion(
 
 /// Compute dewpoint (Celsius) from mixing ratio (kg/kg) and pressure (hPa).
 pub fn dewpoint_from_q(q: f64, p_hpa: f64) -> f64 {
-    let q = q.max(1.0e-10); // avoid log(0)
-    let e = q * p_hpa / (0.622 + q); // vapor pressure in hPa
-    let e = e.max(1.0e-10);
-    let ln_e = (e / 6.112).ln();
-    (243.5 * ln_e) / (17.67 - ln_e)
+    metfuncs::dewpoint_from_mixing_ratio(q, p_hpa)
 }
 
 // ---------------------------------------------------------------------------

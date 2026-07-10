@@ -542,7 +542,11 @@ mod tests {
 
     fn q_from_dewpoint_k(td_k: f64, p_pa: f64) -> f64 {
         let td_c = td_k - 273.15;
-        let e_hpa = 6.112 * ((17.67 * td_c) / (td_c + 243.5)).exp();
+        // Invert the same wrf-python DCOMPUTETD relation used by the
+        // production q -> Td path so this fixture reconstructs its declared
+        // dewpoint profile without a diagnostic-constant round trip.
+        let ln_e = (19.48 * td_c + 440.8) / (243.5 + td_c);
+        let e_hpa = ln_e.exp();
         let p_hpa = p_pa / 100.0;
         0.622 * e_hpa / (p_hpa - e_hpa)
     }

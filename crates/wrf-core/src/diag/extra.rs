@@ -81,10 +81,7 @@ pub fn compute_wet_bulb_0(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResu
 
         for k in 0..nz {
             let idx = k * nxy + ij;
-            let q = qv[idx].max(1e-10);
-            let e = q * p_hpa[idx] / (0.622 + q);
-            let ln_e = (e / 6.112).max(1e-10).ln();
-            let td_c = (243.5 * ln_e) / (17.67 - ln_e);
+            let td_c = crate::met::thermo::dewpoint_from_mixing_ratio(qv[idx], p_hpa[idx]);
 
             let twb = crate::met::thermo::wet_bulb_temperature(p_hpa[idx], tc[idx], td_c);
 
@@ -116,10 +113,7 @@ pub fn compute_theta_w(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<
 }
 
 fn theta_w_from_model_state(p_hpa: f64, t_c: f64, q_kgkg: f64) -> f64 {
-    let q = q_kgkg.max(1e-10);
-    let e = q * p_hpa / (0.622 + q);
-    let ln_e = (e / 6.112).max(1e-10).ln();
-    let td_c = (243.5 * ln_e) / (17.67 - ln_e);
+    let td_c = crate::met::thermo::dewpoint_from_mixing_ratio(q_kgkg, p_hpa);
     crate::met::thermo::wet_bulb_potential_temperature(p_hpa, t_c, td_c)
 }
 
@@ -177,10 +171,7 @@ pub fn compute_haines(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<V
                     let frac = (target_p - p_hpa[idx1]) / (p_hpa[idx] - p_hpa[idx1]);
                     let t_interp = tc[idx1] + frac * (tc[idx] - tc[idx1]);
                     let q_interp = qv[idx1] + frac * (qv[idx] - qv[idx1]);
-                    let q = q_interp.max(1e-10);
-                    let e = q * target_p / (0.622 + q);
-                    let ln_e = (e / 6.112).max(1e-10).ln();
-                    let td = (243.5 * ln_e) / (17.67 - ln_e);
+                    let td = crate::met::thermo::dewpoint_from_mixing_ratio(q_interp, target_p);
 
                     if target_p == 950.0 {
                         t950 = t_interp;

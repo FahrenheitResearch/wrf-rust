@@ -43,7 +43,8 @@ pub fn compute_theta_e(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<
     let tc = f.temperature_c(t)?;
     let qv = f.qvapor(t)?;
 
-    // Dewpoint from mixing ratio: td_c = dewpoint_from_q(q, p_hpa)
+    // Keep the native theta-e vapor-pressure RH path; the registered Td/Twb
+    // diagnostics use wrf-python's separate mixing-ratio conversion below.
     let result: Vec<f64> = p_hpa
         .iter()
         .zip(tc.iter())
@@ -76,7 +77,7 @@ pub fn compute_twb(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<
         .zip(tc.iter())
         .zip(qv.iter())
         .map(|((p, t_c), q)| {
-            let td_c = dewpoint_from_q(*q, *p);
+            let td_c = dewpoint_3d_from_model_state(*q, *p);
             crate::met::thermo::wet_bulb_temperature(*p, *t_c, td_c) + 273.15
         })
         .collect())
@@ -90,7 +91,7 @@ pub fn compute_td(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f
     Ok(p_hpa
         .iter()
         .zip(qv.iter())
-        .map(|(p, q)| dewpoint_from_q(*q, *p))
+        .map(|(p, q)| dewpoint_3d_from_model_state(*q, *p))
         .collect())
 }
 
@@ -111,13 +112,8 @@ pub fn compute_rh(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f
 // ── Helpers ──
 
 /// Compute dewpoint (°C) from mixing ratio (kg/kg) and pressure (hPa).
-fn dewpoint_from_q(q_kgkg: f64, p_hpa: f64) -> f64 {
-    let q = q_kgkg.max(1e-10);
-    // Vapor pressure from mixing ratio: e = q * p / (0.622 + q)
-    let e_hpa = q * p_hpa / (0.622 + q);
-    // Dewpoint from vapor pressure (Bolton 1980 inverse)
-    let ln_e = (e_hpa / 6.112).max(1e-10).ln();
-    (243.5 * ln_e) / (17.67 - ln_e)
+fn dewpoint_3d_from_model_state(q_kgkg: f64, p_hpa: f64) -> f64 {
+    crate::met::thermo::dewpoint_from_mixing_ratio(q_kgkg, p_hpa)
 }
 
 /// Compute wrf-python relative humidity (%) from water-vapor mixing ratio.
@@ -152,7 +148,17 @@ fn theta_e_from_model_state(p_hpa: f64, t_c: f64, q_kgkg: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{theta_e_from_model_state, wrf_relative_humidity_from_mixing_ratio};
+    use super::{
+        dewpoint_3d_from_model_state, theta_e_from_model_state,
+        wrf_relative_humidity_from_mixing_ratio,
+    };
+
+    #[test]
+    fn three_dimensional_dewpoint_uses_wrf_vapor_pressure_floor() {
+        let dewpoint = dewpoint_3d_from_model_state(2.0e-6, 100.0);
+
+        assert!((dewpoint + 80.447_858_788_617_48).abs() < 1.0e-12);
+    }
 
     #[test]
     fn relative_humidity_matches_ncar_qv_over_qvs() {
