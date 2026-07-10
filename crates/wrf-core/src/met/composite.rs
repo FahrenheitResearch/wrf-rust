@@ -1168,15 +1168,26 @@ pub fn supercell_composite_parameter(
         .collect()
 }
 
-/// Critical Angle between storm-relative inflow and 0-500m shear vector.
+/// Critical angle between storm-relative inflow and the 0-500 m shear vector.
 ///
-/// Returns angle in degrees (0-180). Values near 90 degrees favor tornadogenesis.
+/// Returns the angle in degrees in `[0, 180]`. The surface wind is required to
+/// construct the storm-relative inflow vector. The shear inputs are vector
+/// differences (`wind_500m - wind_surface`), not absolute 500 m winds.
+/// Returns `NaN` when either vector is degenerate, matching SHARPpy's masked
+/// result for an undefined angle.
 ///
 /// - u_storm, v_storm: Storm motion components (m/s)
+/// - u_surface, v_surface: Surface wind components (m/s)
 /// - u_shear, v_shear: 0-500m shear vector components (m/s)
+///
+/// This follows the definitions used by
+/// [SHARPpy 1.4.0a5](https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/winds.py#L477-L516)
+/// and [MetPy](https://github.com/Unidata/MetPy/blob/433bdd18cc807efc2507e91094776403edee5973/src/metpy/calc/indices.py#L654-L735).
 pub fn critical_angle(
     u_storm: &[f64],
     v_storm: &[f64],
+    u_surface: &[f64],
+    v_surface: &[f64],
     u_shear: &[f64],
     v_shear: &[f64],
     nx: usize,
@@ -1186,21 +1197,20 @@ pub fn critical_angle(
     (0..n)
         .into_par_iter()
         .map(|i| {
-            let inflow_u = -u_storm[i];
-            let inflow_v = -v_storm[i];
-            let shear_u = u_shear[i];
-            let shear_v = v_shear[i];
-
-            let dot = inflow_u * shear_u + inflow_v * shear_v;
-            let mag_inflow = (inflow_u * inflow_u + inflow_v * inflow_v).sqrt();
-            let mag_shear = (shear_u * shear_u + shear_v * shear_v).sqrt();
-
-            if mag_inflow < 0.01 || mag_shear < 0.01 {
+            let inflow_u = u_storm[i] - u_surface[i];
+            let inflow_v = v_storm[i] - v_surface[i];
+            if inflow_u.hypot(inflow_v) < 1.0e-10 || u_shear[i].hypot(v_shear[i]) < 1.0e-10 {
                 return f64::NAN;
             }
 
-            let cos_angle = (dot / (mag_inflow * mag_shear)).clamp(-1.0, 1.0);
-            cos_angle.acos().to_degrees()
+            crate::met::wind::critical_angle(
+                u_storm[i],
+                v_storm[i],
+                u_surface[i],
+                v_surface[i],
+                u_surface[i] + u_shear[i],
+                v_surface[i] + v_shear[i],
+            )
         })
         .collect()
 }
@@ -1710,6 +1720,34 @@ mod tests {
         for (actual, expected) in out.into_iter().zip(expected) {
             assert_close(actual, expected);
         }
+    }
+
+    #[test]
+    fn exported_critical_angle_helper_matches_calm_surface_reference() {
+        let out = critical_angle(&[10.0], &[0.0], &[0.0], &[0.0], &[10.0], &[10.0], 1, 1);
+
+        assert_close(out[0], 45.0);
+    }
+
+    #[test]
+    fn exported_critical_angle_helper_accounts_for_nonzero_surface_wind() {
+        let out = critical_angle(&[10.0], &[0.0], &[5.0], &[5.0], &[0.0], &[10.0], 1, 1);
+
+        assert_close(out[0], 135.0);
+    }
+
+    #[test]
+    fn exported_critical_angle_is_undefined_when_storm_equals_surface_wind() {
+        let out = critical_angle(&[5.0], &[2.0], &[5.0], &[2.0], &[10.0], &[0.0], 1, 1);
+
+        assert!(out[0].is_nan());
+    }
+
+    #[test]
+    fn exported_critical_angle_is_undefined_for_zero_low_level_shear() {
+        let out = critical_angle(&[10.0], &[0.0], &[0.0], &[0.0], &[0.0], &[0.0], 1, 1);
+
+        assert!(out[0].is_nan());
     }
 
     #[test]
