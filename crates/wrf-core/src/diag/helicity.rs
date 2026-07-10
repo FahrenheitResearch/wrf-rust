@@ -34,6 +34,12 @@ fn lerp_at(z: f64, z0: f64, z1: f64, v0: f64, v1: f64) -> f64 {
 /// 1-based `k=2..nz-2`, `j=2..ny-1`, and `i=2..nx-1`. Keeping those untouched
 /// cells at zero is observable in the two-cell output halo and must not be
 /// replaced with one-sided derivatives when parity with `uhel` is requested.
+///
+/// For `DCALCUH` parity, the centered derivatives deliberately preserve the
+/// kernel's single `/MAPFAC_M` divisor. They are not rewritten to use the
+/// staggered-map-factor and squared-mass-factor metric form used by WRF's
+/// separate AVO/PVO kernel. See the pinned
+/// [DCALCUH formula](https://github.com/NCAR/wrf-python/blob/31c923335227b22fa656fd589a5342b91103e939/fortran/calc_uh.f90#L67-L74).
 fn dcalcuh_vorticity(
     u: &[f64],
     v: &[f64],
