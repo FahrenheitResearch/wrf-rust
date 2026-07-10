@@ -581,9 +581,13 @@ pub fn compute_shear(
 // Significant Tornado Parameter
 // ---------------------------------------------------------------------------
 
-/// Significant Tornado Parameter (STP).
+/// Fixed-layer Significant Tornado Parameter (STP).
 ///
-/// STP = (CAPE/1500) * ((2000 - LCL)/1000) * (SRH_1km/150) * min(SHEAR_6km/20, 1.5)
+/// The LCL term is 1 below 1 km and 0 above 2 km. The 0--6-km
+/// bulk-wind-difference term is 0 below 12.5 m/s and capped at 1.5
+/// at 30 m/s, matching SHARPpy 1.4.0a5 `stp_fixed`.
+///
+/// Reference: <https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/params.py#L643-L690>
 ///
 /// Inputs are pre-computed 2D fields, each of size `n` (ny * nx).
 pub fn compute_stp(cape: &[f64], lcl: &[f64], srh_1km: &[f64], shear_6km: &[f64]) -> Vec<f64> {
@@ -592,9 +596,21 @@ pub fn compute_stp(cape: &[f64], lcl: &[f64], srh_1km: &[f64], shear_6km: &[f64]
 
     for idx in 0..n {
         let cape_term = (cape[idx] / 1500.0).max(0.0);
-        let lcl_term = ((2000.0 - lcl[idx]) / 1000.0).clamp(0.0, 2.0);
+        let lcl_term = if lcl[idx] <= 1000.0 {
+            1.0
+        } else if lcl[idx] >= 2000.0 {
+            0.0
+        } else {
+            (2000.0 - lcl[idx]) / 1000.0
+        };
         let srh_term = (srh_1km[idx] / 150.0).max(0.0);
-        let shear_term = (shear_6km[idx] / 20.0).min(1.5).max(0.0);
+        let shear_term = if shear_6km[idx] < 12.5 {
+            0.0
+        } else if shear_6km[idx] >= 30.0 {
+            1.5
+        } else {
+            shear_6km[idx] / 20.0
+        };
 
         stp.push(cape_term * lcl_term * srh_term * shear_term);
     }
@@ -1581,6 +1597,23 @@ mod tests {
         assert_close(out[0], 0.0);
         assert_close(out[1], 0.75);
         assert_close(out[2], 1.0);
+    }
+
+    #[test]
+    fn fixed_stp_helper_applies_sharppy_lcl_and_shear_limits() {
+        let out = compute_stp(
+            &[1500.0; 9],
+            &[
+                999.0, 1000.0, 1500.0, 2000.0, 2001.0, 1000.0, 1000.0, 1000.0, 1000.0,
+            ],
+            &[150.0; 9],
+            &[20.0, 20.0, 20.0, 20.0, 20.0, 12.4, 12.5, 30.0, 30.1],
+        );
+
+        let expected = [1.0, 1.0, 0.5, 0.0, 0.0, 0.0, 0.625, 1.5, 1.5];
+        for (actual, expected) in out.into_iter().zip(expected) {
+            assert_close(actual, expected);
+        }
     }
 
     #[test]
