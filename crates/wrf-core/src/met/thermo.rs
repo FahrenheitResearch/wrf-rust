@@ -1,8 +1,28 @@
-/// Meteorological thermodynamic functions ported from wrfsolar's metfuncs.py.
-/// Pure math - no external dependencies. All functions are direct ports of the
-/// SHARPpy-derived implementations used in the Python codebase.
-///
-/// Vendored from wx-math crate for self-contained builds.
+//! Thermodynamic helpers for wrf-rust's native diagnostic path.
+//!
+//! This module has mixed lineage; it is not a wholesale SHARPpy port. The
+//! Wobus, dry-lift, vapor-pressure, and mixing-ratio routines retain
+//! SPC/SHARPpy ancestry through wrfsolar/wx-math, while parcel integration and
+//! several Bolton-style utilities are local implementations.
+//!
+//! Approximation boundaries are intentional and observable:
+//!
+//! - [`virtual_temp`] uses `T_v = T * (1 + 0.61 w)`. Pinned SHARPpy uses
+//!   `T * (1 + w/epsilon) / (1 + w)`; at 300 K and `w = 0.014 kg/kg`, this
+//!   module's approximation is 0.044508 K warmer.
+//! - [`thetae`] is a Celsius-valued native latent-heat exponential, not
+//!   SHARPpy's lift-to-100-hPa routine and not the registered `theta_e`
+//!   diagnostic's Kelvin-valued Bolton calculation. Against pinned SHARPpy it
+//!   is 6.173, 5.522, and 8.000 K lower at `(p, T, Td)` values of
+//!   `(1000 hPa, 30 C, 20 C)`, `(850 hPa, 20 C, 15 C)`, and
+//!   `(950 hPa, 35 C, 25 C)`, respectively.
+//! - Strict wrf-python CAPE bypasses these native parcel approximations and
+//!   routes through `met::rip_cape`, which pins NCAR's constants, exact virtual
+//!   temperature relation, and Bolton pseudoadiabat lookup.
+//!
+//! References:
+//! - <https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/thermo.py>
+//! - <https://github.com/NCAR/wrf-python/blob/31c923335227b22fa656fd589a5342b91103e939/fortran/rip_cape.f90#L37-L154>
 
 // --- Physical Constants ---
 pub const RD: f64 = 287.058; // Dry air gas constant (J/(kg*K))
