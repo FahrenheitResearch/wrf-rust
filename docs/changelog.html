@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="wrf-rust release history: the 0.4.0 and 0.3.0 release notes and the full prior tag list.">
+<meta name="description" content="wrf-rust release history: the 0.4.1, 0.4.0, and 0.3.0 release notes and the full prior tag list.">
 <title>Changelog — wrf-rust</title>
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
 
 <header class="masthead">
-  <p class="site-title"><a href="index.html">wrf-rust</a><span class="version">0.4.0</span></p>
+  <p class="site-title"><a href="index.html">wrf-rust</a><span class="version">0.4.1</span></p>
   <p class="tagline">WRF post-processing diagnostics, reimplemented in Rust, with a wrf-python-compatible Python API.</p>
   <nav class="site-nav">
     <a href="index.html">Overview</a>
@@ -24,6 +24,36 @@
 <main>
 
 <h1>Changelog</h1>
+
+<h2 id="v0-4-1">0.4.1 — 2026-07-10</h2>
+
+<h3>WRF-Runner compatibility hotfix</h3>
+<p>Ordinary three-argument <code>interplevel</code> calls again return the
+exact plain float64 NumPy arrays, NaN missing values, and descending-pressure
+log interpolation shipped through 0.2.35. Ordinary scalar
+<code>ll_to_xy</code> calls again return fractional <code>(x, y)</code> tuples
+and retain the established nearest-edge behavior outside the grid. The
+wrf-python-compatible metadata, masked-array, integer, sequence, staggering,
+and analytic-coordinate modes introduced in 0.3.0 remain available by
+explicit option or extended input.</p>
+
+<p>The WRF-Runner gate now checks concrete return types before any NumPy
+coercion, covers NaN and fractional-coordinate behavior, and is pinned to
+Solarpower07/WRF-Runner <code>New-PC-Updates</code> commit
+<code>fe2e540</code>. This patch changes no Rust diagnostic, cache,
+parallelism, or HDF5-reader code, so the 0.3.0 diagnostic-pipeline performance
+work remains intact.</p>
+
+<h3>Validation</h3>
+<p>Python API tests: 42 passed, 0 failed; compatibility-probe unit tests:
+4 passed, 0 failed. The clean 0.4.1 wheel passed all 47 P0 WRF-Runner rows on
+the registered 800&#215;800&#215;79 fixture with xarray installed (3 exact
+consumer-source hashes, 8 helper contracts, and 36 literal
+<code>getvar</code> calls). The 500 and 700 hPa real-field interpolation
+arrays were byte-for-byte identical to 0.2.35, including with xarray present;
+the helper contracts also passed without xarray. Rust workspace tests:
+724 passed, 0 failed, 22 ignored. The pinned wrf-python full-field
+differential retained 16 of 16 required passes and 0 failures.</p>
 
 <h2 id="v0-4-0">0.4.0 — 2026-07-10</h2>
 

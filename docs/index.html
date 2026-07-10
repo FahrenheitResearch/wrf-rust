@@ -10,7 +10,7 @@
 <body>
 
 <header class="masthead">
-  <p class="site-title"><a href="index.html">wrf-rust</a><span class="version">0.4.0</span></p>
+  <p class="site-title"><a href="index.html">wrf-rust</a><span class="version">0.4.1</span></p>
   <p class="tagline">WRF post-processing diagnostics, reimplemented in Rust, with a wrf-python-compatible Python API.</p>
   <nav class="site-nav">
     <a href="index.html" aria-current="page">Overview</a>
@@ -112,8 +112,11 @@ rain  = getvar(f, "RAINNC", units="in")             # raw variable fallback</cod
 <p><code>list_variables()</code> returns every registered name with description and
 default units; <code>available_variables()</code> prints the same as a table.
 <code>interplevel</code>, <code>latlon_coords</code>, <code>get_cartopy</code>,
-<code>ll_to_xy</code>/<code>xy_to_ll</code>, and multi-file concatenation follow
-wrf-python semantics.</p>
+<code>ll_to_xy</code>/<code>xy_to_ll</code>, and multi-file concatenation cover
+the corresponding wrf-python workflows. The ordinary scalar/three-argument
+<code>ll_to_xy</code> and <code>interplevel</code> calls preserve wrf-rust's
+0.2.35 NumPy-oriented WRF-Runner contracts; their extended
+wrf-python-compatible behavior is an explicit opt-in.</p>
 
 <h2 id="rust">3&#8194;Quickstart: Rust</h2>
 

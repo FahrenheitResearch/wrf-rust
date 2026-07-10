@@ -75,7 +75,7 @@ __all__ = [
     "xy_to_ll",
     "CoordPair",
 ]
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 # ── Optional plotting imports (require matplotlib) ──
 try:
@@ -1124,28 +1124,120 @@ def _with_coordinate_metadata(result, first, second, *, xy, meta, squeeze):
     return output.squeeze() if squeeze else output
 
 
+def _legacy_scalar_ll_to_xy(wrfin, latitude, longitude, timeidx):
+    """Return the scalar, domain-clamped result used through wrf-rust 0.2.35."""
+    lat2d, lon2d = latlon_coords(wrfin, timeidx=timeidx)
+
+    # Locate the nearest grid point first. This deliberately preserves the
+    # legacy edge behavior: targets outside the domain remain clamped to the
+    # nearest boundary point when none of its adjacent cells contains them.
+    distance = (lat2d - latitude) ** 2 + (lon2d - longitude) ** 2
+    nearest_y, nearest_x = np.unravel_index(np.argmin(distance), distance.shape)
+    ny, nx = lat2d.shape
+    best_x = float(nearest_x)
+    best_y = float(nearest_y)
+
+    # Refine an in-domain target to a fractional index using the same Newton
+    # solve and search order as the 0.2.35 implementation.
+    for y0 in range(max(0, nearest_y - 1), min(ny - 1, nearest_y + 1)):
+        for x0 in range(max(0, nearest_x - 1), min(nx - 1, nearest_x + 1)):
+            lat00 = lat2d[y0, x0]
+            lat10 = lat2d[y0, x0 + 1]
+            lat01 = lat2d[y0 + 1, x0]
+            lat11 = lat2d[y0 + 1, x0 + 1]
+            lon00 = lon2d[y0, x0]
+            lon10 = lon2d[y0, x0 + 1]
+            lon01 = lon2d[y0 + 1, x0]
+            lon11 = lon2d[y0 + 1, x0 + 1]
+
+            s, t = 0.5, 0.5
+            for _ in range(10):
+                lat_estimate = (
+                    (1.0 - s) * (1.0 - t) * lat00
+                    + s * (1.0 - t) * lat10
+                    + (1.0 - s) * t * lat01
+                    + s * t * lat11
+                )
+                lon_estimate = (
+                    (1.0 - s) * (1.0 - t) * lon00
+                    + s * (1.0 - t) * lon10
+                    + (1.0 - s) * t * lon01
+                    + s * t * lon11
+                )
+                delta_lat = latitude - lat_estimate
+                delta_lon = longitude - lon_estimate
+
+                dlat_ds = (
+                    -(1.0 - t) * lat00
+                    + (1.0 - t) * lat10
+                    - t * lat01
+                    + t * lat11
+                )
+                dlat_dt = (
+                    -(1.0 - s) * lat00
+                    - s * lat10
+                    + (1.0 - s) * lat01
+                    + s * lat11
+                )
+                dlon_ds = (
+                    -(1.0 - t) * lon00
+                    + (1.0 - t) * lon10
+                    - t * lon01
+                    + t * lon11
+                )
+                dlon_dt = (
+                    -(1.0 - s) * lon00
+                    - s * lon10
+                    + (1.0 - s) * lon01
+                    + s * lon11
+                )
+
+                determinant = dlat_ds * dlon_dt - dlat_dt * dlon_ds
+                if abs(determinant) < 1.0e-20:
+                    break
+
+                s += (delta_lat * dlon_dt - delta_lon * dlat_dt) / determinant
+                t += (delta_lon * dlat_ds - delta_lat * dlon_ds) / determinant
+
+            if 0.0 <= s <= 1.0 and 0.0 <= t <= 1.0:
+                return float(x0) + s, float(y0) + t
+
+    return best_x, best_y
+
+
 def ll_to_xy(wrfin, latitude, longitude, timeidx=0, squeeze=True,
-             meta=True, stagger=None, as_int=True):
+             meta=None, stagger=None, as_int=None):
     """Return zero-based WRF x/y coordinates for latitude/longitude values.
 
-    This follows NCAR wrf-python 1.3.4.1's analytic WRF projection equations.
-    Scalar inputs produce a leading two-element x/y result and sequences are
-    flattened to ``(2, npoints)``. U and V staggering select the corresponding
-    ``XLAT_U/XLONG_U`` or ``XLAT_V/XLONG_V`` projection origin. Coordinates
-    outside the domain are extrapolated, as in wrf-python, rather than clamped.
+    An ordinary scalar call with ``meta`` and ``as_int`` omitted preserves the
+    wrf-rust 0.2.35 contract: a fractional ``(x, y)`` tuple using nearest-grid
+    bilinear interpolation and boundary clamping. Passing either ``meta`` or
+    ``as_int`` explicitly opts into the NCAR wrf-python 1.3.4.1 analytic path.
+    Sequence inputs, staggering, and ``squeeze=False`` also use that path,
+    whose omitted analytic options remain ``meta=True`` and ``as_int=True``.
     """
-    params = _projection_params(wrfin, timeidx, stagger)
     latitudes, longitudes, scalar = _coordinate_inputs(
         latitude, longitude, "latitude", "longitude"
     )
+    if (scalar and meta is None and as_int is None and stagger is None
+            and squeeze):
+        return _legacy_scalar_ll_to_xy(
+            wrfin, float(latitudes[0]), float(longitudes[0]), timeidx
+        )
+
+    params = _projection_params(wrfin, timeidx, stagger)
     result = np.empty((2, latitudes.size), dtype=np.float64)
     for index, (lat_value, lon_value) in enumerate(zip(latitudes, longitudes)):
         result[:, index] = _project_ll_to_xy(params, lat_value, lon_value)
 
     if scalar:
         result = result[:, 0]
+    if as_int is None:
+        as_int = True
     if as_int:
         result = np.rint(result).astype(int)
+    if meta is None:
+        meta = True
     return _with_coordinate_metadata(
         result,
         latitude,
