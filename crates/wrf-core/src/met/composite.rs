@@ -1037,17 +1037,29 @@ pub fn boyden_index(z1000: f64, z700: f64, t700: f64) -> f64 {
 // Severe Weather Composites (grid-based)
 // ===========================================================================
 
-/// Significant Hail Parameter (SHIP).
+/// SPC mesoanalysis / SHARPpy 2014 Significant Hail Parameter (SHIP).
 ///
-/// SHIP = (MUCAPE * MR * LR_700_500 * (-T500) * SHEAR_06) / 42_000_000
+/// The MU-parcel mixing ratio is constrained to 11--13.6 g/kg, 0-6 km shear
+/// to 7--27 m/s, and T500 to no warmer than -5.5 C before evaluating:
+///
+/// `SHIP = -(MUCAPE * MU_MR * LR_700_500 * T500 * SHEAR_06) / 42_000_000`
+///
+/// The result is then multiplied by MUCAPE/1300 when MUCAPE is below
+/// 1300 J/kg, by LR/5.8 when the lapse rate is below 5.8 C/km, and by the
+/// freezing-level height/2400 when the freezing level is below 2400 m AGL.
+///
+/// References:
+/// - <https://www.spc.noaa.gov/exper/mesoanalysis/help/help_sigh.html>
+/// - <https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/params.py#L485-L575>
 ///
 /// All inputs are flattened 2D grids of size nx*ny.
 pub fn significant_hail_parameter(
-    cape: &[f64],
-    shear06: &[f64],
+    mu_cape: &[f64],
+    shear_0_6km: &[f64],
     t500: &[f64],
     lr_700_500: &[f64],
-    mr: &[f64],
+    mu_mixing_ratio: &[f64],
+    freezing_level_agl: &[f64],
     nx: usize,
     ny: usize,
 ) -> Vec<f64> {
@@ -1055,18 +1067,45 @@ pub fn significant_hail_parameter(
     (0..n)
         .into_par_iter()
         .map(|i| {
-            let mucape = cape[i].max(0.0);
-            let mr_val = mr[i].max(0.0);
-            let lr = lr_700_500[i].max(0.0);
-            let t5 = (-t500[i]).max(0.0);
-            let s06 = shear06[i].max(0.0);
+            let mucape = mu_cape[i];
+            let mixing_ratio = mu_mixing_ratio[i];
+            let lapse_rate = lr_700_500[i];
+            let t500_c = t500[i];
+            let shear = shear_0_6km[i];
+            let freezing_level = freezing_level_agl[i];
 
-            let ship = (mucape * mr_val * lr * t5 * s06) / 42_000_000.0;
+            if !mucape.is_finite()
+                || !mixing_ratio.is_finite()
+                || !lapse_rate.is_finite()
+                || !t500_c.is_finite()
+                || !shear.is_finite()
+                || !freezing_level.is_finite()
+                || mucape <= 0.0
+                || lapse_rate <= 0.0
+                || freezing_level < 0.0
+            {
+                return 0.0;
+            }
 
-            if mucape < 1300.0 {
-                ship * (mucape / 1300.0)
+            let mixing_ratio = mixing_ratio.clamp(11.0, 13.6);
+            let shear = shear.clamp(7.0, 27.0);
+            let t500_c = t500_c.min(-5.5);
+            let mut ship = -(mucape * mixing_ratio * lapse_rate * t500_c * shear) / 42_000_000.0;
+
+            if mucape < 1_300.0 {
+                ship *= mucape / 1_300.0;
+            }
+            if lapse_rate < 5.8 {
+                ship *= lapse_rate / 5.8;
+            }
+            if freezing_level < 2_400.0 {
+                ship *= freezing_level / 2_400.0;
+            }
+
+            if ship.is_finite() {
+                ship.max(0.0)
             } else {
-                ship
+                0.0
             }
         })
         .collect()
@@ -1651,6 +1690,54 @@ mod tests {
         for (actual, expected) in out.into_iter().zip(expected) {
             assert_close(actual, expected);
         }
+    }
+
+    #[test]
+    fn exported_ship_helper_matches_nominal_sharppy_reference() {
+        let out = significant_hail_parameter(
+            &[2_000.0],
+            &[20.0],
+            &[-15.0],
+            &[7.0],
+            &[12.0],
+            &[3_000.0],
+            1,
+            1,
+        );
+
+        assert_close(out[0], 1.2);
+    }
+
+    #[test]
+    fn exported_ship_helper_applies_sharppy_term_bounds() {
+        let out = significant_hail_parameter(
+            &[2_000.0],
+            &[50.0],
+            &[-2.0],
+            &[7.0],
+            &[5.0],
+            &[3_000.0],
+            1,
+            1,
+        );
+
+        assert_close(out[0], 0.5445);
+    }
+
+    #[test]
+    fn exported_ship_helper_applies_all_conditional_corrections() {
+        let out = significant_hail_parameter(
+            &[650.0],
+            &[20.0],
+            &[-10.0],
+            &[2.9],
+            &[12.0],
+            &[1_200.0],
+            1,
+            1,
+        );
+
+        assert_close(out[0], 0.013_464_285_714_285_7);
     }
 
     #[test]
