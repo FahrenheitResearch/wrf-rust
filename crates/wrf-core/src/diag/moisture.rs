@@ -28,11 +28,11 @@ pub fn compute_rh2m(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<
         .zip(q2.iter())
         .zip(psfc.iter())
         .map(|((t_k, q), p_pa)| {
-            let t_c = t_k - 273.15;
-            let p_hpa = p_pa / 100.0;
-            let e = q * p_hpa / (0.622 + q);
-            let es = 6.112 * (17.67 * t_c / (t_c + 243.5)).exp();
-            (e / es * 100.0).clamp(0.0, 100.0)
+            crate::diag::thermo::wrf_relative_humidity_from_mixing_ratio(
+                *q,
+                *p_pa / 100.0,
+                *t_k - 273.15,
+            )
         })
         .collect())
 }
