@@ -152,12 +152,21 @@ pub fn interp_linear(x: f64, x1: f64, x2: f64, y1: f64, y2: f64) -> f64 {
     y1 + (x - x1) * (y2 - y1) / (x2 - x1)
 }
 
-/// Interpolate height at a target pressure from pressure and height profiles
-/// (both in decreasing pressure order, i.e. surface first).
+/// Interpolate height in log-pressure coordinates.
+///
+/// Profiles are in decreasing pressure order (surface first), matching
+/// SHARPpy's `interp.hght` convention.
+/// Reference: <https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/interp.py#L34-L54>
 pub fn get_height_at_pres(target_p: f64, p_prof: &[f64], h_prof: &[f64]) -> f64 {
     for i in 0..p_prof.len() - 1 {
         if p_prof[i] >= target_p && target_p >= p_prof[i + 1] {
-            return interp_linear(target_p, p_prof[i], p_prof[i + 1], h_prof[i], h_prof[i + 1]);
+            return interp_linear(
+                target_p.ln(),
+                p_prof[i].ln(),
+                p_prof[i + 1].ln(),
+                h_prof[i],
+                h_prof[i + 1],
+            );
         }
     }
     // Bounds check
@@ -946,8 +955,8 @@ pub fn el(p_profile: &[f64], t_profile: &[f64], td_profile: &[f64]) -> Option<(f
 #[cfg(test)]
 mod tests {
     use super::{
-        cape_cin_core, drylift, get_env_at_pres, mixratio, parcel_virtual_temperature, satlift,
-        virtual_temp, wobf, WrfEnergyTrace, ROCP, ZEROCNK,
+        cape_cin_core, drylift, get_env_at_pres, get_height_at_pres, mixratio,
+        parcel_virtual_temperature, satlift, virtual_temp, wobf, WrfEnergyTrace, ROCP, ZEROCNK,
     };
 
     const PRESSURE: [f64; 14] = [
@@ -987,6 +996,20 @@ mod tests {
 
     fn surface_cape(temperature: &[f64], top_m: Option<f64>) -> (f64, f64, f64, f64) {
         parcel_cape(temperature, "sb", top_m)
+    }
+
+    #[test]
+    fn height_interpolation_is_exact_for_an_exponential_pressure_profile() {
+        const SCALE_HEIGHT_M: f64 = 8_000.0;
+        let pressure = [1_000.0_f64, 900.0, 800.0];
+        let height = pressure.map(|p| SCALE_HEIGHT_M * (1_000.0 / p).ln());
+        let expected = SCALE_HEIGHT_M * (1_000.0 / 950.0_f64).ln();
+
+        let actual = get_height_at_pres(950.0, &pressure, &height);
+
+        assert!((actual - expected).abs() < 1.0e-10);
+        assert_eq!(get_height_at_pres(1_050.0, &pressure, &height), height[0]);
+        assert_eq!(get_height_at_pres(750.0, &pressure, &height), height[2]);
     }
 
     #[test]
