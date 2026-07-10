@@ -477,14 +477,13 @@ fn tehi_from_components(
     let mut out = Vec::with_capacity(n);
 
     for i in 0..n {
-        let mut ml3cape_term = if ml3cape[i] > 300.0 {
+        let ml3cape_term = if mlcape[i] > 1500.0 {
+            1.0
+        } else if ml3cape[i] > 300.0 {
             1.5
         } else {
             ml3cape[i] / 200.0
         };
-        if mlcape[i] > 1500.0 {
-            ml3cape_term = ml3cape_term.max(1.0);
-        }
 
         let tehi =
             ((srh1[i] * mlcape[i]) / 160000.0) * ml3cape_term * fixed_layer_shear_term(shear6[i]);
@@ -671,6 +670,15 @@ pub fn compute_ecape_ehi(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult
 /// - the 6BWD term is set to 0.0 for 6BWD < 12.5 m/s
 /// - the entire index is set to 0.0 if mlLCL > 1700 m AGL,
 ///   mlCIN < -100 J/kg, sbCIN < -200 J/kg, or TEHI < 0
+///
+/// Interpretation note:
+/// The current official SPC help page says the mlCAPE3 term is "set to 1.0"
+/// above the total-mlCAPE threshold. This is implemented as an assignment,
+/// not as a lower bound. The science audit found no public archival algorithm
+/// or paper that documents a different interpretation, so this implementation
+/// follows the official page literally.
+///
+/// Reference: <https://www.spc.noaa.gov/exper/mesoanalysis/help/help_tehi.html>
 ///
 /// Naming note:
 /// On the SPC mesoanalysis page, `tehi` is Tornadic 0-1 km EHI.
@@ -1377,18 +1385,37 @@ mod tests {
     }
 
     #[test]
-    fn tehi_uses_mlcape3_floor_when_total_mlcape_is_large() {
+    fn tehi_sets_ml3cape_term_to_one_only_above_mlcape_threshold() {
         let tehi = tehi_from_components(
-            &[160.0],
-            &[1600.0],
-            &[50.0],
-            &[20.0],
-            &[1000.0],
-            &[-50.0],
-            &[-50.0],
+            &[160.0; 2],
+            &[1499.0, 1501.0],
+            &[100.0; 2],
+            &[20.0; 2],
+            &[1000.0; 2],
+            &[-50.0; 2],
+            &[-50.0; 2],
         );
 
-        assert_close(tehi[0], 1.6);
+        assert_close(tehi[0], 0.7495);
+        assert_close(tehi[1], 1.501);
+    }
+
+    #[test]
+    fn tehi_high_ml3cape_cap_is_overridden_above_mlcape_threshold() {
+        let tehi = tehi_from_components(
+            &[160.0; 2],
+            &[1500.0, 1600.0],
+            &[400.0; 2],
+            &[20.0; 2],
+            &[1000.0; 2],
+            &[-50.0; 2],
+            &[-50.0; 2],
+        );
+
+        assert_close(tehi[0], 2.25);
+        // The literal 1.0 assignment yields 1.6, not the 2.4 that a 1.0
+        // lower-bound interpretation would retain from the 1.5 cap.
+        assert_close(tehi[1], 1.6);
     }
 
     #[test]
