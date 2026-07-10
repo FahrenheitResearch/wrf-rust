@@ -280,21 +280,30 @@ pub fn compute_stp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
 /// Uses MIXED-LAYER parcel for CAPE, LCL, and CIN.
 /// Uses effective inflow layer SRH and effective bulk wind difference (EBWD).
 /// Includes CIN term: (200 + mlCIN) / 150.
+/// The parameter is zero when the effective inflow layer is elevated above the
+/// surface, following the SPC operational definition.
 ///
 /// STP_eff = (mlCAPE/1500) * ((2000-mlLCL)/1000) * (ESRH/150) * (EBWD/20) * ((200+mlCIN)/150)
 ///
 /// Effective SRH uses earth-rotated winds with 10m prepend via compute_effective_srh.
+/// Reference: <https://www.spc.noaa.gov/exper/mesoanalysis/help/help_stpc.html>
 pub fn compute_stp_effective(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let (mlcape, mlcin, lcl, _) =
         crate::diag::cape::compute_cape_fields(f, t, "ml", None, opts.lake_interp)?;
+
+    let effective_layers = effective_inflow_layer_grid(f, t, opts)?;
 
     // Effective-layer SRH via canonical path (earth-rotated winds + 10m prepend)
     let eff_srh = crate::diag::srh::compute_effective_srh(f, t, opts)?;
     let ebwd = compute_effective_bulk_wind_difference(f, t, opts)?;
 
-    Ok(stp_eff_from_components(
-        &mlcape, &lcl, &mlcin, &eff_srh, &ebwd,
-    ))
+    let mut stp = stp_eff_from_components(&mlcape, &lcl, &mlcin, &eff_srh, &ebwd);
+    for (ij, value) in stp.iter_mut().enumerate() {
+        let effective_base_idx = effective_layers.layer(ij).map(|layer| layer.base_idx);
+        *value = effective_stp_surface_gate(*value, effective_base_idx);
+    }
+
+    Ok(stp)
 }
 
 /// Generic STP dispatcher: uses opts.layer_type to choose fixed or effective.
@@ -374,6 +383,16 @@ fn stp_eff_from_components(
             cape_term * lcl_term * srh_term * shear_term * cin_term
         })
         .collect()
+}
+
+/// The effective-layer profile is augmented with the 2 m surface parcel at
+/// index zero. Any higher base index therefore identifies elevated inflow.
+fn effective_stp_surface_gate(stp: f64, effective_base_idx: Option<usize>) -> f64 {
+    if effective_base_idx == Some(0) {
+        stp
+    } else {
+        0.0
+    }
 }
 
 fn vtp_mod_from_components(
@@ -1252,6 +1271,26 @@ mod tests {
         assert_close(stp[1], 1.0);
         assert_close(stp[2], 0.0);
         assert_close(stp[3], 1.5);
+    }
+
+    #[test]
+    fn effective_stp_is_zero_for_an_elevated_inflow_base() {
+        let ungated = stp_eff_from_components(
+            &[1500.0; 2],
+            &[1000.0; 2],
+            &[-50.0; 2],
+            &[150.0; 2],
+            &[20.0; 2],
+        );
+
+        let surface_based = effective_stp_surface_gate(ungated[0], Some(0));
+        let elevated = effective_stp_surface_gate(ungated[1], Some(1));
+
+        assert_close(ungated[0], 1.0);
+        assert_close(surface_based, 1.0);
+        // Identical ingredients with an elevated base are reduced from 1.0 to
+        // 0.0: a 100% magnitude reduction required by the SPC definition.
+        assert_close(elevated, 0.0);
     }
 
     #[test]
