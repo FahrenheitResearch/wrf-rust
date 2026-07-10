@@ -719,7 +719,21 @@ pub fn compute_tts(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
     ))
 }
 
-/// Modified Violent Tornado Parameter (dimensionless). `[ny, nx]`
+/// Repository-specific Modified Violent Tornado Parameter (dimensionless).
+/// `[ny, nx]`
+///
+/// # Identity
+///
+/// This is **not** the Violent Tornado Parameter (VTP) published by Hampshire
+/// et al. (2018) or the VTP currently described by SPC. Its canonical
+/// diagnostic name is intentionally `vtp_mod`; the distinct name and the
+/// numerical behavior below are preserved for compatibility.
+///
+/// The published VTP is:
+///
+/// `VTP = (MLCAPE/1500) * (ESRH/150) * (EBWD/20) * ((2000-MLLCL)/1000) * ((200+MLCIN)/150) * (ML3CAPE/50) * (LR_0_3KM/6.5)`
+///
+/// This repository's modified parameter is:
 ///
 /// VTP_mod = P1 * P2
 ///
@@ -765,10 +779,43 @@ pub fn compute_tts(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
 /// - LR700_500: 700-500 mb lapse rate in degC/km, with positive values
 ///   indicating decreasing temperature with height
 ///
+/// # Published versus modified factors
+///
+/// The paper and current SPC page share the MLCIN term, including its
+/// -200/-50 J/kg bounds, with this modified product. The paper also shares the
+/// ML3CAPE/50 term capped at 2.0. The current SPC prose instead literally sets
+/// the **lapse-rate** term to 2.0 when ML3CAPE exceeds 100 J/kg, leaving the
+/// ML3CAPE/50 term itself uncapped. All three definitions use MLCAPE, ESRH,
+/// EBWD, and MLLCL, but this modified version changes their constants/bounds:
+///
+/// - MLCAPE uses 1700 rather than the published 1500 J/kg normalization.
+/// - ESRH uses 250 rather than 150 m^2/s^2.
+/// - EBWD uses a 30 m/s normalization, is zero through 20 m/s, and reaches
+///   its 1.5 cap at 45 m/s. Published/current SPC VTP uses 20 m/s and reaches
+///   the 1.5 cap above 30 m/s; the paper zeros EBWD below 12 m/s, while the
+///   current SPC page uses 12.5 m/s.
+/// - MLLCL uses `(1750-MLLCL)/750`, with 750/1750 m bounds, rather than
+///   `(2000-MLLCL)/1000`, with 1000/2000 m bounds.
+/// - The published 0-3 km lapse-rate factor `LR_0_3KM/6.5` is replaced by a
+///   700-500 mb lapse-rate transform, `(LR700_500-4.5)/2`, bounded to 0-2.
+/// - Current SPC VTP is zero for an elevated effective-inflow base; this
+///   repository-specific modified parameter has no such gate.
+///
 /// Source ambiguity note:
+/// The current SPC HTML contradicts the paper about the 3CAPE cap: Hampshire
+/// et al. cap the 3CAPE factor at 2, while SPC's prose sets the 0-3-km
+/// lapse-rate factor to 2 when 3CAPE exceeds 100 J/kg. Tests encode both
+/// readings separately; `vtp_mod` silently adopts neither one.
+///
 /// The source note mentions `MLLR > 8.5` for the lapse-rate cap, but this
 /// repo has no distinct `MLLR` field. This implementation therefore applies
 /// that cap to the same lapse-rate term used in the formula, `LR700_500`.
+///
+/// References:
+/// - Hampshire, N. L., R. M. Mosier, T. M. Ryan, and D. E. Cavanaugh, 2018:
+///   [Relationship of Low-Level Instability and Tornado Damage Rating Based on
+///   Observed Soundings](https://doi.org/10.15191/nwajom.2018.0601).
+/// - [Current SPC VTP help](https://www.spc.noaa.gov/exper/mesoanalysis/help/help_vtp.html).
 pub fn compute_vtp_mod(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let mut ml_opts = opts.clone();
     ml_opts.parcel_type = Some("ml".into());
@@ -1199,6 +1246,96 @@ mod tests {
         );
     }
 
+    fn vtp_mllcl_term(mllcl: f64) -> f64 {
+        if mllcl < 1000.0 {
+            1.0
+        } else if mllcl > 2000.0 {
+            0.0
+        } else {
+            (2000.0 - mllcl) / 1000.0
+        }
+    }
+
+    fn vtp_mlcin_term(mlcin: f64) -> f64 {
+        if mlcin < -200.0 {
+            0.0
+        } else if mlcin > -50.0 {
+            1.0
+        } else {
+            (200.0 + mlcin) / 150.0
+        }
+    }
+
+    /// Hampshire et al. (2018) VTP scalar reference. The paper inherits the
+    /// STP term bounds, zeros EBWD below 12 m/s, and caps the 3CAPE factor at
+    /// 2. It does not state the later SPC elevated-inflow gate.
+    /// Reference: https://doi.org/10.15191/nwajom.2018.0601
+    #[allow(clippy::too_many_arguments)]
+    fn published_vtp_reference(
+        mlcape: f64,
+        esrh: f64,
+        ebwd: f64,
+        mllcl: f64,
+        mlcin: f64,
+        ml3cape: f64,
+        lapse_rate_0_3km: f64,
+    ) -> f64 {
+        let ebwd_term = if ebwd < 12.0 {
+            0.0
+        } else {
+            (ebwd / 20.0).min(1.5)
+        };
+        let ml3cape_term = (ml3cape / 50.0).min(2.0);
+
+        (mlcape / 1500.0)
+            * (esrh / 150.0)
+            * ebwd_term
+            * vtp_mllcl_term(mllcl)
+            * vtp_mlcin_term(mlcin)
+            * ml3cape_term
+            * (lapse_rate_0_3km / 6.5)
+    }
+
+    /// Literal current-SPC VTP scalar reference. Unlike the paper, the HTML
+    /// zeros EBWD below 12.5 m/s, adds the elevated-inflow gate, and says to
+    /// set the *lapse-rate* term to 2 when 3CAPE exceeds 100 J/kg. This oracle
+    /// preserves that wording instead of silently correcting a possible typo.
+    /// Reference: https://www.spc.noaa.gov/exper/mesoanalysis/help/help_vtp.html
+    #[allow(clippy::too_many_arguments)]
+    fn current_spc_vtp_reference(
+        mlcape: f64,
+        esrh: f64,
+        ebwd: f64,
+        mllcl: f64,
+        mlcin: f64,
+        ml3cape: f64,
+        lapse_rate_0_3km: f64,
+        effective_inflow_base_at_surface: bool,
+    ) -> f64 {
+        if !effective_inflow_base_at_surface {
+            return 0.0;
+        }
+
+        let ebwd_term = if ebwd < 12.5 {
+            0.0
+        } else {
+            (ebwd / 20.0).min(1.5)
+        };
+        let lapse_rate_term = if ml3cape > 100.0 {
+            2.0
+        } else {
+            lapse_rate_0_3km / 6.5
+        };
+
+        (mlcape / 1500.0)
+            * (esrh / 150.0)
+            * ebwd_term
+            * vtp_mllcl_term(mllcl)
+            * vtp_mlcin_term(mlcin)
+            * (ml3cape / 50.0)
+            * lapse_rate_term
+    }
+
     #[test]
     fn ship_spc_2014_matches_nominal_reference_scalar() {
         let ship = ship_spc_2014_from_components(2_000.0, 12.0, 7.0, -15.0, 20.0, 3_000.0);
@@ -1485,8 +1622,8 @@ mod tests {
     }
 
     #[test]
-    fn vtp_mod_matches_in_range_formula() {
-        let vtp = vtp_mod_from_components(
+    fn vtp_mod_is_distinct_from_published_vtp_for_an_illustrative_profile() {
+        let modified = vtp_mod_from_components(
             &[1700.0],
             &[250.0],
             &[30.0],
@@ -1496,7 +1633,63 @@ mod tests {
             &[6.5],
         );
 
-        assert_close(vtp[0], 2.0 / 3.0);
+        // Use the same numeric lapse rate for the different layers so both
+        // lapse multipliers are one and the changed constants stay visible.
+        let published = published_vtp_reference(1700.0, 250.0, 30.0, 1000.0, -100.0, 50.0, 6.5);
+
+        assert_close(modified[0], 2.0 / 3.0);
+        assert_close(published, 17.0 / 9.0);
+    }
+
+    #[test]
+    fn published_vtp_reference_pins_paper_bounds_and_layers() {
+        let reference = |ebwd, mllcl, mlcin, ml3cape, lapse_rate_0_3km| {
+            published_vtp_reference(1500.0, 150.0, ebwd, mllcl, mlcin, ml3cape, lapse_rate_0_3km)
+        };
+
+        // Nominal value and the paper's EBWD zero/cap behavior.
+        assert_close(reference(20.0, 1000.0, -50.0, 50.0, 6.5), 1.0);
+        assert_close(reference(11.9, 1000.0, -50.0, 50.0, 6.5), 0.0);
+        assert_close(reference(31.0, 1000.0, -50.0, 50.0, 6.5), 1.5);
+
+        // Published MLLCL and MLCIN term bounds.
+        assert_close(reference(20.0, 900.0, -50.0, 50.0, 6.5), 1.0);
+        assert_close(reference(20.0, 1500.0, -50.0, 50.0, 6.5), 0.5);
+        assert_close(reference(20.0, 2100.0, -50.0, 50.0, 6.5), 0.0);
+        assert_close(reference(20.0, 1000.0, -201.0, 50.0, 6.5), 0.0);
+        assert_close(reference(20.0, 1000.0, -100.0, 50.0, 6.5), 2.0 / 3.0);
+        assert_close(reference(20.0, 1000.0, -49.0, 50.0, 6.5), 1.0);
+
+        // The paper caps 3CAPE itself and keeps the 0-3-km lapse-rate term.
+        assert_close(reference(20.0, 1000.0, -50.0, 25.0, 6.5), 0.5);
+        assert_close(reference(20.0, 1000.0, -50.0, 150.0, 6.5), 2.0);
+        assert_close(reference(20.0, 1000.0, -50.0, 50.0, 3.25), 0.5);
+    }
+
+    #[test]
+    fn current_spc_vtp_reference_pins_literal_html_rules() {
+        let reference = |ebwd, ml3cape, lapse_rate_0_3km, surface_based| {
+            current_spc_vtp_reference(
+                1500.0,
+                150.0,
+                ebwd,
+                1000.0,
+                -50.0,
+                ml3cape,
+                lapse_rate_0_3km,
+                surface_based,
+            )
+        };
+
+        assert_close(reference(20.0, 50.0, 6.5, true), 1.0);
+        assert_close(reference(12.4, 50.0, 6.5, true), 0.0);
+        assert_close(reference(31.0, 50.0, 6.5, true), 1.5);
+
+        // At exactly 100 J/kg, the normal lapse-rate term remains. Above 100,
+        // SPC's literal prose sets that term to 2 and does not cap 3CAPE.
+        assert_close(reference(20.0, 100.0, 3.25, true), 1.0);
+        assert_close(reference(20.0, 150.0, 3.25, true), 6.0);
+        assert_close(reference(20.0, 50.0, 6.5, false), 0.0);
     }
 
     #[test]
