@@ -7,9 +7,10 @@ use rayon::prelude::*;
 
 use crate::compute::ComputeOpts;
 use crate::error::WrfResult;
-use crate::file::WrfFile;
+use crate::file::{SharedField, WrfFile};
 
 const CAPE_STACK_FIELDS: usize = 4;
+const EFFECTIVE_LAYER_STACK_FIELDS: usize = 6;
 
 fn cape_cache_key(parcel_type: &str, top_m: Option<f64>, lake_interp: Option<f64>) -> String {
     let parcel_type = parcel_type.trim().to_ascii_lowercase();
@@ -51,7 +52,7 @@ fn unpack_cape_stack(
 
 /// Helper: extract the 3-D + 2-D fields needed for CAPE, call compute_cape_cin.
 /// Returns (cape_2d, cin_2d, lcl_2d, lfc_2d).
-fn compute_cape_fields(
+pub(crate) fn compute_cape_fields(
     f: &WrfFile,
     t: usize,
     parcel_type: &str,
@@ -114,10 +115,10 @@ fn compute_cape_fields(
     let mut lcl = vec![0.0f64; nxy];
     let mut lfc = vec![0.0f64; nxy];
 
-    cape.iter_mut()
-        .zip(cin.iter_mut())
-        .zip(lcl.iter_mut())
-        .zip(lfc.iter_mut())
+    cape.par_iter_mut()
+        .zip(cin.par_iter_mut())
+        .zip(lcl.par_iter_mut())
+        .zip(lfc.par_iter_mut())
         .enumerate()
         .for_each(|(ij, (((cape_v, cin_v), lcl_v), lfc_v))| {
             // Extract column profiles -- pass Pa pressure to cape_cin_core
@@ -189,6 +190,46 @@ pub(crate) struct EffectiveLayerColumn {
     pub top_h: f64,
     pub mu_cape: f64,
     pub mu_el_h: Option<f64>,
+}
+
+#[derive(Clone)]
+pub(crate) struct EffectiveLayerGrid {
+    stacked: SharedField,
+    nxy: usize,
+}
+
+impl EffectiveLayerGrid {
+    fn from_stacked(stacked: SharedField, nxy: usize) -> Option<Self> {
+        (stacked.len() == EFFECTIVE_LAYER_STACK_FIELDS * nxy).then_some(Self { stacked, nxy })
+    }
+
+    pub(crate) fn layer(&self, ij: usize) -> Option<EffectiveLayerColumn> {
+        if ij >= self.nxy {
+            return None;
+        }
+
+        let offset = ij * EFFECTIVE_LAYER_STACK_FIELDS;
+        let base_idx = self.stacked[offset];
+        if !base_idx.is_finite() || base_idx < 0.0 {
+            return None;
+        }
+
+        Some(EffectiveLayerColumn {
+            base_idx: base_idx as usize,
+            base_h: self.stacked[offset + 1],
+            top_h: self.stacked[offset + 2],
+            mu_cape: self.stacked[offset + 3],
+            mu_el_h: (self.stacked[offset + 4] != 0.0).then_some(self.stacked[offset + 5]),
+        })
+    }
+}
+
+fn effective_layer_cache_key(t: usize, lake_interp: Option<f64>) -> String {
+    let lake_interp = match lake_interp {
+        Some(value) if value > 0.0 => format!("{:016x}", value.to_bits()),
+        _ => "none".to_string(),
+    };
+    format!("effective_layer_stack_{t}_{lake_interp}")
 }
 
 pub(crate) fn build_surface_augmented_thermo_column(
@@ -299,6 +340,55 @@ pub(crate) fn find_effective_inflow_layer(
     })
 }
 
+pub(crate) fn effective_inflow_layer_grid(
+    f: &WrfFile,
+    t: usize,
+    opts: &ComputeOpts,
+) -> WrfResult<EffectiveLayerGrid> {
+    let nxy = f.nx * f.ny;
+    let cache_key = effective_layer_cache_key(t, opts.lake_interp);
+    if let Some(stacked) = f.cached_field(&cache_key) {
+        if let Some(grid) = EffectiveLayerGrid::from_stacked(stacked, nxy) {
+            return Ok(grid);
+        }
+    }
+
+    let pres_hpa = f.pressure_hpa(t)?;
+    let tc = f.temperature_c(t)?;
+    let qv = f.qvapor(t)?;
+    let h_agl = f.height_agl(t)?;
+    let psfc = f.psfc(t)?;
+    let t2 = f.t2_for_opts(t, opts)?;
+    let q2 = f.q2_for_opts(t, opts)?;
+    let nz = f.nz;
+
+    let mut stacked = vec![f64::NAN; EFFECTIVE_LAYER_STACK_FIELDS * nxy];
+    stacked
+        .par_chunks_mut(EFFECTIVE_LAYER_STACK_FIELDS)
+        .enumerate()
+        .for_each(|(ij, values)| {
+            let (p_prof, t_prof, td_prof, h_prof) = build_surface_augmented_thermo_column(
+                &pres_hpa, &tc, &qv, &h_agl, psfc[ij], t2[ij], q2[ij], nz, nxy, ij,
+            );
+            if let Some(layer) = find_effective_inflow_layer(&p_prof, &t_prof, &td_prof, &h_prof) {
+                values[0] = layer.base_idx as f64;
+                values[1] = layer.base_h;
+                values[2] = layer.top_h;
+                values[3] = layer.mu_cape;
+                if let Some(mu_el_h) = layer.mu_el_h {
+                    values[4] = 1.0;
+                    values[5] = mu_el_h;
+                } else {
+                    values[4] = 0.0;
+                }
+            }
+        });
+
+    let stacked = f.store_cached_field(cache_key, stacked);
+    Ok(EffectiveLayerGrid::from_stacked(stacked, nxy)
+        .expect("effective-layer cache has the expected shape"))
+}
+
 // ── Public compute functions ──
 
 pub fn compute_sbcape(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
@@ -360,7 +450,7 @@ pub fn compute_el(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f6
     let pt = resolve_parcel_type(opts, "sb");
 
     let mut el = vec![0.0f64; nxy];
-    el.iter_mut().enumerate().for_each(|(ij, el_v)| {
+    el.par_iter_mut().enumerate().for_each(|(ij, el_v)| {
         let mut p_prof = Vec::with_capacity(nz);
         let mut t_prof = Vec::with_capacity(nz);
         let mut td_prof = Vec::with_capacity(nz);
@@ -715,41 +805,15 @@ pub fn compute_effective_inflow_layer(
     t: usize,
     _opts: &ComputeOpts,
 ) -> WrfResult<Vec<f64>> {
-    let pres_hpa = f.pressure_hpa(t)?;
-    let tc = f.temperature_c(t)?;
-    let qv = f.qvapor(t)?;
-    let h_agl = f.height_agl(t)?;
-    let psfc = f.psfc(t)?;
-    let t2 = f.t2_for_opts(t, _opts)?;
-    let q2 = f.q2_for_opts(t, _opts)?;
-
-    let nx = f.nx;
-    let ny = f.ny;
-    let nz = f.nz;
-    let nxy = nx * ny;
-    let layers: Vec<(f64, f64)> = (0..nxy)
-        .into_par_iter()
-        .map(|ij| {
-            let (p_prof, t_prof, td_prof, h_prof) = build_surface_augmented_thermo_column(
-                &pres_hpa, &tc, &qv, &h_agl, psfc[ij], t2[ij], q2[ij], nz, nxy, ij,
-            );
-
-            find_effective_inflow_layer(&p_prof, &t_prof, &td_prof, &h_prof)
-                .map(|layer| (layer.base_h, layer.top_h))
-                .unwrap_or((0.0, 0.0))
-        })
-        .collect();
-
-    let mut base_plane = Vec::with_capacity(nxy);
-    let mut top_plane = Vec::with_capacity(nxy);
-    for (base_h, top_h) in layers {
-        base_plane.push(base_h);
-        top_plane.push(top_h);
+    let nxy = f.nx * f.ny;
+    let layers = effective_inflow_layer_grid(f, t, _opts)?;
+    let mut result = vec![0.0; 2 * nxy];
+    for ij in 0..nxy {
+        if let Some(layer) = layers.layer(ij) {
+            result[ij] = layer.base_h;
+            result[nxy + ij] = layer.top_h;
+        }
     }
-
-    // Concatenate: base plane then top plane
-    let mut result = base_plane;
-    result.extend(top_plane);
     Ok(result)
 }
 
@@ -765,28 +829,9 @@ pub fn compute_effective_inflow_cape(
     t: usize,
     _opts: &ComputeOpts,
 ) -> WrfResult<Vec<f64>> {
-    let pres_hpa = f.pressure_hpa(t)?;
-    let tc = f.temperature_c(t)?;
-    let qv = f.qvapor(t)?;
-    let h_agl = f.height_agl(t)?;
-    let psfc = f.psfc(t)?;
-    let t2 = f.t2_for_opts(t, _opts)?;
-    let q2 = f.q2_for_opts(t, _opts)?;
-
-    let nx = f.nx;
-    let ny = f.ny;
-    let nz = f.nz;
-    let nxy = nx * ny;
-    Ok((0..nxy)
-        .into_par_iter()
-        .map(|ij| {
-            let (p_prof, t_prof, td_prof, h_prof) = build_surface_augmented_thermo_column(
-                &pres_hpa, &tc, &qv, &h_agl, psfc[ij], t2[ij], q2[ij], nz, nxy, ij,
-            );
-            find_effective_inflow_layer(&p_prof, &t_prof, &td_prof, &h_prof)
-                .map(|layer| layer.mu_cape)
-                .unwrap_or(0.0)
-        })
+    let layers = effective_inflow_layer_grid(f, t, _opts)?;
+    Ok((0..f.nx * f.ny)
+        .map(|ij| layers.layer(ij).map(|layer| layer.mu_cape).unwrap_or(0.0))
         .collect())
 }
 
@@ -915,5 +960,48 @@ mod tests {
         let neg_key = cape_cache_key("sb", None, Some(-1.0));
         assert_eq!(none_key, zero_key);
         assert_eq!(none_key, neg_key);
+    }
+
+    #[test]
+    fn effective_layer_grid_round_trip_preserves_columns() {
+        let stacked = std::sync::Arc::<[f64]>::from(vec![
+            2.0,
+            400.0,
+            1_200.0,
+            1_500.0,
+            1.0,
+            9_000.0,
+            f64::NAN,
+            f64::NAN,
+            f64::NAN,
+            f64::NAN,
+            f64::NAN,
+            f64::NAN,
+        ]);
+        let grid = EffectiveLayerGrid::from_stacked(stacked, 2).unwrap();
+        let layer = grid.layer(0).unwrap();
+        assert_eq!(layer.base_idx, 2);
+        assert_eq!(layer.base_h, 400.0);
+        assert_eq!(layer.top_h, 1_200.0);
+        assert_eq!(layer.mu_cape, 1_500.0);
+        assert_eq!(layer.mu_el_h, Some(9_000.0));
+        assert!(grid.layer(1).is_none());
+        assert!(grid.layer(2).is_none());
+    }
+
+    #[test]
+    fn effective_layer_cache_key_tracks_time_and_lake_correction() {
+        assert_ne!(
+            effective_layer_cache_key(0, None),
+            effective_layer_cache_key(1, None)
+        );
+        assert_eq!(
+            effective_layer_cache_key(0, None),
+            effective_layer_cache_key(0, Some(0.0))
+        );
+        assert_ne!(
+            effective_layer_cache_key(0, None),
+            effective_layer_cache_key(0, Some(1_000.0))
+        );
     }
 }
