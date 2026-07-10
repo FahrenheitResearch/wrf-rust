@@ -1,0 +1,1601 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WRF Community Guide | wrf-rust</title>
+    <meta
+      name="description"
+      content="A practical WRF setup guide for weather-community users on Windows, WSL 2, Linux, ECMWF open data, GFS, HRRR, RAP, and real troubleshooting."
+    >
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    >
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="page">
+      <header class="hero">
+        <div class="hero-top">
+          <div class="brand">wrf-rust community guide</div>
+          <div class="stamp">Last verified: 2026-04-01</div>
+        </div>
+
+        <div class="hero-grid">
+          <div>
+            <div class="kicker">
+              <span class="chip">CPU-first</span>
+              <span class="chip">WSL 2 for Windows users</span>
+              <span class="chip">3 km severe-weather sweet spot</span>
+              <span class="chip">ECMWF / GFS / HRRR / RAP</span>
+            </div>
+
+            <h1>Get WRF running without burning a week on the wrong path.</h1>
+            <p>
+              This guide is written for weather-community users, especially people on
+              Windows with gaming-PC specs who want a practical convection-allowing
+              setup, good forcing options, realistic domain sizes, and a real escape
+              route when the model, WPS, or WSL starts acting hostile. You can follow
+              it manually from top to bottom or use the optional Codex skill as a
+              copilot.
+            </p>
+
+            <div class="button-row">
+              <button class="button primary" data-jump="#start">Start manually</button>
+              <button class="button primary" data-jump="#skill">Use Codex as copilot</button>
+              <button class="button secondary" data-jump="#preflight">Run preflight</button>
+              <button class="button secondary" data-jump="#wizard">Open starter wizard</button>
+              <button class="button secondary" data-jump="#troubleshooting">Troubleshoot now</button>
+            </div>
+          </div>
+
+          <div class="hero-callouts">
+            <div class="callout">
+              <h3>No AI required</h3>
+              <p>The manual path is first-class. Codex is optional and should speed up the same workflow, not replace it.</p>
+            </div>
+            <div class="callout">
+              <h3>Recommended first win</h3>
+              <p>Single-domain 3 km, CPU-first, around 200 to 250 grid points each direction, short sanity run, then scale up.</p>
+            </div>
+            <div class="callout">
+              <h3>Biggest beginner mistake</h3>
+              <p>Running WRF from <span class="mono">/mnt/c</span> and leaving WSL at its default half-RAM setting.</p>
+            </div>
+            <div class="callout">
+              <h3>Biggest hidden limiter</h3>
+              <p>Output files. A big domain can ruin your SSD faster than the compile ruins your mood.</p>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div class="layout">
+        <aside class="rail">
+          <h2>Guide Map</h2>
+          <nav>
+            <a href="#paths">Choose your path</a>
+            <a href="#start">Stable manual path</a>
+            <a href="#skill">Optional Codex skill</a>
+            <a href="#calculator">Hardware and WSL sizing</a>
+            <a href="#preflight">Preflight checker</a>
+            <a href="#wsl">Windows and WSL 2</a>
+            <a href="#build">Build WRF and WPS</a>
+            <a href="#wizard">Starter wizard</a>
+            <a href="#starter-files">Starter files</a>
+            <a href="#data">Initialization data</a>
+            <a href="#sizing">3 km domain sizing</a>
+            <a href="#run">Run order</a>
+            <a href="#budget">Output budgeting</a>
+            <a href="#troubleshooting">Troubleshooting tree</a>
+            <a href="#faq">FAQ</a>
+            <a href="#sources">Sources</a>
+          </nav>
+          <div class="rail-note">
+            This guide is intentionally opinionated. It is designed to work without AI,
+            and the Codex path is there to accelerate the same boring, stable workflow
+            instead of inventing a separate one.
+          </div>
+        </aside>
+
+        <main class="content">
+          <section class="section" id="paths">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Entry Point</p>
+                <h2>Choose your path</h2>
+              </div>
+            </div>
+            <p class="lede">
+              This guide is fully usable without AI. The manual route and the
+              Codex-assisted route both land on the same WSL, build, init-data,
+              run-order, and troubleshooting sections below.
+            </p>
+
+            <div class="grid-2">
+              <div class="card">
+                <h3>Do it manually</h3>
+                <p>
+                  Use the page itself as the workflow. Follow the stable first path,
+                  size WSL correctly, build CPU WRF first, choose your forcing, run a
+                  short sanity case, then branch into troubleshooting only if needed.
+                </p>
+                <ol class="checklist">
+                  <li>Best for users who want plain instructions and commands.</li>
+                  <li>Best for Discord handholding where you want everyone reading the same page.</li>
+                  <li>No Codex install, prompts, or AI dependency required.</li>
+                </ol>
+                <div class="button-row">
+                  <button class="button primary" data-jump="#start">Take the manual path</button>
+                </div>
+              </div>
+              <div class="card">
+                <h3>Use Codex as copilot</h3>
+                <p class="small">
+                  <span class="mono">skills/wrf-community-onboarding</span>
+                </p>
+                <p>
+                  Use this if you want Codex to walk a user through the same workflow,
+                  help size hardware, explain forcing choices, and branch through common
+                  WRF and WSL failure cases.
+                </p>
+                <pre class="shell"><code>mkdir -p ~/.codex/skills
+cp -R skills/wrf-community-onboarding ~/.codex/skills/</code></pre>
+                <p>
+                  After that, tell Codex to use the
+                  <span class="mono">wrf-community-onboarding</span> skill for WRF setup or
+                  troubleshooting help.
+                </p>
+                <div class="button-row">
+                  <button class="button primary" data-jump="#skill">Open the Codex path</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="start">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Manual Path</p>
+                <h2>If this is your first run, do this exact manual path</h2>
+              </div>
+            </div>
+            <ol class="checklist">
+              <li>If you are on Windows, install WSL 2 with Ubuntu and keep all work under <span class="mono">/home/&lt;user&gt;</span>.</li>
+              <li>Give WSL explicit RAM in <span class="mono">%UserProfile%\.wslconfig</span>. Do not trust the default.</li>
+              <li>Build CPU WRF first. Build WPS second.</li>
+              <li>Start with a single-domain <span class="mono">3 km</span> run around <span class="mono">200 to 250</span> grid points each direction.</li>
+              <li>Use ECMWF open data if you want the Euro path. Use GFS if you want the simplest public fallback.</li>
+              <li>Run a short sanity case before any large event simulation.</li>
+              <li>Validate the output with <span class="mono">wrf-rust</span> before scaling the domain, output frequency, or runtime.</li>
+              <li>Only after that should you try larger domains or inner nests.</li>
+            </ol>
+
+            <div class="path-grid">
+              <div class="card">
+                <h3>Why 3 km first</h3>
+                <p>
+                  It is the right compromise for severe-weather users who want convection
+                  allowed behavior without the brutal stability and storage cost of going
+                  straight to 1 km or finer.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Why CPU first</h3>
+                <p>
+                  A stable CPU baseline removes half the ambiguity from every later
+                  problem. If you skip that, every crash turns into a platform argument.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Why small first</h3>
+                <p>
+                  Domain ambition grows faster than confidence. A short working run teaches
+                  more than a giant dead run with three broken stages.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="skill">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Optional</p>
+                <h2>Use the Codex skill as a copilot, not a prerequisite</h2>
+              </div>
+            </div>
+            <p class="lede">
+              The repo includes a dedicated skill so Codex can guide users through WSL,
+              WRF/WPS setup, domain sizing, data-source choice, and failure triage
+              without re-deriving the whole workflow every time. It should reinforce the
+              manual path above, not replace it.
+            </p>
+
+            <div class="grid-2">
+              <div class="card">
+                <h3>What the skill covers</h3>
+                <p class="small">
+                  <span class="mono">skills/wrf-community-onboarding</span>
+                </p>
+                <p>
+                  It is self-contained and ships with reference files for Windows + WSL,
+                  hardware tiers, build order, init-data choices, and a branching
+                  troubleshooting guide.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Install the optional skill</h3>
+                <pre class="shell"><code>mkdir -p ~/.codex/skills
+cp -R skills/wrf-community-onboarding ~/.codex/skills/</code></pre>
+                <p>
+                  Tell Codex to use the
+                  <span class="mono">wrf-community-onboarding</span> skill when you want
+                  help with setup, sizing, data choice, or issue triage.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="calculator">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Sizing</p>
+                <h2>Hardware and WSL calculator</h2>
+              </div>
+            </div>
+            <div class="calc-panel">
+              <div class="calc-head">
+                <div>
+                  <h3>Estimate a sane first target</h3>
+                  <p class="small">
+                    This is a community recommendation layer on top of local WRF evidence.
+                    It is designed to keep Windows users out of the common "big domain, not
+                    enough headroom" trap.
+                  </p>
+                </div>
+              </div>
+
+              <div class="calc-controls">
+                <div>
+                  <div class="field-label">Host RAM in GB</div>
+                  <input id="ram-range" type="range" min="8" max="192" step="8" value="32">
+                </div>
+                <div>
+                  <div class="field-label">Exact value</div>
+                  <input id="ram-number" type="number" min="8" max="192" step="8" value="32">
+                </div>
+              </div>
+
+              <div class="calc-grid">
+                <div class="calc-result">
+                  <h4>WSL memory</h4>
+                  <p id="out-memory">24 GB</p>
+                </div>
+                <div class="calc-result">
+                  <h4>WSL processors</h4>
+                  <p id="out-processors">12 threads</p>
+                </div>
+                <div class="calc-result">
+                  <h4>WSL swap</h4>
+                  <p id="out-swap">16 GB</p>
+                </div>
+                <div class="calc-result">
+                  <h4>Default 3 km size</h4>
+                  <p id="out-default">220 to 300</p>
+                </div>
+              </div>
+
+              <div class="grid-2 wsl-config">
+                <div class="card">
+                  <h3>Good first target</h3>
+                  <p id="out-tone">
+                    Usable starter tier. Stay CPU-first and keep output intervals conservative.
+                  </p>
+                  <p><strong>Aggressive ceiling:</strong> <span id="out-aggressive">around 300</span></p>
+                </div>
+                <div class="card">
+                  <h3>Put this in <span class="mono">C:\Users\YOU\.wslconfig</span></h3>
+                  <p class="small">
+                    In File Explorer, click the address bar, type <span class="mono">%UserProfile%</span>,
+                    and press Enter. If the file does not exist yet, create a new text file,
+                    rename it to <span class="mono">.wslconfig</span>, and make sure it is not really
+                    <span class="mono">.wslconfig.txt</span>.
+                  </p>
+                  <pre class="shell" id="wsl-config-block"><code>[wsl2]
+memory=24GB
+processors=12
+swap=16GB</code></pre>
+                </div>
+              </div>
+
+              <div class="preset-head">
+                <div>
+                  <h3>Starter presets</h3>
+                  <p class="small">
+                    Click one to repopulate the calculator, the preflight checker,
+                    and the wizard below with a proven starting point.
+                  </p>
+                </div>
+                <p class="small" id="preset-summary">
+                  32 GB 3 km starter: the repo default for a short convection-allowing first run.
+                </p>
+              </div>
+
+              <div class="grid-3 preset-grid">
+                <button class="preset-card is-active" type="button" data-preset="learning-16">
+                  <span class="tag">16 GB</span>
+                  <strong>Learning preset</strong>
+                  <span>Small 3 km domain, short run, GFS fallback, fewer ways to hurt yourself.</span>
+                </button>
+                <button class="preset-card" type="button" data-preset="starter-32">
+                  <span class="tag">32 GB</span>
+                  <strong>3 km starter</strong>
+                  <span>The balanced default. ECMWF first, 200 x 200, short sanity run, manual-first.</span>
+                </button>
+                <button class="preset-card" type="button" data-preset="larger-64">
+                  <span class="tag">64 GB</span>
+                  <strong>Larger-domain preset</strong>
+                  <span>Broader 3 km single domain for users who already have real headroom.</span>
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="preflight">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Readiness</p>
+                <h2>Run the self-reported preflight before you burn time on a dead setup</h2>
+              </div>
+            </div>
+
+            <p class="lede">
+              This is intentionally honest. A GitHub Pages site cannot inspect your machine,
+              so this checker is questionnaire-driven. Treat it like a launch checklist:
+              answer it honestly, then fix the blockers it surfaces before you compile or stage data.
+            </p>
+
+            <div class="notice">
+              <p>
+                Expected first-time result: <strong>Build next</strong> or
+                <strong>Needs work</strong>. That is normal. The point is to find the
+                cheap fixes before WRF makes them expensive.
+              </p>
+            </div>
+
+            <div class="grid-2">
+              <div class="calc-panel">
+                <h3>Checklist inputs</h3>
+                <div class="form-grid">
+                  <label class="field">
+                    <span class="field-label">Platform</span>
+                    <select id="pf-platform">
+                      <option value="windows">Windows + WSL</option>
+                      <option value="linux">Linux</option>
+                    </select>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Free disk in GB</span>
+                    <input id="pf-disk" type="number" min="20" max="4000" step="10" value="200">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Workspace location</span>
+                    <select id="pf-workspace">
+                      <option value="linux-home">Linux filesystem under /home</option>
+                      <option value="windows-drive">Windows-mounted path under /mnt/c</option>
+                    </select>
+                  </label>
+
+                  <label class="field windows-only">
+                    <span class="field-label">WSL installed</span>
+                    <select id="pf-has-wsl">
+                      <option value="yes">Yes</option>
+                      <option value="no">No</option>
+                    </select>
+                  </label>
+
+                  <label class="field windows-only">
+                    <span class="field-label">WSL version</span>
+                    <select id="pf-wsl-version">
+                      <option value="2">WSL 2</option>
+                      <option value="1">WSL 1</option>
+                    </select>
+                  </label>
+
+                  <label class="field windows-only">
+                    <span class="field-label">Virtualization ready</span>
+                    <select id="pf-has-virt">
+                      <option value="yes">Yes</option>
+                      <option value="no">No</option>
+                    </select>
+                  </label>
+
+                  <label class="field windows-only">
+                    <span class="field-label">Custom .wslconfig applied</span>
+                    <select id="pf-wsl-config">
+                      <option value="yes">Yes</option>
+                      <option value="no">No</option>
+                    </select>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">WRF built</span>
+                    <select id="pf-has-wrf">
+                      <option value="no">No</option>
+                      <option value="yes">Yes</option>
+                    </select>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">WPS built</span>
+                    <select id="pf-has-wps">
+                      <option value="no">No</option>
+                      <option value="yes">Yes</option>
+                    </select>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">WPS geog downloaded</span>
+                    <select id="pf-has-geog">
+                      <option value="no">No</option>
+                      <option value="yes">Yes</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+
+              <div class="details-stack">
+                <div class="card">
+                  <div class="tag-row">
+                    <span class="tag status-tag status-warn" id="preflight-badge">Build next</span>
+                  </div>
+                  <h3>Readiness result</h3>
+                  <p id="preflight-summary">
+                    The platform looks sane enough. Finish the missing prep stages before you try a real case.
+                  </p>
+                </div>
+                <div class="status-grid" id="preflight-status-grid"></div>
+              </div>
+            </div>
+
+            <div class="grid-2">
+              <div class="card" id="preflight-config-card">
+                <div class="copy-head">
+                  <h3>Generated <span class="mono">.wslconfig</span></h3>
+                  <div class="button-row compact">
+                    <button class="button secondary" id="copy-wsl" type="button">Copy</button>
+                  </div>
+                </div>
+                <p class="small">
+                  Save it at <span class="mono">C:\Users\YOU\.wslconfig</span> or
+                  <span class="mono">%UserProfile%\.wslconfig</span>. If Windows hides file
+                  extensions, turn them on first so you do not accidentally create
+                  <span class="mono">.wslconfig.txt</span>.
+                </p>
+                <pre class="shell"><code id="preflight-wsl-config">[wsl2]
+memory=24GB
+processors=12
+swap=16GB</code></pre>
+              </div>
+              <div class="card">
+                <div class="copy-head">
+                  <h3>Discord help template</h3>
+                  <div class="button-row compact">
+                    <button class="button secondary" id="copy-support" type="button">Copy</button>
+                  </div>
+                </div>
+                <pre class="shell"><code id="support-template">OS: Windows + WSL 2
+Host RAM: 32 GB
+Free disk: 200 GB
+Workspace: /home/&lt;user&gt; Linux filesystem
+Source: ECMWF open data
+Target domain: 200 x 200 at 3 km
+WRF built: no
+WPS built: no
+WPS geog present: no
+Last successful step:
+Exact error:</code></pre>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="wsl">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Windows</p>
+                <h2>WSL 2 setup for weather-model users</h2>
+              </div>
+            </div>
+
+            <div class="notice">
+              <p>
+                Microsoft documents the current <span class="mono">wsl --install</span> flow
+                for Windows 11 and Windows 10 version 2004+ (build 19041+). For WRF work,
+                WSL 2 is the path you want.
+              </p>
+            </div>
+
+            <div class="grid-2">
+              <div class="card">
+                <h3>Admin PowerShell</h3>
+                <pre class="shell"><code>wsl --install -d Ubuntu
+wsl --update
+wsl --status
+wsl -l -v</code></pre>
+                <p>
+                  If installation stalls at <span class="mono">0.0%</span>, Microsoft also
+                  documents:
+                </p>
+                <pre class="shell"><code>wsl --install --web-download -d Ubuntu</code></pre>
+              </div>
+
+              <div class="card">
+                <h3>Do not build here</h3>
+                <pre class="shell"><code>/mnt/c/Users/you/wrf-work</code></pre>
+                <p>Build here instead:</p>
+                <pre class="shell"><code>/home/you/wrf-work</code></pre>
+                <p>
+                  Microsoft explicitly recommends keeping Linux-side project files in the
+                  Linux filesystem for the best performance.
+                </p>
+              </div>
+            </div>
+
+            <div class="grid-3">
+              <div class="card">
+                <h3>Where does <span class="mono">.wslconfig</span> go?</h3>
+                <p>
+                  It is a Windows-side file in your user profile, not inside Ubuntu.
+                  The normal path is <span class="mono">C:\Users\YOUR_NAME\.wslconfig</span>.
+                </p>
+                <p>
+                  Easiest way to get there: open File Explorer, click the address bar,
+                  type <span class="mono">%UserProfile%</span>, and press Enter.
+                </p>
+              </div>
+              <div class="card">
+                <h3>What if the file is missing?</h3>
+                <p>
+                  That is normal on a new machine. Create it yourself, then paste the
+                  config block from this page into it and save.
+                </p>
+                <pre class="shell"><code>notepad $env:UserProfile\.wslconfig</code></pre>
+              </div>
+              <div class="card">
+                <h3>Most common beginner mistake</h3>
+                <p>
+                  Windows creates <span class="mono">.wslconfig.txt</span> because file
+                  extensions were hidden. Turn on
+                  <strong>View &gt; Show &gt; File name extensions</strong> in File Explorer,
+                  then rename the file so it is exactly <span class="mono">.wslconfig</span>.
+                </p>
+              </div>
+            </div>
+
+            <div class="stats-grid">
+              <div class="stat">
+                <h3>Default WSL memory</h3>
+                <div class="stat-number">50%</div>
+                <p>WSL 2 defaults to about half your Windows RAM unless you override it.</p>
+              </div>
+              <div class="stat">
+                <h3>Default WSL swap</h3>
+                <div class="stat-number">25%</div>
+                <p>Swap defaults to about a quarter of host RAM, rounded up, which is not always enough for WRF prep + run spikes.</p>
+              </div>
+              <div class="stat">
+                <h3>Best file bridge</h3>
+                <div class="stat-number">\\wsl$</div>
+                <p>Use Windows Explorer through <span class="mono">\\wsl$</span> instead of building inside the Windows filesystem.</p>
+              </div>
+            </div>
+
+            <div class="grid-2">
+              <div class="card">
+                <h3>Fast BIOS / virtualization triage</h3>
+                <p>
+                  If you hit <span class="mono">0x80370102</span>, the first suspects are
+                  BIOS virtualization, Virtual Machine Platform, or hypervisor launch state.
+                </p>
+                <pre class="shell"><code>systeminfo.exe
+bcdedit /enum | findstr -i hypervisorlaunchtype</code></pre>
+              </div>
+              <div class="card">
+                <h3>When WSL refuses to behave</h3>
+                <p>
+                  If you see <span class="mono">0x80070003</span>, Microsoft documents that
+                  WSL must live on the system drive, usually <span class="mono">C:</span>.
+                  Also check that the distro storage is not compressed or encrypted on NTFS.
+                </p>
+              </div>
+            </div>
+
+            <div class="grid-2">
+              <div class="card">
+                <h3>Why did my <span class="mono">.wslconfig</span> change do nothing?</h3>
+                <p>
+                  Because WSL was never fully stopped. After editing
+                  <span class="mono">%UserProfile%\.wslconfig</span>, run
+                  <span class="mono">wsl --shutdown</span> and wait a few seconds before
+                  reopening Ubuntu.
+                </p>
+              </div>
+              <div class="card">
+                <h3>More Windows-side stuck points</h3>
+                <p>
+                  If you see <span class="mono">0x8007019e</span>, the WSL Windows feature
+                  itself is usually not enabled yet. If WSL has no internet, restart it first,
+                  then check Microsoft's DNS/firewall troubleshooting guidance.
+                </p>
+              </div>
+            </div>
+
+            <div class="details-stack">
+              <details class="branch">
+                <summary>I cannot find where to put the <span class="mono">.wslconfig</span> file</summary>
+                <div class="branch-body">
+                  <h4>Fastest path</h4>
+                  <ol class="checklist">
+                    <li>Open File Explorer.</li>
+                    <li>Click the address bar.</li>
+                    <li>Type <span class="mono">%UserProfile%</span> and press Enter.</li>
+                    <li>Look for a file named <span class="mono">.wslconfig</span>.</li>
+                    <li>If it is not there, create it yourself.</li>
+                  </ol>
+                  <h4>One-command shortcut</h4>
+                  <pre class="shell"><code>notepad $env:UserProfile\.wslconfig</code></pre>
+                  <p>
+                    If the file does not exist, Notepad will offer to create it.
+                  </p>
+                </div>
+              </details>
+
+              <details class="branch">
+                <summary>I saved it, but Windows made a <span class="mono">.txt</span> file</summary>
+                <div class="branch-body">
+                  <h4>Likely root cause</h4>
+                  <p>
+                    File extensions were hidden, so the real filename became
+                    <span class="mono">.wslconfig.txt</span>.
+                  </p>
+                  <h4>Fastest actions</h4>
+                  <ul class="checklist">
+                    <li>In File Explorer, turn on <strong>View &gt; Show &gt; File name extensions</strong>.</li>
+                    <li>Rename the file so it is exactly <span class="mono">.wslconfig</span>.</li>
+                    <li>Reopen it and confirm the contents still look correct.</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="branch">
+                <summary>I saved the file, but WSL still uses the old memory limit</summary>
+                <div class="branch-body">
+                  <h4>Likely root cause</h4>
+                  <p>
+                    WSL was not fully stopped, so the new config never got applied.
+                  </p>
+                  <h4>Fastest actions</h4>
+                  <pre class="shell"><code>wsl --shutdown</code></pre>
+                  <p>
+                    Wait a few seconds, then reopen Ubuntu and continue. If it still does not
+                    apply, confirm the filename is really <span class="mono">.wslconfig</span>
+                    and that it lives in <span class="mono">%UserProfile%</span>.
+                  </p>
+                </div>
+              </details>
+            </div>
+          </section>
+
+          <section class="section" id="build">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Build</p>
+                <h2>Build WRF and WPS the low-drama way</h2>
+              </div>
+            </div>
+
+            <div class="notice strong">
+              <p>
+                Stable recommendation: build CPU WRF first, then WPS, then run a short case.
+              </p>
+            </div>
+
+            <div class="grid-2">
+              <div class="card">
+                <h3>Community fast path on Ubuntu / WSL</h3>
+                <pre class="shell"><code>sudo apt update
+sudo apt install -y \
+  build-essential gcc g++ gfortran make m4 perl csh tcsh flex bison \
+  curl file git cmake \
+  libnetcdf-dev libnetcdff-dev \
+  libopenmpi-dev openmpi-bin \
+  zlib1g-dev libpng-dev</code></pre>
+                <p>
+                  This is the practical shortcut. If the compile becomes weird, fall back to
+                  the stricter official library-build workflow from the WRF compile tutorial.
+                </p>
+              </div>
+
+              <div class="card">
+                <h3>WRF first</h3>
+                <pre class="shell"><code>git clone https://github.com/wrf-model/WRF.git
+cd WRF
+export NETCDF=/usr
+export WRFIO_NCD_LARGE_FILE_SUPPORT=1
+./configure
+./compile em_real -j "$(nproc)"</code></pre>
+                <p>
+                  Choose the GNU serial or GNU dmpar option that matches your intent. Do not
+                  rely on fixed menu numbers, they vary between versions and environments.
+                </p>
+              </div>
+            </div>
+
+            <div class="grid-2">
+              <div class="card">
+                <h3>WPS second</h3>
+                <pre class="shell"><code>git clone https://github.com/wrf-model/WPS.git
+cd WPS
+./configure --build-grib2-libs
+export WRF_DIR=/path/to/WRF
+./compile</code></pre>
+                <p>
+                  For WPS v4.4+, the internal GRIB2-libs build path is the simplest official
+                  modern route.
+                </p>
+              </div>
+              <div class="card">
+                <h3>Do not forget static geography</h3>
+                <p>
+                  Download the WPS geographical static data from the official NCAR download
+                  page before you expect <span class="mono">geogrid.exe</span> to be useful.
+                  The highest-resolution mandatory package is the normal choice and is about
+                  <strong>29 GB uncompressed</strong>.
+                </p>
+                <p>
+                  Put it somewhere stable and point
+                  <span class="mono">geog_data_path</span> in
+                  <span class="mono">namelist.wps</span> at that directory.
+                </p>
+              </div>
+            </div>
+
+            <div class="grid-2">
+              <div class="card">
+                <h3>Success conditions</h3>
+                <p>Do not move on until you have:</p>
+                <ul class="checklist">
+                  <li><span class="mono">main/wrf.exe</span></li>
+                  <li><span class="mono">main/real.exe</span></li>
+                  <li><span class="mono">geogrid.exe</span></li>
+                  <li><span class="mono">ungrib.exe</span></li>
+                  <li><span class="mono">metgrid.exe</span></li>
+                </ul>
+              </div>
+              <div class="card">
+                <h3>First WPS gate</h3>
+                <p>
+                  Once WPS is built and the geography is in place, the very next thing is
+                  getting <span class="mono">geogrid.exe</span> to run cleanly. Do not skip
+                  that and jump straight to GRIB input.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="wizard">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Generator</p>
+                <h2>Use the starter wizard to generate a sane first case</h2>
+              </div>
+            </div>
+
+            <p class="lede">
+              This wizard is deliberately narrow. It only targets the same single-domain,
+              CPU-first, convection-allowing `3 km` baseline the rest of this guide recommends.
+              The point is to remove decisions, not invent a thousand knobs.
+            </p>
+
+            <div class="notice">
+              <p>
+                The default ECMWF preset here is designed to match the repo starter pack
+                exactly. If you change source, domain size, or `num_metgrid_*`, the output
+                becomes your custom case and you should treat it that way.
+              </p>
+            </div>
+
+            <div class="grid-2">
+              <div class="calc-panel">
+                <h3>Case inputs</h3>
+                <div class="form-grid">
+                  <label class="field">
+                    <span class="field-label">Initialization source</span>
+                    <select id="wiz-source"></select>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Start time in UTC</span>
+                    <input id="wiz-start-utc" type="datetime-local" value="2026-04-03T00:00">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Run length in hours</span>
+                    <input id="wiz-run-hours" type="number" min="1" max="72" step="1" value="6">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">History interval in minutes</span>
+                    <input id="wiz-history-minutes" type="number" min="15" max="180" step="15" value="60">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">e_we</span>
+                    <input id="wiz-e-we" type="number" min="80" max="480" step="10" value="200">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">e_sn</span>
+                    <input id="wiz-e-sn" type="number" min="80" max="480" step="10" value="200">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Center latitude</span>
+                    <input id="wiz-center-lat" type="number" min="-60" max="60" step="0.1" value="35">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Center longitude</span>
+                    <input id="wiz-center-lon" type="number" min="-180" max="180" step="0.1" value="-97">
+                  </label>
+
+                  <label class="field field-span">
+                    <span class="field-label">WPS geog_data_path</span>
+                    <input id="wiz-geog-data-path" type="text" value="/home/YOUR_USER/WPS_GEOG">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">num_metgrid_levels</span>
+                    <input id="wiz-num-metgrid-levels" type="number" min="1" max="99" step="1" value="33">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">num_metgrid_soil_levels</span>
+                    <input id="wiz-num-metgrid-soil-levels" type="number" min="1" max="20" step="1" value="4">
+                  </label>
+                </div>
+              </div>
+
+              <div class="details-stack">
+                <div class="card">
+                  <div class="tag-row">
+                    <span class="tag" id="wizard-current-source">ECMWF open data</span>
+                    <span class="tag" id="wizard-current-preset">32 GB 3 km starter</span>
+                  </div>
+                  <h3>Case summary</h3>
+                  <p id="wizard-summary">
+                    6-hour ECMWF case, 200 x 200 at 3 km, centered on 35.0, -97.0.
+                  </p>
+                  <p class="small" id="wizard-projection">
+                    Projection: Lambert, truelat1 30.0, truelat2 60.0, stand_lon -97.0.
+                  </p>
+                </div>
+
+                <div class="card">
+                  <h3>Validation</h3>
+                  <div id="wizard-validation">
+                    <p class="small">The wizard will show errors and warnings here.</p>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <h3>Source and Vtable plan</h3>
+                  <p class="small">
+                    <strong>Use:</strong> <span class="mono" id="wizard-vtable">Vtable.ECMWF_opendata</span>
+                  </p>
+                  <ul class="checklist" id="wizard-source-steps"></ul>
+                  <div id="wizard-source-notes"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="grid-2">
+              <div class="card">
+                <div class="copy-head">
+                  <h3>Generated <span class="mono">namelist.wps</span></h3>
+                  <div class="button-row compact">
+                    <button class="button secondary" id="copy-wps" type="button">Copy</button>
+                    <a class="button secondary" id="download-wps" href="./starter-files/namelist.wps.ecmwf-starter" download="namelist.wps">Download</a>
+                  </div>
+                </div>
+                <pre class="shell"><code id="generated-wps">&amp;share
+ wrf_core               = 'ARW',
+ max_dom                = 1,
+ start_date             = '2026-04-03_00:00:00',
+ end_date               = '2026-04-03_06:00:00',
+ interval_seconds       = 3600,
+ io_form_geogrid        = 2,
+/</code></pre>
+              </div>
+
+              <div class="card">
+                <div class="copy-head">
+                  <h3>Generated <span class="mono">namelist.input</span></h3>
+                  <div class="button-row compact">
+                    <button class="button secondary" id="copy-input" type="button">Copy</button>
+                    <a class="button secondary" id="download-input" href="./starter-files/namelist.input.ecmwf-starter" download="namelist.input">Download</a>
+                  </div>
+                </div>
+                <pre class="shell"><code id="generated-input">&amp;time_control
+ run_days                            = 0,
+ run_hours                           = 6,
+ run_minutes                         = 0,
+ run_seconds                         = 0,
+/</code></pre>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="starter-files">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Starter Pack</p>
+                <h2>Start from proven file patterns and adapt them carefully</h2>
+              </div>
+            </div>
+
+            <p class="lede">
+              The repo now includes a starter file pack built from two things: a locally
+              verified single-domain `3 km` CPU baseline, and a community member's
+              durable ECMWF/open-data workflow patterns. The point is to reuse the good
+              structure without pretending one exact case file is universal. The default
+              ECMWF wizard preset above is designed to render these starter files exactly.
+            </p>
+
+            <div class="grid-3">
+              <div class="card">
+                <h3><a href="./starter-files/namelist.wps.ecmwf-starter">namelist.wps.ecmwf-starter</a></h3>
+                <p>
+                  Single-domain `3 km` WPS starter with the community split-prefix
+                  `metgrid` pattern for pressure, surface, and soil streams.
+                </p>
+              </div>
+              <div class="card">
+                <h3><a href="./starter-files/namelist.input.ecmwf-starter">namelist.input.ecmwf-starter</a></h3>
+                <p>
+                  Single-domain `3 km` convection-allowing example with community-style
+                  severe-weather physics and conservative CPU-first sizing.
+                </p>
+              </div>
+              <div class="card">
+                <h3><a href="./starter-files/Vtable.ECMWF_opendata">Vtable.ECMWF_opendata</a></h3>
+                <p>
+                  Custom `ungrib.exe` table for ECMWF open-data GRIB fields. This is one
+                  of the highest-value community files because the wrong `Vtable` can
+                  quietly wreck the whole prep chain.
+                </p>
+              </div>
+            </div>
+
+            <div class="notice">
+              <p>
+                Read <a href="./starter-files/README.md">the starter-files README</a>
+                before using them. Edit the dates, domain center, geog path, and
+                `num_metgrid_*` counts first. These files are a strong starting point,
+                not a promise that your case can skip thinking. If you want the same
+                defaults without hand-editing first, use the wizard above and then copy
+                or download the generated files.
+              </p>
+            </div>
+          </section>
+
+          <section class="section" id="data">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Forcing</p>
+                <h2>Pick initialization data without getting lost in portal hell</h2>
+              </div>
+            </div>
+
+            <div class="data-grid">
+              <article class="data-card">
+                <div class="tag-row">
+                  <span class="tag">Best default</span>
+                  <span class="tag">Global</span>
+                  <span class="tag warn">As of 2026-04-01</span>
+                </div>
+                <h3>ECMWF open data</h3>
+                <p>
+                  Best choice when someone says "I want Euro data." The current real-time
+                  open-data entry point is the Free &amp; Open Data Portal at
+                  <a href="https://data.ecmwf.int/forecasts/">data.ecmwf.int/forecasts/</a>.
+                </p>
+                <p>
+                  <strong>API key?</strong> Usually no for the normal hobbyist real-time
+                  open-data path. That is the most important clarification on this page.
+                </p>
+                <p>
+                  The API-key confusion usually comes from mixing the open-data portal with
+                  CDS archive-style access. Those are different workflows.
+                </p>
+              </article>
+
+              <article class="data-card">
+                <div class="tag-row">
+                  <span class="tag">Universal fallback</span>
+                  <span class="tag">Global</span>
+                  <span class="tag">No key</span>
+                </div>
+                <h3>GFS via NOMADS</h3>
+                <p>
+                  If you want the simplest public fallback that works almost everywhere, use
+                  GFS from <a href="https://nomads.ncep.noaa.gov/">NOMADS</a>.
+                </p>
+                <p>
+                  Common files are in the
+                  <span class="mono">gfs.tCCz.pgrb2.0p25.fFFF</span> family.
+                </p>
+              </article>
+
+              <article class="data-card">
+                <div class="tag-row">
+                  <span class="tag">Fast refresh</span>
+                  <span class="tag">CONUS</span>
+                  <span class="tag">No key</span>
+                </div>
+                <h3>HRRR and RAP</h3>
+                <p>
+                  Use HRRR for CONUS storm work when you want a fast-refresh model. Use RAP
+                  when you want a broader regional fast-refresh option.
+                </p>
+                <p>
+                  HRRR file families commonly include
+                  <span class="mono">wrfprsf</span>, <span class="mono">wrfnatf</span>, and
+                  <span class="mono">wrfsfcf</span>.
+                </p>
+              </article>
+            </div>
+
+            <div class="notice">
+              <p>
+                <strong>Useful community pattern for ECMWF + WPS:</strong> if you split
+                ECMWF forcing into pressure, surface, and soil GRIB streams, a common WPS
+                pattern is to run <span class="mono">ungrib.exe</span> separately with
+                prefixes like <span class="mono">FILE</span>,
+                <span class="mono">SFILE</span>, and
+                <span class="mono">SOILFILE</span>, then point
+                <span class="mono">metgrid.exe</span> at them with
+                <span class="mono">fg_name = 'SFILE', 'SOILFILE', 'FILE'</span>.
+              </p>
+              <p>
+                Also expect some ECMWF GRIB2 downloads to arrive with CCSDS compression
+                that can trip up <span class="mono">ungrib.exe</span>. If that happens,
+                a practical workaround is decompressing them first with
+                <span class="mono">cdo -f grb2 copy input.grib2 output.grib2</span>.
+              </p>
+              <p>
+                If you find community Python snippets for this workflow, treat them as
+                patterns, not drop-in tooling. They often depend on a larger project
+                wrapper, custom helper functions, and local path conventions.
+              </p>
+              <p>
+                <strong>Official 2024+ ECMWF note:</strong> if recent ECMWF GRIB2 files still
+                fail in WPS, the WRF input-data FAQ documents a conversion step with
+                <span class="mono">grib_set -r -w packingType=grid_ccsds -s packingType=grid_simple input.grib2 output.grib2</span>,
+                then use <span class="mono">Vtable.ECMWF</span> from
+                <span class="mono">WPS v4.6+</span>.
+              </p>
+            </div>
+
+            <table class="matrix">
+              <thead>
+                <tr>
+                  <th>Source</th>
+                  <th>Best for</th>
+                  <th>Key question</th>
+                  <th>Plain answer</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>ECMWF open data</strong></td>
+                  <td>Global synoptic setup and "Euro" forcing</td>
+                  <td>Do I need an API key?</td>
+                  <td>For the open real-time portal, usually no. For CDS/archive workflows, yes.</td>
+                </tr>
+                <tr>
+                  <td><strong>GFS</strong></td>
+                  <td>Simple public fallback</td>
+                  <td>Can I get this easily?</td>
+                  <td>Yes. NOMADS is the default public route.</td>
+                </tr>
+                <tr>
+                  <td><strong>HRRR</strong></td>
+                  <td>CONUS short-range storm work</td>
+                  <td>Should I start here?</td>
+                  <td>Only if your use case is regional and fast-refresh focused.</td>
+                </tr>
+                <tr>
+                  <td><strong>RAP</strong></td>
+                  <td>Broader North American fast refresh</td>
+                  <td>When do I choose it?</td>
+                  <td>When HRRR is too narrow and you still want fast-refresh behavior.</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+
+          <section class="section" id="sizing">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">3 km</p>
+                <h2>How big a domain should you actually try?</h2>
+              </div>
+            </div>
+
+            <table class="matrix">
+              <thead>
+                <tr>
+                  <th>Host RAM</th>
+                  <th>Recommended first 3 km domain</th>
+                  <th>Aggressive ceiling</th>
+                  <th>Reality check</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>16 GB</strong></td>
+                  <td>180 to 220 grid points</td>
+                  <td>Not a happy place</td>
+                  <td>Below the pleasant range for big real-data convection-allowing WRF on Windows.</td>
+                </tr>
+                <tr>
+                  <td><strong>24 to 32 GB</strong></td>
+                  <td>220 to 300 grid points</td>
+                  <td>Around 300</td>
+                  <td>Usable starter tier if WSL memory is set and output is restrained.</td>
+                </tr>
+                <tr>
+                  <td><strong>48 to 64 GB</strong></td>
+                  <td>300 to 350 grid points</td>
+                  <td>Around 350</td>
+                  <td>Best value tier for a hobbyist 3 km single-domain setup.</td>
+                </tr>
+                <tr>
+                  <td><strong>96 GB and up</strong></td>
+                  <td>350 to 400 grid points</td>
+                  <td>Around 400</td>
+                  <td>Now disk and output management become just as important as RAM.</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="grid-3">
+              <div class="stat">
+                <h3>Verified local 3 km anchor</h3>
+                <div class="stat-number">200 x 200 x 80</div>
+                <p>Allocated about 1.86 GB for the domain in a working local baseline.</p>
+              </div>
+              <div class="stat">
+                <h3>Verified local 1 km anchor</h3>
+                <div class="stat-number">400 x 400 x 80</div>
+                <p>Allocated about 6.99 GB in a very aggressive local stress case.</p>
+              </div>
+              <div class="stat">
+                <h3>Verified storage warning</h3>
+                <div class="stat-number">56 GB</div>
+                <p>A single idealized stress output file reached this size. Output can become the real limiter.</p>
+              </div>
+            </div>
+
+            <div class="notice">
+              <p>
+                Translation: the giant 3 km domain is usually not the first thing that should
+                happen. The first thing that should happen is a clean small run, because then
+                you know your pipeline is real.
+              </p>
+            </div>
+          </section>
+
+          <section class="section" id="run">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Run Order</p>
+                <h2>The only pipeline that matters</h2>
+              </div>
+            </div>
+
+            <div class="flow">
+              <div class="flow-step">geogrid.exe</div>
+              <div class="flow-arrow">-&gt;</div>
+              <div class="flow-step">ungrib.exe</div>
+              <div class="flow-arrow">-&gt;</div>
+              <div class="flow-step">metgrid.exe</div>
+              <div class="flow-arrow">-&gt;</div>
+              <div class="flow-step">real.exe</div>
+              <div class="flow-arrow">-&gt;</div>
+              <div class="flow-step">wrf.exe</div>
+              <div class="flow-arrow">-&gt;</div>
+              <div class="flow-step">wrf-rust sanity check</div>
+            </div>
+
+            <div class="grid-2">
+              <div class="card">
+                <h3>After <span class="mono">real.exe</span></h3>
+                <ul class="checklist">
+                  <li><span class="mono">wrfinput_d01</span> exists</li>
+                  <li><span class="mono">wrfbdy_d01</span> exists</li>
+                  <li>Dates match the forcing window</li>
+                  <li>No silent missing-file or bad-path issue</li>
+                </ul>
+              </div>
+              <div class="card">
+                <h3>After <span class="mono">wrf.exe</span></h3>
+                <ul class="checklist">
+                  <li><span class="mono">rsl.out.0000</span> ends with success</li>
+                  <li>CFL is not exploding from the start</li>
+                  <li>Output files are appearing at the interval you expected</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="grid-2">
+              <div class="card">
+                <h3>Fast structural validation with wrf-rust</h3>
+                <pre class="shell"><code>pip install wrf-rust
+python -m wrf info wrfout_d01_YYYY-MM-DD_HH:MM:SS
+python -m wrf stats wrfout_d01_YYYY-MM-DD_HH:MM:SS sbcape slp temp</code></pre>
+              </div>
+              <div class="card">
+                <h3>What this does not prove</h3>
+                <p>
+                  A file opening successfully does not prove the meteorology is good. It proves
+                  the pipeline produced a coherent output artifact. That is still a valuable first gate.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="budget">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Disk</p>
+                <h2>Output budgeting matters earlier than people think</h2>
+              </div>
+            </div>
+
+            <div class="grid-3">
+              <div class="faq-card">
+                <h3>Start with longer intervals</h3>
+                <p>For the first real-data test, use conservative <span class="mono">history_interval</span> values. You do not need five-minute output to prove the pipeline works.</p>
+              </div>
+              <div class="faq-card">
+                <h3>Keep the first run short</h3>
+                <p>Run a short window first. A six-hour good run teaches more than a dead 24-hour giant run.</p>
+              </div>
+              <div class="faq-card">
+                <h3>Watch free space live</h3>
+                <p>Check <span class="mono">df -h</span> before launch. If the domain or output interval is aggressive, keep watching while the run is alive.</p>
+              </div>
+            </div>
+
+            <div class="notice strong">
+              <p>
+                Local evidence from the workspace includes a single idealized output file near
+                <strong>56 GB</strong>. Do not wait until the SSD is almost full to think about
+                output strategy.
+              </p>
+            </div>
+          </section>
+
+          <section class="section" id="troubleshooting">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Branching</p>
+                <h2>Troubleshooting tree</h2>
+              </div>
+            </div>
+
+            <table class="matrix">
+              <thead>
+                <tr>
+                  <th>If you see this</th>
+                  <th>Most likely problem</th>
+                  <th>First thing to do</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><span class="mono">0x80370102</span></td>
+                  <td>Virtualization / hypervisor path is not actually ready</td>
+                  <td>Check BIOS virtualization and <span class="mono">hypervisorlaunchtype</span></td>
+                </tr>
+                <tr>
+                  <td><span class="mono">Problem opening file Vtable</span></td>
+                  <td>Wrong or missing `Vtable` symlink</td>
+                  <td>Link the correct file to the literal name <span class="mono">Vtable</span></td>
+                </tr>
+                <tr>
+                  <td><span class="mono">unable to open GRIBFILE.AAA</span></td>
+                  <td>GRIB files were not linked the way <span class="mono">ungrib.exe</span> expects</td>
+                  <td>Use <span class="mono">link_grib.csh</span></td>
+                </tr>
+                <tr>
+                  <td><span class="mono">mandatory field TT was not found</span></td>
+                  <td>Bad <span class="mono">Vtable</span>, wrong source family, or wrong <span class="mono">fg_name</span></td>
+                  <td>Recheck the upstream data family and intermediate prefixes</td>
+                </tr>
+                <tr>
+                  <td><span class="mono">real.exe</span> made no <span class="mono">wrfinput_d01</span></td>
+                  <td>Date window or <span class="mono">met_em*</span> mismatch</td>
+                  <td>Match dates all the way from forcing to <span class="mono">namelist.input</span></td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="details-stack">
+              <details class="branch">
+                <summary>Build fails before you ever get <span class="mono">wrf.exe</span></summary>
+                <div class="branch-body">
+                  <h4>Likely root cause</h4>
+                  <p>
+                    The first real compile error matters. Most later errors are just fallout.
+                  </p>
+                  <h4>Fastest checks</h4>
+                  <ul class="checklist">
+                    <li>Search the compile log for the first capital-<span class="mono">E</span> <span class="mono">Error</span>.</li>
+                    <li>If you see <span class="mono">Corrupt or Old Module file</span>, treat that as the root, not the later missing objects.</li>
+                    <li>Confirm compiler choice and netCDF path are consistent.</li>
+                    <li>If <span class="mono">netcdf.inc</span> is missing, make sure netCDF-Fortran is really installed in the prefix you are using.</li>
+                  </ul>
+                  <h4>Fastest actions</h4>
+                  <ul class="checklist">
+                    <li>Run <span class="mono">./clean -a</span>.</li>
+                    <li>If it still looks polluted, rebuild from a fresh tree.</li>
+                    <li>Do not start debugging WPS until WRF itself builds.</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="branch">
+                <summary>WPS behaves strangely or <span class="mono">geogrid.exe</span> / <span class="mono">ungrib.exe</span> / <span class="mono">metgrid.exe</span> are missing</summary>
+                <div class="branch-body">
+                  <h4>Likely root cause</h4>
+                  <p>
+                    WRF did not actually build cleanly, or WPS was built with a different
+                    compiler or different netCDF path.
+                  </p>
+                  <h4>Fastest checks</h4>
+                  <ul class="checklist">
+                    <li>Make sure WRF already built successfully.</li>
+                    <li>Make sure WRF and WPS use the same compiler family.</li>
+                    <li>Make sure <span class="mono">WRF_DIR</span> points at the compiled WRF tree.</li>
+                    <li>For WPS v4.4+, prefer <span class="mono">./configure --build-grib2-libs</span>.</li>
+                    <li>If unresolved <span class="mono">GOMP_*</span> or <span class="mono">__kmpc_*</span> symbols appear, simplify the build path before doing anything exotic.</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="branch">
+                <summary><span class="mono">geogrid.exe</span> fails with missing static data or bad nest dimensions</summary>
+                <div class="branch-body">
+                  <h4>Common signatures</h4>
+                  <ul class="checklist">
+                    <li><span class="mono">Could not open .../WPS_GEOG/.../index</span></li>
+                    <li>dimension errors involving <span class="mono">parent_grid_ratio</span></li>
+                  </ul>
+                  <h4>Fastest actions</h4>
+                  <ul class="checklist">
+                    <li>Use an absolute <span class="mono">geog_data_path</span>.</li>
+                    <li>Confirm the WPS geog directory actually exists and is complete.</li>
+                    <li>Recheck nest sizes and parent ratios before touching anything else.</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="branch">
+                <summary><span class="mono">ungrib.exe</span> fails with <span class="mono">GRIBFILE.AAA</span>, missing <span class="mono">Vtable</span>, or <span class="mono">Data not found</span></summary>
+                <div class="branch-body">
+                  <h4>Common signatures</h4>
+                  <ul class="checklist">
+                    <li><span class="mono">edition_num: unable to open GRIBFILE.AAA</span></li>
+                    <li><span class="mono">Problem opening file Vtable</span></li>
+                    <li><span class="mono">Data not found: YYYY-MM-DD_HH:MM:SS.0000</span></li>
+                  </ul>
+                  <h4>Fastest actions</h4>
+                  <ul class="checklist">
+                    <li>Use <span class="mono">link_grib.csh</span> so the files are linked as <span class="mono">GRIBFILE.AAA</span>, <span class="mono">GRIBFILE.AAB</span>, and so on.</li>
+                    <li>Symlink the correct file to the literal name <span class="mono">Vtable</span>.</li>
+                    <li>Confirm the GRIB files actually contain the dates you asked for.</li>
+                    <li>If this is recent ECMWF GRIB2, try the official <span class="mono">grib_set</span> conversion rule before doing anything exotic.</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="branch">
+                <summary><span class="mono">metgrid.exe</span> fails with missing <span class="mono">TT</span> or <span class="mono">Screwy NDATE</span></summary>
+                <div class="branch-body">
+                  <h4>Common signatures</h4>
+                  <ul class="checklist">
+                    <li><span class="mono">The mandatory field TT was not found in any input data</span></li>
+                    <li><span class="mono">ERROR: Screwy NDATE: 0000-00-00_00:00:00</span></li>
+                  </ul>
+                  <h4>Fastest actions</h4>
+                  <ul class="checklist">
+                    <li>Confirm the <span class="mono">fg_name</span> prefixes match the files produced by <span class="mono">ungrib.exe</span>.</li>
+                    <li>Confirm <span class="mono">ungrib.exe</span> produced the expected intermediate files for every needed field family.</li>
+                    <li>Recheck domain dates in <span class="mono">namelist.wps</span>.</li>
+                    <li>Use <span class="mono">rd_intermediate.exe</span> if you need to inspect what WPS actually produced.</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="branch">
+                <summary><span class="mono">real.exe</span> did not make <span class="mono">wrfinput_d01</span> or <span class="mono">wrfbdy_d01</span></summary>
+                <div class="branch-body">
+                  <h4>Likely root cause</h4>
+                  <p>
+                    Missing <span class="mono">met_em*</span> files, wrong dates, bad run
+                    directory, or inconsistent I/O environment.
+                  </p>
+                  <h4>Fastest checks</h4>
+                  <ul class="checklist">
+                    <li>Confirm <span class="mono">met_em*</span> exists where <span class="mono">real.exe</span> expects it.</li>
+                    <li>Confirm your <span class="mono">start_*</span> and <span class="mono">end_*</span> values fit inside the forcing window.</li>
+                    <li>Confirm the run directory contains the right tables and executables.</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="branch">
+                <summary><span class="mono">wrf.exe</span> dies immediately</summary>
+                <div class="branch-body">
+                  <h4>Known local pattern</h4>
+                  <p>
+                    There is local evidence of <span class="mono">ierr=-1021</span> while
+                    opening <span class="mono">wrfinput_d01</span>, which is the kind of error
+                    that usually means the run directory or prep artifacts are wrong before the
+                    model ever gets to the interesting part.
+                  </p>
+                  <h4>Fastest checks</h4>
+                  <ul class="checklist">
+                    <li>Make sure <span class="mono">wrfinput_d01</span> and <span class="mono">wrfbdy_d01</span> are present and readable.</li>
+                    <li>Make sure you are running from the intended directory.</li>
+                    <li>Check disk space and WSL memory before assuming the namelist is cursed.</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="branch">
+                <summary><span class="mono">wrf.exe</span> runs, but CFL explodes</summary>
+                <div class="branch-body">
+                  <h4>How to read this</h4>
+                  <p>
+                    If tens of thousands of points exceed CFL from the start, a completed run
+                    can still be garbage. Local 1 km evidence showed immediate severe
+                    <span class="mono">w-cfl</span> spikes even though the run technically finished.
+                  </p>
+                  <h4>Fastest actions</h4>
+                  <ul class="checklist">
+                    <li>Reduce <span class="mono">time_step</span>.</li>
+                    <li>Shrink the domain.</li>
+                    <li>Return to a simpler, known-good physics setup.</li>
+                    <li>Shorten the forecast window until the setup is stable.</li>
+                  </ul>
+                </div>
+              </details>
+
+              <details class="branch">
+                <summary>Disk space vanishes while the run is alive</summary>
+                <div class="branch-body">
+                  <h4>Likely root cause</h4>
+                  <p>
+                    Output cadence is too aggressive for the domain size and run length.
+                  </p>
+                  <h4>Fastest actions</h4>
+                  <ul class="checklist">
+                    <li>Increase <span class="mono">history_interval</span>.</li>
+                    <li>Shorten the run.</li>
+                    <li>Reduce fields if you know how to use I/O control.</li>
+                    <li>Check <span class="mono">df -h</span> before launching the next attempt.</li>
+                  </ul>
+                </div>
+              </details>
+            </div>
+          </section>
+
+          <section class="section" id="faq">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">FAQ</p>
+                <h2>Fast answers to the questions people actually ask</h2>
+              </div>
+            </div>
+
+            <div class="faq-grid">
+              <div class="faq-card">
+                <h3>Do I need an ECMWF API key?</h3>
+                <p>As of 2026-04-01, not usually for the common real-time open-data portal path. API keys still matter for CDS or archive-style access.</p>
+              </div>
+              <div class="faq-card">
+                <h3>Can I run 3 km WRF on 16 GB RAM?</h3>
+                <p>You can run something, but it is below the pleasant range for the kind of severe-weather setup most people here want.</p>
+              </div>
+              <div class="faq-card">
+                <h3>Should I start with HRRR instead?</h3>
+                <p>Only if your problem is specifically CONUS and short-range. HRRR is not the universal default.</p>
+              </div>
+              <div class="faq-card">
+                <h3>Should I build from <span class="mono">/mnt/c</span>?</h3>
+                <p>No. Keep the whole workflow inside the Linux filesystem and access it from Windows through <span class="mono">\\wsl$</span>.</p>
+              </div>
+              <div class="faq-card">
+                <h3>Where do I put <span class="mono">.wslconfig</span>?</h3>
+                <p>In your Windows user folder, usually <span class="mono">C:\Users\YOUR_NAME\.wslconfig</span>. It does not live inside Ubuntu.</p>
+              </div>
+              <div class="faq-card">
+                <h3>Why does <span class="mono">ungrib.exe</span> say <span class="mono">GRIBFILE.AAA</span> or <span class="mono">Vtable</span> is missing?</h3>
+                <p>Because it expects GRIB files to be linked to <span class="mono">GRIBFILE.*</span> names and it expects a file literally named <span class="mono">Vtable</span> in the WPS run directory.</p>
+              </div>
+              <div class="faq-card">
+                <h3>What should I use this repo for after the run?</h3>
+                <p>Use <span class="mono">wrf-rust</span> to inspect the output fast, confirm the file is healthy, and pull the fields you care about without a heavyweight Python stack.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="section" id="sources">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Sources</p>
+                <h2>Primary references used for the current parts of this guide</h2>
+              </div>
+            </div>
+
+            <ol class="source-list">
+              <li><a href="https://learn.microsoft.com/en-us/windows/wsl/install">Microsoft Learn: Install WSL</a></li>
+              <li><a href="https://learn.microsoft.com/en-us/windows/wsl/setup/environment">Microsoft Learn: Set up a WSL development environment</a></li>
+              <li><a href="https://learn.microsoft.com/en-us/windows/wsl/wsl-config">Microsoft Learn: Advanced settings configuration in WSL</a></li>
+              <li><a href="https://learn.microsoft.com/en-us/windows/wsl/basic-commands">Microsoft Learn: Basic commands for WSL</a></li>
+              <li><a href="https://learn.microsoft.com/en-us/windows/wsl/troubleshooting">Microsoft Learn: Troubleshooting WSL</a></li>
+              <li><a href="https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/host-hardware-requirements">Microsoft Learn: Hyper-V host hardware requirements</a></li>
+              <li><a href="https://www2.mmm.ucar.edu/wrf/site/compiling_tutorial.html">WRF Model docs: compiling WRF and WPS</a></li>
+              <li><a href="https://www2.mmm.ucar.edu/wrf/users/docs/user_guide_v4/WRFUsersGuide.pdf">WRF Users Guide</a></li>
+              <li><a href="https://www2.mmm.ucar.edu/wrf/users/download/get_sources_wps_geog.html">NCAR: WPS geographical static data downloads</a></li>
+              <li><a href="https://www2.mmm.ucar.edu/wrf/site/documentation/users_guide/wps.html">WRF Model docs: WPS users guide</a></li>
+              <li><a href="https://www2.mmm.ucar.edu/wrf/site/support/faq/input_data.html">WRF Model docs: input data FAQ</a></li>
+              <li><a href="https://www2.mmm.ucar.edu/wrf/site/faq/full_installation.html">WRF Model docs: complete installation of WRF and WPS</a></li>
+              <li><a href="https://www2.mmm.ucar.edu/wrf/wrf_tutorial/troubleshooting.html">WRF tutorial: troubleshooting exercise</a></li>
+              <li><a href="https://www2.mmm.ucar.edu/wrf/users/namelist_best_prac_wps.html">WRF Model docs: namelist.wps best practices</a></li>
+              <li><a href="https://data.ecmwf.int/forecasts/">ECMWF Free &amp; Open Data Portal</a></li>
+              <li><a href="https://confluence.ecmwf.int/display/DAC/ECMWF%2Bopen%2Bdata%253A%2Breal-time%2Bforecasts%2Bfrom%2BIFS%2Band%2BAIFS">ECMWF open data: real-time forecasts from IFS and AIFS</a></li>
+              <li><a href="https://www.ecmwf.int/en/forecasts/access-forecasts/registration-vs-anonymous-access">ECMWF: registration vs anonymous access</a></li>
+              <li><a href="https://www.ecmwf.int/en/about/media-centre/news/2025/ecmwf-makes-its-entire-real-time-catalogue-open-all">ECMWF: entire real-time catalogue open from 2025-10-01</a></li>
+              <li><a href="https://ecds.ecmwf.int/how-to-api">ECMWF CDS API setup</a></li>
+              <li><a href="https://nomads.ncep.noaa.gov/">NOAA NOMADS</a></li>
+              <li><a href="https://www.nco.ncep.noaa.gov/pmb/products/gfs/">NCEP GFS products</a></li>
+              <li><a href="https://www.nco.ncep.noaa.gov/pmb/products/hrrr/">NCEP HRRR products</a></li>
+              <li><a href="https://www.nco.ncep.noaa.gov/pmb/products/rap/">NCEP RAP products</a></li>
+              <li><a href="https://rapidrefresh.noaa.gov/">NOAA Rapid Refresh / HRRR</a></li>
+            </ol>
+
+            <div class="footer">
+              <p class="small">
+                Local sizing and failure notes in this guide also come from the WRF logs and
+                run directories in the workspace that produced it. Those local observations are
+                treated as community evidence, not as upstream vendor guarantees.
+              </p>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

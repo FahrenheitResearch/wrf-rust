@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="wrf-rust release history: the 0.3.0 release notes and the full prior tag list.">
+<title>Changelog — wrf-rust</title>
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+
+<header class="masthead">
+  <p class="site-title"><a href="index.html">wrf-rust</a><span class="version">0.3.0</span></p>
+  <p class="tagline">WRF post-processing diagnostics, reimplemented in Rust, with a wrf-python-compatible Python API.</p>
+  <nav class="site-nav">
+    <a href="index.html">Overview</a>
+    <a href="diagnostics.html">Diagnostics</a>
+    <a href="validation.html">Validation</a>
+    <a href="performance.html">Performance</a>
+    <a href="changelog.html" aria-current="page">Changelog</a>
+  </nav>
+</header>
+
+<main>
+
+<h1>Changelog</h1>
+
+<h2 id="v0-3-0">0.3.0 — 2026-07-09</h2>
+
+<p class="sidenote">Tag <code>v0.3.0</code> at commit <code>351b8f3</code>.
+<a href="https://pypi.org/project/wrf-rust/">PyPI</a> &#183;
+<a href="https://github.com/FahrenheitResearch/wrf-rust/releases">GitHub releases</a></p>
+
+<h3>Performance</h3>
+<p>The severe/diagnostic pipeline is &#8776;3.3&#215; faster on large grids:
+effective-inflow-layer scans cached, depth-limited CAPE and EL grids
+parallelized, composites reuse cached CAPE/DCAPE, parallel HDF5 chunk
+decompression, reduced per-column allocations.
+<a href="performance.html">Measured details.</a></p>
+
+<h3>Science corrections</h3>
+<p>Values change where the old ones were wrong: saturated parcel lifts above
+1000 hPa no longer clamp to the 1000 hPa adiabat; sub-LCL CIN integrates every
+level instead of one midpoint slab; CIN no longer accumulates negative buoyancy
+above the LFC; AVO/PVO apply WRF map-scale factors; theta diagnostics return
+registered Kelvin units; the <code>helicity</code> alias maps to
+<code>srh</code>. Verified against wrf-python with a differential parity
+harness (zero failures) and SPC definitions.
+<a href="validation.html">Corrections with magnitudes and citations.</a></p>
+
+<h3>Python</h3>
+<p>Strict wrf-python CAPE/SRH compatibility modes
+(<code>cape2d_wrfpython</code>, <code>cape3d_wrfpython</code>,
+<code>srh_wrfpython</code> and components), <code>interplevel</code>
+compatibility, and analytic WRF coordinate transforms
+(<code>ll_to_xy</code>/<code>xy_to_ll</code>).</p>
+
+<h2 id="prior">Prior releases</h2>
+
+<p class="sidenote">Compact list from the repository's annotated tags.</p>
+
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr><th>Version</th><th>Date</th><th>Summary</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>0.2.35</code></td><td class="nowrap">2026-04-23</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.34</code></td><td class="nowrap">2026-04-14</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.33</code></td><td class="nowrap">2026-04-14</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.32</code></td><td class="nowrap">2026-04-13</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.31</code></td><td class="nowrap">2026-04-13</td><td>Cache CAPE/Bunkers families; acknowledge Solarpower07</td></tr>
+    <tr><td><code>0.2.30</code></td><td class="nowrap">2026-04-13</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.29</code></td><td class="nowrap">2026-04-13</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.28</code></td><td class="nowrap">2026-04-12</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.26</code></td><td class="nowrap">2026-04-12</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.25</code></td><td class="nowrap">2026-03-25</td><td>Clear intermediate cache after each getvar to reduce memory</td></tr>
+    <tr><td><code>0.2.24</code></td><td class="nowrap">2026-03-25</td><td>Time-slice HDF5 reads to reduce peak memory</td></tr>
+    <tr><td><code>0.2.23</code></td><td class="nowrap">2026-03-22</td><td>interplevel returns NaN for out-of-range levels instead of clamping</td></tr>
+    <tr><td><code>0.2.22</code></td><td class="nowrap">2026-03-19</td><td>Remove rayon to fix ProcessPoolExecutor hang</td></tr>
+    <tr><td><code>0.2.21</code></td><td class="nowrap">2026-03-17</td><td>Match wrf-python DBZ defaults; expose use_varint/use_liqskin</td></tr>
+    <tr><td><code>0.2.20</code></td><td class="nowrap">2026-03-17</td><td>DBZ variable intercepts; plot fixes</td></tr>
+    <tr><td><code>0.2.19</code></td><td class="nowrap">2026-03-17</td><td>Rewrite DBZ and UH to match Fortran reference exactly</td></tr>
+    <tr><td><code>0.2.18</code></td><td class="nowrap">2026-03-17</td><td>Fix reflectivity, UH, and SLP computations</td></tr>
+    <tr><td><code>0.2.17</code></td><td class="nowrap">2026-03-17</td><td>Prefer WRF native REFL_10CM and UP_HELI_MAX</td></tr>
+    <tr><td><code>0.2.16</code></td><td class="nowrap">2026-03-17</td><td>Full SHIP formula; stale lapse rates delegate to generic path</td></tr>
+    <tr><td><code>0.2.15</code></td><td class="nowrap">2026-03-17</td><td>Add tv2m (2-m virtual temperature) with lake_interp</td></tr>
+    <tr><td><code>0.2.14</code></td><td class="nowrap">2026-03-17</td><td>Lapse rate uses 2 m data at surface; supports lake_interp</td></tr>
+    <tr><td><code>0.2.13</code></td><td class="nowrap">2026-03-17</td><td>lake_interp flows through STP/SCP/EHI/SHIP/BRI</td></tr>
+    <tr><td><code>0.2.12</code></td><td class="nowrap">2026-03-17</td><td>interplevel supports 2-D target arrays; SRH exact match</td></tr>
+    <tr><td><code>0.2.11</code></td><td class="nowrap">2026-03-17</td><td>Match SRH exactly to Solarpower07's implementation</td></tr>
+    <tr><td><code>0.2.10</code></td><td class="nowrap">2026-03-17</td><td>Unify all SRH/Bunkers paths; fix 5 consistency issues</td></tr>
+    <tr><td><code>0.2.9</code></td><td class="nowrap">2026-03-17</td><td>SRH: switch to non-pressure-weighted mean wind (SHARPpy mean_wind_npw)</td></tr>
+    <tr><td><code>0.2.8</code></td><td class="nowrap">2026-03-16</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.7</code></td><td class="nowrap">2026-03-16</td><td>Maintenance release</td></tr>
+    <tr><td><code>0.2.6</code></td><td class="nowrap">2026-03-16</td><td>Raw variable unit conversion for RAINNC/T2/PSFC and others</td></tr>
+    <tr><td><code>0.2.5</code></td><td class="nowrap">2026-03-16</td><td>Fix 7 bugs from code review; add dam unit</td></tr>
+    <tr><td><code>0.2.4</code></td><td class="nowrap">2026-03-16</td><td>Fix SRH sign convention; raw variable fallback; t2</td></tr>
+    <tr><td><code>0.2.3</code></td><td class="nowrap">2026-03-16</td><td>Add t2; fix hybrid HDF5; interplevel/get_cartopy</td></tr>
+    <tr><td><code>0.2.2</code></td><td class="nowrap">2026-03-16</td><td>Fix hybrid HDF5; add interplevel/get_cartopy/latlon_coords</td></tr>
+    <tr><td><code>0.2.1</code></td><td class="nowrap">2026-03-16</td><td>Fix hybrid HDF5 files: v0 superblock + v2 object headers</td></tr>
+    <tr><td><code>0.2.0</code></td><td class="nowrap">2026-03-16</td><td>Self-contained: vendored math, lake interpolation, solar7 colormaps</td></tr>
+    <tr><td><code>0.1.0</code></td><td class="nowrap">2026-03-16</td><td>Pure-Rust reader default; fix Sync for PyO3; verify output matches</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="sidenote">Note: 0.2.27 was never tagged.</p>
+
+</main>
+
+<footer class="site-footer">
+  <p>wrf-rust is MIT-licensed research software by
+    <a href="https://github.com/FahrenheitResearch">FahrenheitResearch</a>.
+    Thanks to Solarpower07 for color tables, product styling, and guidance on
+    severe-weather diagnostics.</p>
+  <p><a href="https://github.com/FahrenheitResearch/wrf-rust">GitHub</a> &#183;
+     <a href="https://pypi.org/project/wrf-rust/">PyPI</a> &#183;
+     <a href="https://github.com/FahrenheitResearch/bowecho">BowEcho</a> &#183;
+     <a href="community-guide/index.html">Community WRF setup guide</a></p>
+  <p>Documentation generated from repository sources at v0.3.0
+     (<code>351b8f3</code>).</p>
+</footer>
+
+</body>
+</html>

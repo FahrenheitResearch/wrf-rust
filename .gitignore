@@ -20,3 +20,7 @@ GRIBFILE.*
 *.idx
 *.nc
 .cargo/config.toml
+
+# The Pages diagnostics table data is generated but COMMITTED (site is static)
+!docs/data/
+!docs/data/**

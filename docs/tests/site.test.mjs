@@ -4,41 +4,119 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const docsDir = path.resolve(__dirname, "..");
+const docsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-test("all internal section anchors in index.html resolve to an element id", async () => {
-  const html = await fs.readFile(path.join(docsDir, "index.html"), "utf8");
-  const ids = new Set([...html.matchAll(/id="([^"]+)"/g)].map((match) => match[1]));
-  const hrefs = [...html.matchAll(/href="#([^"]+)"/g)].map((match) => match[1]);
+const PAGES = [
+  "index.html",
+  "diagnostics.html",
+  "validation.html",
+  "performance.html",
+  "changelog.html",
+];
 
-  for (const id of hrefs) {
-    assert.ok(ids.has(id), `Missing target id for #${id}`);
+async function read(name) {
+  return fs.readFile(path.join(docsDir, name), "utf8");
+}
+
+test("variables.json is valid and self-consistent", async () => {
+  const data = JSON.parse(await read(path.join("data", "variables.json")));
+  assert.equal(typeof data.count, "number");
+  assert.ok(Array.isArray(data.variables));
+  assert.equal(
+    data.variables.length,
+    data.count,
+    "count field must match array length",
+  );
+  const names = new Set();
+  for (const v of data.variables) {
+    assert.ok(v.name && v.description && v.units && v.dim && v.group, v.name);
+    assert.ok(!names.has(v.name), `duplicate name ${v.name}`);
+    names.add(v.name);
   }
 });
 
-test("all data-jump targets in index.html resolve to an element id", async () => {
-  const html = await fs.readFile(path.join(docsDir, "index.html"), "utf8");
-  const ids = new Set([...html.matchAll(/id="([^"]+)"/g)].map((match) => match[1]));
-  const targets = [...html.matchAll(/data-jump="#([^"]+)"/g)].map((match) => match[1]);
-
-  for (const id of targets) {
-    assert.ok(ids.has(id), `Missing data-jump target #${id}`);
+test("diagnostics table contains exactly one row per registry entry", async () => {
+  const data = JSON.parse(await read(path.join("data", "variables.json")));
+  const html = await read("diagnostics.html");
+  const start = html.indexOf("<!-- diagnostics-table:start -->");
+  const end = html.indexOf("<!-- diagnostics-table:end -->");
+  assert.ok(start !== -1 && end > start, "table markers present");
+  const body = html.slice(start, end);
+  const rows = [...body.matchAll(/<tr>/g)].length;
+  assert.equal(rows, data.count, `table rows (${rows}) must equal registry count`);
+  for (const v of data.variables) {
+    assert.ok(
+      body.includes(`<td><code>${v.name}</code></td>`),
+      `missing row for ${v.name}`,
+    );
   }
 });
 
-test("all local linked files in index.html exist", async () => {
-  const html = await fs.readFile(path.join(docsDir, "index.html"), "utf8");
-  const linkedFiles = [...html.matchAll(/href="(\.\/[^"#]+)"/g)].map((match) => match[1]);
+test("stated variable counts on the pages match the registry", async () => {
+  const data = JSON.parse(await read(path.join("data", "variables.json")));
+  const diagnostics = await read("diagnostics.html");
+  const index = await read("index.html");
+  assert.ok(
+    diagnostics.includes(`<strong>${data.count}</strong>`),
+    "diagnostics.html lede count",
+  );
+  assert.ok(
+    diagnostics.includes(`${data.count} of ${data.count} variables`),
+    "diagnostics.html row-count label",
+  );
+  assert.ok(
+    index.includes(`<td class="num">${data.count}</td>`),
+    "index.html facts table count",
+  );
+});
 
-  for (const relativePath of linkedFiles) {
-    const fullPath = path.join(docsDir, relativePath.replace(/^\.\//, ""));
-    const stat = await fs.stat(fullPath);
-    assert.ok(stat.isFile(), `Missing linked file ${relativePath}`);
+test("every internal link and asset on the site pages resolves", async () => {
+  for (const page of PAGES) {
+    const html = await read(page);
+    const refs = [
+      ...html.matchAll(/(?:href|src)="([^"]+)"/g),
+    ].map((m) => m[1]);
+    for (const ref of refs) {
+      if (/^(https?:|mailto:)/.test(ref)) continue;
+      const target = ref.split("#")[0];
+      if (target === "") {
+        // Pure fragment: must resolve to an id on the same page.
+        const id = ref.slice(1);
+        assert.ok(html.includes(`id="${id}"`), `${page}: missing #${id}`);
+        continue;
+      }
+      await assert.doesNotReject(
+        fs.access(path.join(docsDir, target)),
+        `${page}: broken reference ${ref}`,
+      );
+    }
   }
 });
 
-test("the Pages entry script exists", async () => {
-  const stat = await fs.stat(path.join(docsDir, "app.js"));
-  assert.ok(stat.isFile());
+test("all pages share nav, footer, and mark the current page", async () => {
+  for (const page of PAGES) {
+    const html = await read(page);
+    assert.ok(html.includes('nav class="site-nav"'), `${page}: nav`);
+    assert.ok(
+      html.includes(`<a href="${page}" aria-current="page">`),
+      `${page}: aria-current marker`,
+    );
+    assert.ok(
+      html.includes('href="community-guide/index.html"'),
+      `${page}: community guide footer link`,
+    );
+    for (const other of PAGES) {
+      assert.ok(html.includes(`href="${other}"`), `${page}: nav link to ${other}`);
+    }
+  }
+});
+
+test("site pages contain no emoji", async () => {
+  // House rule: no decorative emojis. Covers pictographs, symbols-and-
+  // pictographs blocks, dingbats, and variation selector-16.
+  const emoji = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/u;
+  for (const page of PAGES) {
+    const html = await read(page);
+    assert.ok(!emoji.test(html), `${page}: emoji found`);
+  }
 });

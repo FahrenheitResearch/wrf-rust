@@ -1,0 +1,1110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Complete reference table of all 125 diagnostic variables registered in wrf-rust 0.3.0, generated from the wrf-core source registry.">
+<title>Diagnostics — wrf-rust</title>
+<link rel="stylesheet" href="site.css">
+</head>
+<body class="wide">
+
+<header class="masthead">
+  <p class="site-title"><a href="index.html">wrf-rust</a><span class="version">0.3.0</span></p>
+  <p class="tagline">WRF post-processing diagnostics, reimplemented in Rust, with a wrf-python-compatible Python API.</p>
+  <nav class="site-nav">
+    <a href="index.html">Overview</a>
+    <a href="diagnostics.html" aria-current="page">Diagnostics</a>
+    <a href="validation.html">Validation</a>
+    <a href="performance.html">Performance</a>
+    <a href="changelog.html">Changelog</a>
+  </nav>
+</header>
+
+<main>
+
+<h1>Diagnostic variable reference</h1>
+
+<p class="lede">All <strong>125</strong> variables registered in the
+<code>wrf-core</code> diagnostic registry, in registry order. Every entry is
+callable from Python as <code>getvar(f, name)</code> and from Rust as
+<code>wrf_core::getvar</code>. Name lookup is case-insensitive, and every alias
+is equivalent to its canonical name.</p>
+
+<div class="provenance">
+Generated from
+<a href="https://github.com/FahrenheitResearch/wrf-rust/blob/main/crates/wrf-core/src/variables.rs"><code>crates/wrf-core/src/variables.rs</code></a>
+at v0.3.0 (<code>351b8f3</code>) via
+<code>cargo run -p wrf-core --example dump_variables</code> &#8594;
+<a href="data/variables.json"><code>data/variables.json</code></a> &#8594;
+<code>node docs/tools/render-diagnostics-table.mjs</code>.
+The extractor reads the registry directly (no source parsing for data fields)
+and cross-checks the group labels against the live registry, failing on any
+mismatch.
+</div>
+
+<h2>Reading the table</h2>
+
+<ul>
+  <li><strong>Units</strong> are the defaults; most fields convert via the
+      <code>units=</code> keyword (for example <code>units="degC"</code>).</li>
+  <li><strong>Dim</strong> is the output shape per time step: 2-D
+      <code>(ny, nx)</code> or 3-D <code>(nz, ny, nx)</code>. A few stacked
+      products (for example <code>cape2d</code>, <code>uvmet</code>) return a
+      leading component axis in addition to the listed dimensionality.</li>
+  <li><strong>Group</strong> is the section of the source registry the variable
+      is defined in.</li>
+  <li>Variables whose description references <em>ecape-rs</em> or ECAPE solve an
+      entraining-parcel model per column and are the most computationally
+      expensive entries; consumers commonly schedule them separately.</li>
+  <li>Names not in this registry fall through to raw WRF file variables
+      (<code>RAINNC</code>, <code>PBLH</code>, <code>TSK</code>, ...), which are
+      readable by name but are not diagnostics and are not listed here.</li>
+</ul>
+
+<div class="table-controls">
+  <input type="search" id="var-filter" placeholder="Filter by name, alias, or description&#8230;" aria-label="Filter variables">
+  <span class="row-count" id="row-count">125 of 125 variables</span>
+</div>
+
+<div class="table-scroll">
+<table id="var-table">
+  <thead>
+    <tr>
+      <th data-sort="name">Variable</th>
+      <th data-sort="aliases">Aliases</th>
+      <th data-sort="description">Description</th>
+      <th data-sort="units">Units</th>
+      <th data-sort="dim">Dim</th>
+      <th data-sort="group">Group</th>
+    </tr>
+  </thead>
+  <tbody>
+<!-- diagnostics-table:start -->
+    <tr>
+      <td><code>pressure</code></td>
+      <td>&#8212;</td>
+      <td>Full model pressure</td>
+      <td>hPa</td>
+      <td>3D</td>
+      <td>Foundation</td>
+    </tr>
+    <tr>
+      <td><code>pres</code></td>
+      <td><code>p</code>, <code>pressure_pa</code></td>
+      <td>Full model pressure</td>
+      <td>Pa</td>
+      <td>3D</td>
+      <td>Foundation</td>
+    </tr>
+    <tr>
+      <td><code>height</code></td>
+      <td><code>z</code>, <code>height_msl</code></td>
+      <td>Model height MSL</td>
+      <td>m</td>
+      <td>3D</td>
+      <td>Foundation</td>
+    </tr>
+    <tr>
+      <td><code>height_agl</code></td>
+      <td><code>z_agl</code></td>
+      <td>Model height AGL</td>
+      <td>m</td>
+      <td>3D</td>
+      <td>Foundation</td>
+    </tr>
+    <tr>
+      <td><code>geopt</code></td>
+      <td><code>geopotential</code></td>
+      <td>Full geopotential</td>
+      <td>m2/s2</td>
+      <td>3D</td>
+      <td>Foundation</td>
+    </tr>
+    <tr>
+      <td><code>terrain</code></td>
+      <td><code>ter</code>, <code>hgt</code></td>
+      <td>Terrain height</td>
+      <td>m</td>
+      <td>2D</td>
+      <td>Foundation</td>
+    </tr>
+    <tr>
+      <td><code>t2</code></td>
+      <td><code>t2m</code>, <code>temperature_2m</code></td>
+      <td>2-m temperature</td>
+      <td>K</td>
+      <td>2D</td>
+      <td>Foundation</td>
+    </tr>
+    <tr>
+      <td><code>tv2m</code></td>
+      <td><code>virtual_temperature_2m</code></td>
+      <td>2-m virtual temperature</td>
+      <td>K</td>
+      <td>2D</td>
+      <td>Foundation</td>
+    </tr>
+    <tr>
+      <td><code>temp</code></td>
+      <td><code>tk</code></td>
+      <td>Temperature</td>
+      <td>K</td>
+      <td>3D</td>
+      <td>Foundation</td>
+    </tr>
+    <tr>
+      <td><code>tc</code></td>
+      <td><code>temp_c</code></td>
+      <td>Temperature in Celsius</td>
+      <td>degC</td>
+      <td>3D</td>
+      <td>Foundation</td>
+    </tr>
+    <tr>
+      <td><code>theta</code></td>
+      <td><code>th</code>, <code>potential_temperature</code></td>
+      <td>Potential temperature</td>
+      <td>K</td>
+      <td>3D</td>
+      <td>Foundation</td>
+    </tr>
+    <tr>
+      <td><code>ua</code></td>
+      <td><code>u_destag</code></td>
+      <td>U-wind (destaggered)</td>
+      <td>m/s</td>
+      <td>3D</td>
+      <td>Foundation</td>
+    </tr>
+    <tr>
+      <td><code>va</code></td>
+      <td><code>v_destag</code></td>
+      <td>V-wind (destaggered)</td>
+      <td>m/s</td>
+      <td>3D</td>
+      <td>Foundation</td>
+    </tr>
+    <tr>
+      <td><code>wa</code></td>
+      <td><code>w_destag</code></td>
+      <td>W-wind (destaggered)</td>
+      <td>m/s</td>
+      <td>3D</td>
+      <td>Foundation</td>
+    </tr>
+    <tr>
+      <td><code>lat</code></td>
+      <td><code>xlat</code>, <code>latitude</code></td>
+      <td>Latitude</td>
+      <td>degrees</td>
+      <td>2D</td>
+      <td>Foundation</td>
+    </tr>
+    <tr>
+      <td><code>lon</code></td>
+      <td><code>xlong</code>, <code>longitude</code></td>
+      <td>Longitude</td>
+      <td>degrees</td>
+      <td>2D</td>
+      <td>Foundation</td>
+    </tr>
+    <tr>
+      <td><code>theta_e</code></td>
+      <td><code>eth</code></td>
+      <td>Equivalent potential temperature</td>
+      <td>K</td>
+      <td>3D</td>
+      <td>Thermodynamics</td>
+    </tr>
+    <tr>
+      <td><code>tv</code></td>
+      <td><code>virtual_temperature</code></td>
+      <td>Virtual temperature</td>
+      <td>K</td>
+      <td>3D</td>
+      <td>Thermodynamics</td>
+    </tr>
+    <tr>
+      <td><code>twb</code></td>
+      <td><code>wet_bulb</code></td>
+      <td>Wet-bulb temperature</td>
+      <td>K</td>
+      <td>3D</td>
+      <td>Thermodynamics</td>
+    </tr>
+    <tr>
+      <td><code>td</code></td>
+      <td><code>dp</code>, <code>dewpoint</code></td>
+      <td>Dewpoint temperature</td>
+      <td>degC</td>
+      <td>3D</td>
+      <td>Thermodynamics</td>
+    </tr>
+    <tr>
+      <td><code>rh</code></td>
+      <td><code>relative_humidity</code></td>
+      <td>Relative humidity</td>
+      <td>%</td>
+      <td>3D</td>
+      <td>Thermodynamics</td>
+    </tr>
+    <tr>
+      <td><code>slp</code></td>
+      <td><code>sea_level_pressure</code>, <code>mslp</code></td>
+      <td>Sea-level pressure</td>
+      <td>hPa</td>
+      <td>2D</td>
+      <td>Thermodynamics</td>
+    </tr>
+    <tr>
+      <td><code>omega</code></td>
+      <td><code>vertical_velocity_pressure</code></td>
+      <td>Vertical velocity in pressure coordinates</td>
+      <td>Pa/s</td>
+      <td>3D</td>
+      <td>Thermodynamics</td>
+    </tr>
+    <tr>
+      <td><code>pw</code></td>
+      <td><code>precipitable_water</code></td>
+      <td>Precipitable water</td>
+      <td>mm</td>
+      <td>2D</td>
+      <td>Moisture</td>
+    </tr>
+    <tr>
+      <td><code>rh2m</code></td>
+      <td><code>rh2</code>, <code>relative_humidity_2m</code></td>
+      <td>2-m relative humidity</td>
+      <td>%</td>
+      <td>2D</td>
+      <td>Moisture</td>
+    </tr>
+    <tr>
+      <td><code>dp2m</code></td>
+      <td><code>td2</code>, <code>td2m</code>, <code>dewpoint_2m</code></td>
+      <td>2-m dewpoint temperature</td>
+      <td>degC</td>
+      <td>2D</td>
+      <td>Moisture</td>
+    </tr>
+    <tr>
+      <td><code>mixing_ratio</code></td>
+      <td><code>qvapor</code>, <code>water_vapor_mixing_ratio</code></td>
+      <td>Water vapor mixing ratio</td>
+      <td>kg/kg</td>
+      <td>3D</td>
+      <td>Moisture</td>
+    </tr>
+    <tr>
+      <td><code>specific_humidity</code></td>
+      <td><code>q</code></td>
+      <td>Specific humidity</td>
+      <td>kg/kg</td>
+      <td>3D</td>
+      <td>Moisture</td>
+    </tr>
+    <tr>
+      <td><code>sbcape</code></td>
+      <td><code>surface_based_cape</code></td>
+      <td>Surface-based CAPE</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>sbcin</code></td>
+      <td><code>surface_based_cin</code></td>
+      <td>Surface-based CIN</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>mlcape</code></td>
+      <td><code>mixed_layer_cape</code></td>
+      <td>Mixed-layer CAPE</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>mlcin</code></td>
+      <td><code>mixed_layer_cin</code></td>
+      <td>Mixed-layer CIN</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>mucape</code></td>
+      <td><code>most_unstable_cape</code></td>
+      <td>Most-unstable CAPE</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>mucin</code></td>
+      <td><code>most_unstable_cin</code></td>
+      <td>Most-unstable CIN</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>sb3cape</code></td>
+      <td><code>surface_based_3cape</code>, <code>surface_based_0_3km_cape</code></td>
+      <td>Surface-based CAPE in the lowest 3 km</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>ml3cape</code></td>
+      <td><code>3cape</code>, <code>mixed_layer_3cape</code>, <code>mixed_layer_0_3km_cape</code></td>
+      <td>Mixed-layer CAPE in the lowest 3 km</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>mu3cape</code></td>
+      <td><code>most_unstable_3cape</code>, <code>most_unstable_0_3km_cape</code></td>
+      <td>Most-unstable CAPE in the lowest 3 km</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>sb6cape</code></td>
+      <td><code>surface_based_6cape</code>, <code>surface_based_0_6km_cape</code></td>
+      <td>Surface-based CAPE in the lowest 6 km</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>ml6cape</code></td>
+      <td><code>6cape</code>, <code>mixed_layer_6cape</code>, <code>mixed_layer_0_6km_cape</code></td>
+      <td>Mixed-layer CAPE in the lowest 6 km</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>mu6cape</code></td>
+      <td><code>most_unstable_6cape</code>, <code>most_unstable_0_6km_cape</code></td>
+      <td>Most-unstable CAPE in the lowest 6 km</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>lcl</code></td>
+      <td><code>lcl_height</code></td>
+      <td>Lifted condensation level height AGL</td>
+      <td>m</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>lfc</code></td>
+      <td><code>lfc_height</code></td>
+      <td>Level of free convection height AGL</td>
+      <td>m</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>el</code></td>
+      <td><code>el_height</code>, <code>equilibrium_level</code></td>
+      <td>Equilibrium level height AGL</td>
+      <td>m</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>cape2d</code></td>
+      <td><code>cape_2d</code></td>
+      <td>CAPE/CIN/LCL/LFC (backward-compat tuple)</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>cape3d</code></td>
+      <td><code>cape_3d</code></td>
+      <td>3-D CAPE field</td>
+      <td>J/kg</td>
+      <td>3D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>cape2d_wrfpython</code></td>
+      <td><code>cape_2d_wrfpython</code>, <code>cape2d_ncar</code></td>
+      <td>Strict NCAR wrf-python cape_2d [MCAPE, MCIN, LCL, LFC]</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>mcape_wrfpython</code></td>
+      <td><code>mcape_ncar</code></td>
+      <td>Strict NCAR wrf-python maximum-parcel CAPE</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>mcin_wrfpython</code></td>
+      <td><code>mcin_ncar</code></td>
+      <td>Strict NCAR wrf-python maximum-parcel CIN magnitude</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>lcl_wrfpython</code></td>
+      <td><code>lcl_ncar</code></td>
+      <td>Strict NCAR wrf-python maximum-parcel LCL height AGL</td>
+      <td>m</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>lfc_wrfpython</code></td>
+      <td><code>lfc_ncar</code></td>
+      <td>Strict NCAR wrf-python maximum-parcel LFC height AGL</td>
+      <td>m</td>
+      <td>2D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>cape3d_wrfpython</code></td>
+      <td><code>cape_3d_wrfpython</code>, <code>cape3d_ncar</code></td>
+      <td>Strict NCAR wrf-python levelwise [CAPE, CIN]</td>
+      <td>J/kg</td>
+      <td>3D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>cape3d_only_wrfpython</code></td>
+      <td><code>cape_3d_only_wrfpython</code></td>
+      <td>Strict NCAR wrf-python levelwise CAPE component</td>
+      <td>J/kg</td>
+      <td>3D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>cin3d_wrfpython</code></td>
+      <td><code>cin_3d_wrfpython</code></td>
+      <td>Strict NCAR wrf-python levelwise CIN component</td>
+      <td>J/kg</td>
+      <td>3D</td>
+      <td>CAPE</td>
+    </tr>
+    <tr>
+      <td><code>wspd</code></td>
+      <td><code>wind_speed</code></td>
+      <td>Wind speed</td>
+      <td>m/s</td>
+      <td>3D</td>
+      <td>Wind &amp; SRH</td>
+    </tr>
+    <tr>
+      <td><code>wdir</code></td>
+      <td><code>wind_direction</code></td>
+      <td>Wind direction</td>
+      <td>degrees</td>
+      <td>3D</td>
+      <td>Wind &amp; SRH</td>
+    </tr>
+    <tr>
+      <td><code>uvmet</code></td>
+      <td><code>earth_rotated_wind</code></td>
+      <td>U/V wind rotated to earth coordinates</td>
+      <td>m/s</td>
+      <td>3D</td>
+      <td>Wind &amp; SRH</td>
+    </tr>
+    <tr>
+      <td><code>uvmet10</code></td>
+      <td><code>earth_rotated_wind_10m</code></td>
+      <td>10-m U/V wind rotated to earth coordinates</td>
+      <td>m/s</td>
+      <td>2D</td>
+      <td>Wind &amp; SRH</td>
+    </tr>
+    <tr>
+      <td><code>wspd10</code></td>
+      <td><code>wind_speed_10m</code></td>
+      <td>10-m wind speed</td>
+      <td>m/s</td>
+      <td>2D</td>
+      <td>Wind &amp; SRH</td>
+    </tr>
+    <tr>
+      <td><code>wdir10</code></td>
+      <td><code>wind_direction_10m</code></td>
+      <td>10-m wind direction</td>
+      <td>degrees</td>
+      <td>2D</td>
+      <td>Wind &amp; SRH</td>
+    </tr>
+    <tr>
+      <td><code>srh1</code></td>
+      <td><code>srh_0_1km</code></td>
+      <td>0-1 km storm-relative helicity (Bunkers)</td>
+      <td>m2/s2</td>
+      <td>2D</td>
+      <td>Wind &amp; SRH</td>
+    </tr>
+    <tr>
+      <td><code>srh3</code></td>
+      <td><code>srh_0_3km</code></td>
+      <td>0-3 km storm-relative helicity (Bunkers)</td>
+      <td>m2/s2</td>
+      <td>2D</td>
+      <td>Wind &amp; SRH</td>
+    </tr>
+    <tr>
+      <td><code>srh</code></td>
+      <td><code>storm_relative_helicity</code>, <code>helicity</code></td>
+      <td>Storm-relative helicity (configurable depth, Bunkers)</td>
+      <td>m2/s2</td>
+      <td>2D</td>
+      <td>Wind &amp; SRH</td>
+    </tr>
+    <tr>
+      <td><code>srh_wrfpython</code></td>
+      <td><code>srh_ncar</code>, <code>srh_rip</code>, <code>srh_wrfpython_rip</code></td>
+      <td>Storm-relative helicity (strict NCAR wrf-python RIP algorithm)</td>
+      <td>m2/s2</td>
+      <td>2D</td>
+      <td>Wind &amp; SRH</td>
+    </tr>
+    <tr>
+      <td><code>shear_0_1km</code></td>
+      <td><code>bulk_shear_1km</code>, <code>shr01</code></td>
+      <td>0-1 km bulk wind shear</td>
+      <td>m/s</td>
+      <td>2D</td>
+      <td>Wind &amp; SRH</td>
+    </tr>
+    <tr>
+      <td><code>shear_0_6km</code></td>
+      <td><code>bulk_shear_6km</code>, <code>shr06</code></td>
+      <td>0-6 km bulk wind shear</td>
+      <td>m/s</td>
+      <td>2D</td>
+      <td>Wind &amp; SRH</td>
+    </tr>
+    <tr>
+      <td><code>bunkers_rm</code></td>
+      <td><code>bunkers_right</code></td>
+      <td>Bunkers right-moving supercell motion</td>
+      <td>m/s</td>
+      <td>2D</td>
+      <td>Wind &amp; SRH</td>
+    </tr>
+    <tr>
+      <td><code>bunkers_lm</code></td>
+      <td><code>bunkers_left</code></td>
+      <td>Bunkers left-moving supercell motion</td>
+      <td>m/s</td>
+      <td>2D</td>
+      <td>Wind &amp; SRH</td>
+    </tr>
+    <tr>
+      <td><code>mean_wind_0_6km</code></td>
+      <td><code>mean_wind_6km</code></td>
+      <td>0-6 km mean wind</td>
+      <td>m/s</td>
+      <td>2D</td>
+      <td>Wind &amp; SRH</td>
+    </tr>
+    <tr>
+      <td><code>avo</code></td>
+      <td><code>absolute_vorticity</code></td>
+      <td>Absolute vorticity</td>
+      <td>10-5 s-1</td>
+      <td>3D</td>
+      <td>Remaining diagnostics</td>
+    </tr>
+    <tr>
+      <td><code>pvo</code></td>
+      <td><code>potential_vorticity</code></td>
+      <td>Potential vorticity</td>
+      <td>PVU</td>
+      <td>3D</td>
+      <td>Remaining diagnostics</td>
+    </tr>
+    <tr>
+      <td><code>dbz</code></td>
+      <td><code>reflectivity</code></td>
+      <td>Simulated reflectivity</td>
+      <td>dBZ</td>
+      <td>3D</td>
+      <td>Remaining diagnostics</td>
+    </tr>
+    <tr>
+      <td><code>maxdbz</code></td>
+      <td><code>max_reflectivity</code>, <code>composite_reflectivity</code>, <code>mdbz</code></td>
+      <td>Maximum (composite) reflectivity</td>
+      <td>dBZ</td>
+      <td>2D</td>
+      <td>Remaining diagnostics</td>
+    </tr>
+    <tr>
+      <td><code>ctt</code></td>
+      <td><code>cloud_top_temperature</code></td>
+      <td>Cloud-top temperature</td>
+      <td>degC</td>
+      <td>2D</td>
+      <td>Remaining diagnostics</td>
+    </tr>
+    <tr>
+      <td><code>cloudfrac</code></td>
+      <td><code>cloud_fraction</code></td>
+      <td>Cloud fraction (low/mid/high)</td>
+      <td>%</td>
+      <td>2D</td>
+      <td>Remaining diagnostics</td>
+    </tr>
+    <tr>
+      <td><code>uhel</code></td>
+      <td><code>updraft_helicity</code></td>
+      <td>Updraft helicity</td>
+      <td>m2/s2</td>
+      <td>2D</td>
+      <td>Remaining diagnostics</td>
+    </tr>
+    <tr>
+      <td><code>stp</code></td>
+      <td><code>significant_tornado_parameter</code></td>
+      <td>Significant Tornado Parameter (fixed or effective via layer_type)</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>stp_fixed</code></td>
+      <td>&#8212;</td>
+      <td>STP fixed-layer (Thompson et al. 2003)</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>stp_effective</code></td>
+      <td><code>stp_eff</code></td>
+      <td>STP effective-layer</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>scp</code></td>
+      <td><code>supercell_composite_parameter</code></td>
+      <td>Supercell Composite Parameter (effective SRH + EBWD)</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>ehi</code></td>
+      <td><code>energy_helicity_index</code></td>
+      <td>Energy-Helicity Index</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>ecape_scp</code></td>
+      <td><code>entraining_scp</code>, <code>experimental_ecape_scp</code></td>
+      <td>Experimental SCP analog using ECAPE for the buoyancy term</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>ecape_ehi</code></td>
+      <td><code>entraining_ehi</code>, <code>experimental_ecape_ehi</code></td>
+      <td>Experimental EHI analog using ECAPE for the buoyancy term</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>tehi</code></td>
+      <td><code>tornadic_0_1km_ehi</code></td>
+      <td>SPC beta Tornadic 0-1 km EHI</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>tts</code></td>
+      <td><code>tornadic_tilting_stretching</code>, <code>tornadic_tilting_and_stretching</code></td>
+      <td>SPC beta Tornadic Tilting and Stretching</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>vtp_mod</code></td>
+      <td><code>modified_violent_tornado_parameter</code></td>
+      <td>Modified Violent Tornado Parameter</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>critical_angle</code></td>
+      <td><code>crit_angle</code></td>
+      <td>Critical angle</td>
+      <td>degrees</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>ship</code></td>
+      <td><code>significant_hail_parameter</code></td>
+      <td>Significant Hail Parameter</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>bri</code></td>
+      <td><code>bulk_richardson_number</code></td>
+      <td>Bulk Richardson Number</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>dcape</code></td>
+      <td><code>downdraft_cape</code></td>
+      <td>Downdraft CAPE</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>dcp</code></td>
+      <td><code>derecho_composite_parameter</code></td>
+      <td>Derecho Composite Parameter</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>wndg</code></td>
+      <td><code>wind_damage_parameter</code></td>
+      <td>Wind Damage Parameter</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>esp</code></td>
+      <td><code>enhanced_stretching_potential</code></td>
+      <td>Enhanced Stretching Potential</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>mmp</code></td>
+      <td><code>mcs_maintenance_probability</code></td>
+      <td>MCS Maintenance Probability</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>lapse_rate_700_500</code></td>
+      <td><code>lr75</code></td>
+      <td>700-500 hPa lapse rate</td>
+      <td>degC/km</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>lapse_rate_0_3km</code></td>
+      <td><code>lr03</code></td>
+      <td>0-3 km AGL lapse rate</td>
+      <td>degC/km</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>freezing_level</code></td>
+      <td><code>fzlev</code></td>
+      <td>Freezing level height AGL</td>
+      <td>m</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>wet_bulb_0</code></td>
+      <td><code>wb0</code>, <code>wet_bulb_zero</code></td>
+      <td>Wet-bulb zero height AGL</td>
+      <td>m</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>k_index</code></td>
+      <td><code>kindex</code></td>
+      <td>K Index</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>total_totals</code></td>
+      <td><code>totals_totals</code>, <code>t_totals</code>, <code>tot_tots</code></td>
+      <td>Total Totals Index</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>mean_mixr</code></td>
+      <td><code>mean_mixing_ratio</code>, <code>low_level_mean_mixr</code></td>
+      <td>Mean mixing ratio in the lowest 100 hPa</td>
+      <td>g/kg</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>low_rh</code></td>
+      <td><code>low_level_rh</code>, <code>mean_low_rh</code></td>
+      <td>Mean RH in the lowest 100 hPa</td>
+      <td>%</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>mid_rh</code></td>
+      <td><code>mid_level_rh</code>, <code>mean_mid_rh</code></td>
+      <td>Mean RH from 700-500 hPa</td>
+      <td>%</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>dgz_rh</code></td>
+      <td><code>dendritic_growth_zone_rh</code></td>
+      <td>Mean RH through the dendritic growth zone</td>
+      <td>%</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>lcl_temp</code></td>
+      <td><code>lcl_temperature</code></td>
+      <td>LCL temperature</td>
+      <td>degC</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>convective_temp</code></td>
+      <td><code>conv_t</code>, <code>convt</code></td>
+      <td>Convective temperature</td>
+      <td>degC</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>max_temp</code></td>
+      <td><code>forecast_max_temp</code>, <code>maxt</code></td>
+      <td>Forecast maximum surface temperature</td>
+      <td>degC</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>theta_w</code></td>
+      <td><code>wet_bulb_potential_temperature</code></td>
+      <td>Wet-bulb potential temperature</td>
+      <td>K</td>
+      <td>3D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>fosberg</code></td>
+      <td><code>fwi</code>, <code>fosberg_fire_weather_index</code></td>
+      <td>Fosberg Fire Weather Index</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>haines</code></td>
+      <td><code>haines_index</code></td>
+      <td>Haines Index</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>hdw</code></td>
+      <td><code>hot_dry_windy</code></td>
+      <td>Hot-Dry-Windy Index</td>
+      <td>dimensionless</td>
+      <td>2D</td>
+      <td>Severe &amp; Extras</td>
+    </tr>
+    <tr>
+      <td><code>cape</code></td>
+      <td>&#8212;</td>
+      <td>CAPE (configurable parcel_type or custom parcel, supports top_m)</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>Configurable / generic variables</td>
+    </tr>
+    <tr>
+      <td><code>cin</code></td>
+      <td>&#8212;</td>
+      <td>CIN (configurable parcel_type or custom parcel, supports top_m)</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>Configurable / generic variables</td>
+    </tr>
+    <tr>
+      <td><code>effective_inflow</code></td>
+      <td><code>eff_inflow</code>, <code>effective_inflow_layer</code></td>
+      <td>Effective inflow layer base/top heights AGL</td>
+      <td>m</td>
+      <td>2D</td>
+      <td>Configurable / generic variables</td>
+    </tr>
+    <tr>
+      <td><code>effective_cape</code></td>
+      <td><code>eff_cape</code></td>
+      <td>MUCAPE within effective inflow layer</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>Configurable / generic variables</td>
+    </tr>
+    <tr>
+      <td><code>ecape</code></td>
+      <td><code>entraining_cape</code></td>
+      <td>Entraining CAPE from ecape-rs</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>Configurable / generic variables</td>
+    </tr>
+    <tr>
+      <td><code>ncape</code></td>
+      <td><code>normalized_cape</code></td>
+      <td>Normalized CAPE from ecape-rs</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>Configurable / generic variables</td>
+    </tr>
+    <tr>
+      <td><code>ecape_cape</code></td>
+      <td><code>entraining_parcel_cape</code></td>
+      <td>Entraining parcel CAPE from ecape-rs</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>Configurable / generic variables</td>
+    </tr>
+    <tr>
+      <td><code>ecape_cin</code></td>
+      <td><code>ecin</code>, <code>entraining_parcel_cin</code></td>
+      <td>Entraining parcel CIN from ecape-rs</td>
+      <td>J/kg</td>
+      <td>2D</td>
+      <td>Configurable / generic variables</td>
+    </tr>
+    <tr>
+      <td><code>ecape_lfc</code></td>
+      <td><code>entraining_parcel_lfc</code></td>
+      <td>Entraining parcel LFC from ecape-rs</td>
+      <td>m</td>
+      <td>2D</td>
+      <td>Configurable / generic variables</td>
+    </tr>
+    <tr>
+      <td><code>ecape_el</code></td>
+      <td><code>entraining_parcel_el</code></td>
+      <td>Entraining parcel EL from ecape-rs</td>
+      <td>m</td>
+      <td>2D</td>
+      <td>Configurable / generic variables</td>
+    </tr>
+    <tr>
+      <td><code>effective_srh</code></td>
+      <td><code>srh_eff</code>, <code>eff_srh</code></td>
+      <td>SRH over effective inflow layer (Bunkers)</td>
+      <td>m2/s2</td>
+      <td>2D</td>
+      <td>Configurable / generic variables</td>
+    </tr>
+    <tr>
+      <td><code>ebwd</code></td>
+      <td><code>effective_bulk_wind_difference</code>, <code>effective_bulk_shear</code></td>
+      <td>Effective bulk wind difference</td>
+      <td>m/s</td>
+      <td>2D</td>
+      <td>Configurable / generic variables</td>
+    </tr>
+    <tr>
+      <td><code>bulk_shear</code></td>
+      <td><code>shear</code></td>
+      <td>Bulk wind shear (configurable bottom_m / top_m)</td>
+      <td>m/s</td>
+      <td>2D</td>
+      <td>Configurable / generic variables</td>
+    </tr>
+    <tr>
+      <td><code>mean_wind</code></td>
+      <td>&#8212;</td>
+      <td>Mean wind (configurable bottom_m / top_m)</td>
+      <td>m/s</td>
+      <td>2D</td>
+      <td>Configurable / generic variables</td>
+    </tr>
+    <tr>
+      <td><code>lapse_rate</code></td>
+      <td><code>lr</code></td>
+      <td>Lapse rate (configurable bottom_m / top_m, use_virtual)</td>
+      <td>degC/km</td>
+      <td>2D</td>
+      <td>Configurable / generic variables</td>
+    </tr>
+<!-- diagnostics-table:end -->
+  </tbody>
+</table>
+</div>
+
+<p class="sidenote">Sorting and filtering are progressive enhancements; the
+table is complete and in registry order without JavaScript. Click a column
+header to sort; click again to reverse.</p>
+
+</main>
+
+<footer class="site-footer">
+  <p>wrf-rust is MIT-licensed research software by
+    <a href="https://github.com/FahrenheitResearch">FahrenheitResearch</a>.
+    Thanks to Solarpower07 for color tables, product styling, and guidance on
+    severe-weather diagnostics.</p>
+  <p><a href="https://github.com/FahrenheitResearch/wrf-rust">GitHub</a> &#183;
+     <a href="https://pypi.org/project/wrf-rust/">PyPI</a> &#183;
+     <a href="https://github.com/FahrenheitResearch/bowecho">BowEcho</a> &#183;
+     <a href="community-guide/index.html">Community WRF setup guide</a></p>
+  <p>Documentation generated from repository sources at v0.3.0
+     (<code>351b8f3</code>).</p>
+</footer>
+
+<script src="diagnostics.js"></script>
+</body>
+</html>

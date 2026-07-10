@@ -433,8 +433,8 @@ Unit strings are case-insensitive.
 The repository also includes a WRF setup guide for Windows/WSL 2, real-data
 initialization, domain sizing, and troubleshooting:
 
-- [docs/index.html](docs/index.html)
-- [docs/starter-files/README.md](docs/starter-files/README.md)
+- [docs/community-guide/index.html](docs/community-guide/index.html)
+- [docs/community-guide/starter-files/README.md](docs/community-guide/starter-files/README.md)
 - [skills/wrf-community-onboarding/SKILL.md](skills/wrf-community-onboarding/SKILL.md)
 
 ## Development Checks

@@ -1,0 +1,288 @@
+/* wrf-rust documentation site — shared stylesheet.
+   Restrained technical-report style: serif measure, hairline rules,
+   booktabs tables, one accent color. Light-first, dark via media query. */
+
+:root {
+  --paper: #faf8f4;
+  --ink: #201e1a;
+  --muted: #6b6558;
+  --rule: #d9d3c6;
+  --rule-strong: #8f887a;
+  --accent: #8f3b2a;
+  --accent-soft: #b06a55;
+  --code-bg: #f0ece3;
+  --code-ink: #33302a;
+  --mark-bg: #f3e5d8;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #1c1b18;
+    --ink: #e6e1d5;
+    --muted: #a39c8c;
+    --rule: #3d3a33;
+    --rule-strong: #6e6858;
+    --accent: #d98d6f;
+    --accent-soft: #b57a5e;
+    --code-bg: #26241f;
+    --code-ink: #d8d2c4;
+    --mark-bg: #3a2f26;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: Charter, "Bitstream Charter", "Source Serif 4", "Iowan Old Style",
+    Georgia, "Times New Roman", serif;
+  font-size: 17px;
+  line-height: 1.55;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0 auto;
+  padding: 0 1.25rem 4rem;
+  max-width: 44rem;
+}
+
+body.wide { max-width: 72rem; }
+
+/* ── Masthead ── */
+
+header.masthead {
+  margin: 2.5rem 0 2rem;
+  border-bottom: 2px solid var(--ink);
+  padding-bottom: 0.9rem;
+}
+
+.masthead .site-title {
+  font-size: 1.55rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  margin: 0;
+}
+
+.masthead .site-title a {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.masthead .site-title .version {
+  font-size: 0.72em;
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 0.45rem;
+}
+
+.masthead .tagline {
+  margin: 0.25rem 0 0.9rem;
+  color: var(--muted);
+  font-style: italic;
+  font-size: 0.95rem;
+}
+
+nav.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.4rem;
+  font-variant-caps: small-caps;
+  letter-spacing: 0.07em;
+  font-size: 0.9rem;
+}
+
+nav.site-nav a {
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  padding-bottom: 1px;
+}
+
+nav.site-nav a:hover { border-bottom-color: var(--accent); color: var(--accent); }
+
+nav.site-nav a[aria-current="page"] {
+  color: var(--accent);
+  border-bottom: 1px solid var(--accent);
+}
+
+/* ── Type ── */
+
+h1 {
+  font-size: 1.5rem;
+  line-height: 1.25;
+  margin: 0 0 0.4rem;
+  font-weight: 700;
+}
+
+h2 {
+  font-size: 1.17rem;
+  margin: 2.4rem 0 0.7rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--rule);
+  font-weight: 700;
+}
+
+h3 {
+  font-size: 1rem;
+  margin: 1.6rem 0 0.5rem;
+  font-weight: 700;
+}
+
+p { margin: 0.7rem 0; }
+
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:hover { color: var(--accent-soft); }
+
+.lede {
+  font-size: 1.06rem;
+  color: var(--ink);
+}
+
+.sidenote, figcaption, .provenance {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.provenance {
+  border-left: 2px solid var(--rule-strong);
+  padding: 0.35rem 0 0.35rem 0.85rem;
+  margin: 1.1rem 0;
+}
+
+ul, ol { padding-left: 1.4rem; }
+li { margin: 0.3rem 0; }
+
+hr { border: 0; border-top: 1px solid var(--rule); margin: 2rem 0; }
+
+strong { font-weight: 700; }
+
+/* ── Code ── */
+
+code, pre, kbd {
+  font-family: ui-monospace, "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
+  font-size: 0.86em;
+}
+
+code {
+  background: var(--code-bg);
+  color: var(--code-ink);
+  padding: 0.08em 0.32em;
+  border-radius: 2px;
+}
+
+pre {
+  background: var(--code-bg);
+  color: var(--code-ink);
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+  border-left: 2px solid var(--rule-strong);
+  line-height: 1.5;
+  margin: 0.9rem 0;
+}
+
+pre code { background: none; padding: 0; font-size: 1em; }
+
+/* ── Tables (booktabs) ── */
+
+.table-scroll { overflow-x: auto; margin: 1rem 0; }
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+  border-top: 2px solid var(--ink);
+  border-bottom: 2px solid var(--ink);
+}
+
+thead th {
+  font-variant-caps: small-caps;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  text-align: left;
+  border-bottom: 1px solid var(--rule-strong);
+  padding: 0.45rem 0.9rem 0.45rem 0;
+  white-space: nowrap;
+}
+
+tbody td {
+  padding: 0.38rem 0.9rem 0.38rem 0;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+
+tbody tr:last-child td { border-bottom: none; }
+
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.nowrap { white-space: nowrap; }
+
+table code { background: none; padding: 0; }
+
+/* Sortable headers (diagnostics page) */
+th[data-sort] { cursor: pointer; user-select: none; }
+th[data-sort]:hover { color: var(--accent); }
+th[aria-sort="ascending"]::after { content: " \2191"; color: var(--accent); }
+th[aria-sort="descending"]::after { content: " \2193"; color: var(--accent); }
+
+/* Filter control */
+.table-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.6rem 1rem;
+  margin: 1rem 0 0.4rem;
+}
+
+.table-controls input[type="search"] {
+  font: inherit;
+  font-size: 0.92rem;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px;
+  padding: 0.25rem 0.55rem;
+  min-width: 16rem;
+  max-width: 100%;
+}
+
+.table-controls input[type="search"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.row-count { font-size: 0.85rem; color: var(--muted); }
+
+/* ── References ── */
+
+ol.references {
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+ol.references li { margin: 0.45rem 0; }
+
+sup.ref a { text-decoration: none; font-size: 0.8em; }
+
+/* ── Footer ── */
+
+footer.site-footer {
+  margin-top: 3.5rem;
+  border-top: 2px solid var(--ink);
+  padding-top: 0.9rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+footer.site-footer p { margin: 0.35rem 0; }
+
+/* ── Small screens ── */
+
+@media (max-width: 480px) {
+  html { font-size: 16px; }
+  body { padding: 0 0.9rem 3rem; }
+  header.masthead { margin-top: 1.5rem; }
+  nav.site-nav { gap: 0.2rem 1rem; }
+  thead th, tbody td { padding-right: 0.6rem; }
+  .table-controls input[type="search"] { min-width: 0; width: 100%; }
+}
