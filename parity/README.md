@@ -33,6 +33,17 @@ profile/recipe adapter is added.
   contract, including scalar/2-D `interplevel`, handle-based coordinate helpers,
   projection construction, and its literal `getvar` calls.
 
+## SHARPpy severe-weather acceptance
+
+The independent severe-weather adapter lives in [`parity/sharppy`](sharppy/README.md).
+It installs the hash-pinned PyPI package `SHARPpy==1.4.0a5`, verifies that its
+relevant sources match official tag `v1.4.0a5` commit `a5405e2`, and compares
+23 live SHARPpy calls with public `wrf-core` helpers. Fixed STP, neutral-CIN
+three-term SCP, SHIP, DCP, and critical angle are covered. Current-SPC SCP CIN,
+TEHI, and VTP-only terms absent from that SHARPpy release remain explicit,
+cited Rust-test gates. The dedicated runner emits a fail-closed JSON report and
+SHA-256 sidecar under the ignored `parity-results/` directory.
+
 The strict CAPE contracts are derived from pinned wrf-python 1.3.4.1
 `g_cape.py`, `rip_cape.f90`, and `psadilookup.dat`. The strict Rust names retain
 the upstream `cape_2d` order (`MCAPE`, `MCIN`, `LCL`, `LFC`), levelwise

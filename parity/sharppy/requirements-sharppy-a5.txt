@@ -1,0 +1,3 @@
+--only-binary=:all:
+SHARPpy==1.4.0a5 \
+    --hash=sha256:13582f88ba1932b842cbf3ceb6f5f1ddadc17b0b2fd9172a3fc74ed0bcadb868
