@@ -75,7 +75,7 @@ __all__ = [
     "xy_to_ll",
     "CoordPair",
 ]
-__version__ = "0.2.34"
+__version__ = "0.4.0"
 
 # ── Optional plotting imports (require matplotlib) ──
 try:

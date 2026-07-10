@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="How wrf-rust is validated: pinned reference implementations, a differential parity harness against wrf-python and SHARPpy, science corrections shipped in 0.3.0 with their magnitudes, and documented conventions.">
+<meta name="description" content="How wrf-rust is validated: pinned reference implementations, a differential parity harness against wrf-python and SHARPpy, science corrections shipped in 0.3.0 and 0.4.0 with their magnitudes, and documented conventions.">
 <title>Validation — wrf-rust</title>
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
 
 <header class="masthead">
-  <p class="site-title"><a href="index.html">wrf-rust</a><span class="version">0.3.0</span></p>
+  <p class="site-title"><a href="index.html">wrf-rust</a><span class="version">0.4.0</span></p>
   <p class="tagline">WRF post-processing diagnostics, reimplemented in Rust, with a wrf-python-compatible Python API.</p>
   <nav class="site-nav">
     <a href="index.html">Overview</a>
@@ -230,14 +230,14 @@ measured examples from the audit, not worst-case bounds.</p>
 </table>
 </div>
 
-<h2 id="wave2">4&#8194;Wave-two audit corrections — on a branch, not yet released</h2>
+<h2 id="wave2">4&#8194;Wave-two audit corrections — shipped in 0.4.0</h2>
 
-<p><strong>Status:</strong> the corrections in this section live on
-<code>codex/science-audit-wave2</code> and are <strong>not in any published
-release</strong> (0.3.0 included). They are listed here because the audit is
-complete and the magnitudes are known; they will ship in a subsequent release.
-The full audit closed every lead: 12 fixed, 7 already resolved in the shipped
-line, 4 resolved by documentation, 2 refuted, 0 deferred.</p>
+<p><strong>Status:</strong> the corrections in this section were developed on
+<code>codex/science-audit-wave2</code>, merged to <code>main</code> via pull
+request #2 (merge <code>6c5fbed</code>), and <strong>shipped in
+v0.4.0</strong>. The full audit closed every lead: 12 fixed, 7 already
+resolved in the shipped line, 4 resolved by documentation, 2 refuted,
+0 deferred.</p>
 
 <div class="table-scroll">
 <table>
@@ -359,10 +359,10 @@ differently, documented, and pinned by regression oracles rather than hidden:</p
       per-field tolerances, on registered fixtures — not against all WRF files
       or all option combinations.</li>
   <li>Corrections changed output values. If a workflow depended on the old
-      (incorrect) SHIP, SCP, RH, or height values, 0.3.0 and the pending
-      wave-two release will produce different numbers — deliberately.</li>
-  <li>The wave-two corrections in section 4 are unreleased until a tagged
-      version includes them; this page will be updated when that happens.</li>
+      (incorrect) SHIP, SCP, RH, or height values, 0.3.0 and the 0.4.0
+      wave-two release produce different numbers — deliberately.</li>
+  <li>The wave-two corrections in section 4 shipped in the tagged
+      <code>v0.4.0</code> release.</li>
   <li>External-oracle runs (multi-gigabyte wrf-python environments, live
       SHARPpy) are executed at audited commits rather than on every intermediate
       commit; the Rust workspace suite gates every commit.</li>
