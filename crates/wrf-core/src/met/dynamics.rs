@@ -14,7 +14,7 @@ const OMEGA: f64 = 7.2921e-5;
 const RD: f64 = 287.058;
 
 /// Gravitational acceleration (m/s^2).
-const G: f64 = 9.80665;
+const G: f64 = crate::WRF_GRAVITY_M_S2;
 
 // Helper: index into row-major grid
 #[inline(always)]

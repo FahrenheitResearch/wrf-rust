@@ -9,7 +9,6 @@ use crate::error::{WrfError, WrfResult};
 use crate::grid;
 
 // ── Physical constants ──
-const G: f64 = 9.80665;
 const P0: f64 = 100_000.0; // Pa
 const KAPPA: f64 = 0.2857142857; // Rd / Cp
 
@@ -512,7 +511,7 @@ impl WrfFile {
         let key = format!("height_msl_{t}");
         self.cached_or_compute(&key, || {
             let geopt = self.full_geopotential(t)?;
-            Ok(geopt.iter().map(|g| g / G).collect())
+            Ok(geopt.iter().map(|&g| geopotential_height_m(g)).collect())
         })
     }
 
@@ -798,6 +797,11 @@ impl WrfFile {
     }
 }
 
+#[inline]
+pub(crate) fn geopotential_height_m(geopotential_m2_s2: f64) -> f64 {
+    geopotential_m2_s2 / crate::WRF_GRAVITY_M_S2
+}
+
 fn trim_time_dim(mut dims: Vec<usize>, nt: usize) -> Vec<usize> {
     if dims.len() > 1 && dims[0] == nt {
         dims.remove(0);
@@ -905,4 +909,15 @@ fn interpolate_masked_2d(data: &[f64], mask: &[bool], ny: usize, nx: usize) -> V
         result[idx] = val;
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::geopotential_height_m;
+
+    #[test]
+    fn geopotential_height_uses_the_wrf_gravity_constant() {
+        // WRF and wrf-python both define g as 9.81 m s^-2.
+        assert_eq!(geopotential_height_m(9_810.0), 1_000.0);
+    }
 }

@@ -11,7 +11,7 @@ const LOOKUP_SIZE: usize = 150;
 const LOOKUP_SCALE: f64 = 100_000.0;
 const LOOKUP_MISSING: f64 = 1.0e9;
 
-pub(crate) const G: f64 = 9.81;
+pub(crate) const G: f64 = crate::WRF_GRAVITY_M_S2;
 pub(crate) const RD: f64 = 287.0;
 pub(crate) const CP: f64 = 1004.5;
 pub(crate) const GAMMA: f64 = RD / CP;

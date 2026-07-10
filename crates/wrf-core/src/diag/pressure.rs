@@ -5,12 +5,11 @@ use crate::compute::ComputeOpts;
 use crate::error::WrfResult;
 use crate::file::WrfFile;
 
-const G: f64 = 9.80665;
 const RD: f64 = 287.058;
 
 // WRF-python (NCAR) uses these rounded constants in its Fortran SLP routine.
 // We must match them exactly for SLP compatibility.
-const G_SLP: f64 = 9.81;
+const G_SLP: f64 = crate::WRF_GRAVITY_M_S2;
 const RD_SLP: f64 = 287.0;
 const USSALR: f64 = 0.0065; // US Standard Atmosphere lapse rate (K/m)
 const PCONST: f64 = 10000.0; // Pa above surface to find reference level
@@ -39,7 +38,10 @@ pub fn compute_height_agl(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResu
 /// Height on staggered Z levels (m). `[nz_stag, ny, nx]`
 pub fn compute_zstag(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let geopt_stag = f.geopotential_stag(t)?;
-    Ok(geopt_stag.iter().map(|v| v / G).collect())
+    Ok(geopt_stag
+        .iter()
+        .map(|&v| crate::file::geopotential_height_m(v))
+        .collect())
 }
 
 /// Full geopotential (m^2/s^2), destaggered. `[nz, ny, nx]`
@@ -162,7 +164,7 @@ pub fn compute_omega(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Ve
         .map(|(((w, p), t_k), q)| {
             let tv = t_k * (1.0 + 0.61 * q.max(0.0));
             let rho = p / (RD * tv);
-            -rho * G * w
+            -rho * crate::WRF_GRAVITY_M_S2 * w
         })
         .collect())
 }

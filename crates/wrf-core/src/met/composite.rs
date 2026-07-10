@@ -12,7 +12,6 @@ use rayon::prelude::*;
 
 /// Physical constants
 const RD: f64 = 287.058;
-const G: f64 = 9.80665;
 const ZEROCNK: f64 = 273.15;
 const ROCP: f64 = 0.28571426;
 
@@ -764,7 +763,7 @@ pub fn compute_pw(
                 let q_avg = 0.5 * (q_prof[k].max(0.0) + q_prof[k + 1].max(0.0));
                 pw_val += q_avg * dp;
             }
-            pw_val / G // kg/m^2 = mm
+            pw_val / crate::WRF_GRAVITY_M_S2 // kg/m^2 = mm
         })
         .collect()
 }

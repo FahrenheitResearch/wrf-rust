@@ -8,7 +8,7 @@
 pub const RD: f64 = 287.058; // Dry air gas constant (J/(kg*K))
 pub const RV: f64 = 461.5; // Water vapor gas constant (J/(kg*K))
 pub const CP: f64 = 1005.7; // Specific heat at constant pressure (J/(kg*K))
-pub const G: f64 = 9.80665; // Gravitational acceleration (m/s^2)
+pub const G: f64 = crate::WRF_GRAVITY_M_S2; // WRF gravitational acceleration (m/s^2)
 pub const ROCP: f64 = 0.28571426; // Rd/Cp
 pub const ZEROCNK: f64 = 273.15; // 0 Celsius in Kelvin
 pub const MISSING: f64 = -9999.0;
