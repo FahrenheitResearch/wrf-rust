@@ -20,8 +20,16 @@ pub const T0_STD: f64 = 288.15; // Standard sea level temperature (K)
 
 // --- SHARPpy Thermodynamic Approximations ---
 
-/// Wobus function for computing moist adiabats.
-/// Input: temperature in Celsius.
+/// SPC/SHARPpy-lineage Wobus correction for approximate moist adiabats.
+///
+/// Input and output are Celsius. This intentionally retains the
+/// pressure-independent polynomial used by SHARPpy's native parcel routines;
+/// it is not an exact pseudoadiabatic solver. Davies-Jones (2008) reports that
+/// the Wobus approximation can err by about 1.2 K in the warm regime.
+///
+/// References:
+/// - <https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/thermo.py#L224-L275>
+/// - <https://doi.org/10.1175/2007MWR2224.1>
 pub fn wobf(t: f64) -> f64 {
     let t = t - 20.0;
     if t <= 0.0 {
@@ -40,9 +48,18 @@ pub fn wobf(t: f64) -> f64 {
     }
 }
 
-/// Lifts a saturated parcel.
-/// p: Pressure (hPa), thetam: Saturation Potential Temperature (Celsius).
-/// Uses 7 Newton-Raphson iterations.
+/// Lifts a saturated parcel with the SPC/SHARPpy-lineage Wobus approximation.
+///
+/// `p` is pressure in hPa and `thetam` is saturated potential temperature in
+/// Celsius. The fixed seven-step solve is the native diagnostic path; strict
+/// wrf-python CAPE uses the separate pinned NCAR Bolton lookup in `rip_cape`.
+/// A representative regression against that table measures differences of
+/// 0.490 K at 700 hPa, 0.677 K at 300 hPa, and 1.180 K at 190 hPa, consistent
+/// with the published approximately 1.2-K warm-regime accuracy bound.
+///
+/// References:
+/// - <https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/thermo.py#L278-L363>
+/// - <https://github.com/NCAR/wrf-python/blob/31c923335227b22fa656fd589a5342b91103e939/src/wrf/data/psadilookup.dat>
 pub fn satlift(p: f64, thetam: f64) -> f64 {
     if (p - 1000.0).abs() <= 0.001 {
         return thetam;
