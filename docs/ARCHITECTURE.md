@@ -25,6 +25,21 @@ Owns:
 Does not own plotting, file catalogs, cache retention, rendered product recipes,
 or sounding image layout.
 
+### wrf-formula
+
+Owns the bounded custom-diagnostic layer above `wrf-core`:
+
+- Deterministic expression parsing and compile plans
+- Dimensionally checked scalar, field, and vector algebra
+- Portable, data-only formula recipes and provenance
+- Resource ceilings and structured user-input errors
+- Resolver-neutral local/temporal calculus, plus the serialized WRF adapter
+
+`wrf-formula` may resolve fields through `wrf-core`, but it does not own the
+native diagnostic registry, rendering, run orchestration, arbitrary plugins,
+or iterative global solvers. Reviewed diagnostics that require those solvers
+remain named native kernels rather than equation-box syntax.
+
 ### wrf-contour
 
 Owns renderer-agnostic contour and filled-band topology. It understands scalar
@@ -113,6 +128,12 @@ For sounding products:
 
 ```text
 Python -> Rust binding -> wrf-sounding -> sounding renderer -> PNG
+```
+
+For custom diagnostics:
+
+```text
+Python -> Rust binding -> wrf-formula -> wrf-core
 ```
 
 ## Porting Rule

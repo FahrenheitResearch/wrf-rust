@@ -75,7 +75,56 @@ __all__ = [
     "xy_to_ll",
     "CoordPair",
 ]
-__version__ = "0.2.34"
+__version__ = "0.2.35"
+
+# Formula Lab is additive to the wrf-python compatibility surface.  Import it
+# explicitly here so notebook users get one stable public namespace while the
+# implementation remains isolated from getvar().
+from .formula import (
+    Formula,
+    FormulaError,
+    FormulaEvaluationOptions,
+    FormulaEvaluationError,
+    FormulaNameError,
+    FormulaParameter,
+    FormulaPlan,
+    FormulaRecipe,
+    FormulaRecipeError,
+    FormulaReference,
+    FormulaRequirements,
+    FormulaResourceLimits,
+    FormulaResourceError,
+    FormulaResult,
+    FormulaShapeError,
+    FormulaSyntaxError,
+    FormulaUnitError,
+    compile_formula,
+    evaluate_formula,
+    load_formula_recipe,
+)
+
+__all__ += [
+    "Formula",
+    "FormulaPlan",
+    "FormulaParameter",
+    "FormulaReference",
+    "FormulaRequirements",
+    "FormulaEvaluationOptions",
+    "FormulaResourceLimits",
+    "FormulaRecipe",
+    "FormulaResult",
+    "FormulaError",
+    "FormulaSyntaxError",
+    "FormulaNameError",
+    "FormulaUnitError",
+    "FormulaShapeError",
+    "FormulaResourceError",
+    "FormulaEvaluationError",
+    "FormulaRecipeError",
+    "compile_formula",
+    "evaluate_formula",
+    "load_formula_recipe",
+]
 
 # ── Optional plotting imports (require matplotlib) ──
 try:
@@ -170,6 +219,8 @@ class WrfFile:
     def __init__(self, path_or_dataset):
         if isinstance(path_or_dataset, _WrfFile):
             self._inner = path_or_dataset
+        elif isinstance(path_or_dataset, WrfFile):
+            self._inner = path_or_dataset._inner
         elif isinstance(path_or_dataset, (str, os.PathLike)):
             self._inner = _WrfFile(os.fspath(path_or_dataset))
         elif hasattr(path_or_dataset, "filepath"):

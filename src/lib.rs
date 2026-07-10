@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 
 mod py_file;
+mod py_formula;
 mod py_getvar;
 mod py_opts;
 mod py_sounding;
@@ -9,6 +10,7 @@ mod py_sounding;
 #[pymodule]
 fn _wrf(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<py_file::WrfFile>()?;
+    py_formula::register(py, m)?;
     py_getvar::register(py, m)?;
     py_sounding::register(py, m)?;
     Ok(())

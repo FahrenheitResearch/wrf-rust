@@ -2641,6 +2641,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wrf-formula"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "wrf-core",
+]
+
+[[package]]
 name = "wrf-products"
 version = "0.1.0"
 dependencies = [
@@ -2658,6 +2667,7 @@ dependencies = [
  "numpy",
  "pyo3",
  "wrf-core",
+ "wrf-formula",
  "wrf-sounding",
 ]
 

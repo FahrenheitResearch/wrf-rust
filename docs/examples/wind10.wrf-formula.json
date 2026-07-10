@@ -1,0 +1,62 @@
+{
+  "schema": "wrf-formula/v1",
+  "name": "wind10_scaled",
+  "version": "1.0.0",
+  "description": "Scaled 10 m scalar wind speed",
+  "authors": [
+    "Fahrenheit Research"
+  ],
+  "references": [
+    {
+      "citation": "WRF U10/V10 grid-relative wind components",
+      "doi": null,
+      "url": null
+    }
+  ],
+  "tags": [
+    "wind",
+    "example"
+  ],
+  "source": "sqrt(U10^2 + V10^2) * scale",
+  "parameters": [
+    {
+      "name": "scale",
+      "units": "1",
+      "default": 1.0,
+      "minimum": 0.0,
+      "maximum": 10.0,
+      "description": "Dimensionless display multiplier"
+    }
+  ],
+  "expected_output_units": "m s-1",
+  "requirements": {
+    "fields": [
+      "U10",
+      "V10"
+    ],
+    "maximum_cadence_seconds": null,
+    "maximum_horizontal_spacing_m": null,
+    "minimum_vertical_levels": null,
+    "notes": []
+  },
+  "evaluation_options": {
+    "boundary_policy": "one_sided_second_order",
+    "missing_policy": "propagate",
+    "non_finite_policy": "error",
+    "variable_unit_overrides": {}
+  },
+  "resource_limits": {
+    "max_source_bytes": 8192,
+    "max_tokens": 4096,
+    "max_ast_nodes": 4096,
+    "max_ast_depth": 64,
+    "max_identifier_bytes": 128,
+    "max_function_arity": 16,
+    "max_assignments": 256,
+    "max_dependencies": 256,
+    "max_output_elements": 16777216,
+    "max_working_bytes": 268435456,
+    "max_total_allocated_bytes": 1073741824,
+    "max_operations": 1000000000
+  }
+}

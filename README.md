@@ -117,6 +117,38 @@ u10 = getvar(f, "U10", units="kt")
 v10 = getvar(f, "V10", units="kt")
 ```
 
+## Formula Lab
+
+Formula Lab compiles sandboxed, unit-aware custom diagnostics without Python
+`eval`, callbacks, filesystem access, or arbitrary code execution:
+
+```python
+from wrf import FormulaRecipe, compile_formula
+
+recipe = FormulaRecipe(
+    source="sqrt(U10^2 + V10^2)",
+    name="wind10",
+    expected_output_units="m s-1",
+)
+wind10 = compile_formula(recipe)
+
+print(wind10.dependencies)
+print(wind10.explain())       # dependencies, calculus, AST, requirements, warnings
+speed = wind10.evaluate(f, timeidx=0)
+result = wind10.evaluate(f, timeidx=0, return_metadata=True)
+```
+
+Compiled formulas can be reused across files and times. Strict JSON recipes
+are shareable without pickle or executable hooks. Formula results are owned,
+C-contiguous `float64` NumPy arrays; metadata results include units, axes,
+description, and provenance.
+
+Generic Formula Lab calculus follows a documented mass-grid convention. It is
+not a substitute for the strict raw C-grid NCAR `avo`, `pvo`, or
+updraft-helicity kernels. See [the Formula Lab guide](docs/FORMULA_LAB.md) for
+the scientific distinction, safety model, recipe schema, exception spans, and
+current one-time-at-a-time execution boundary.
+
 ## wrf-python parity
 
 The staged differential framework in [`parity/README.md`](parity/README.md)
