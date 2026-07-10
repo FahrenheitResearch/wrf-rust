@@ -81,8 +81,38 @@ fn ehi_from_components(cape: &[f64], srh: &[f64]) -> Vec<f64> {
     crate::met::composite::compute_ehi(cape, srh)
 }
 
+/// Three-term SHARPpy SCP retained for the intentionally distinct ECAPE analog.
 fn scp_from_components(cape: &[f64], effective_srh: &[f64], ebwd: &[f64]) -> Vec<f64> {
     crate::met::composite::compute_scp(cape, effective_srh, ebwd)
+}
+
+/// Current SPC SCP, including the MUCIN magnitude-reduction term.
+fn scp_spc_from_components(
+    mucape: &[f64],
+    effective_srh: &[f64],
+    ebwd: &[f64],
+    mucin: &[f64],
+) -> Vec<f64> {
+    crate::met::composite::supercell_composite_parameter(
+        mucape,
+        effective_srh,
+        ebwd,
+        mucin,
+        mucape.len(),
+        1,
+    )
+}
+
+type CapeFieldSlices<'a> = (&'a [f64], &'a [f64], &'a [f64], &'a [f64]);
+
+/// Select the MUCAPE/MUCIN components from `compute_cape_fields`' four-field
+/// return value and apply the registered SPC definition.
+fn registered_scp_from_cape_fields(
+    (mucape, mucin, _mu_lcl, _mu_lfc): CapeFieldSlices<'_>,
+    effective_srh: &[f64],
+    ebwd: &[f64],
+) -> Vec<f64> {
+    scp_spc_from_components(mucape, effective_srh, ebwd, mucin)
 }
 
 fn build_augmented_wind_profile(
@@ -528,15 +558,28 @@ fn compute_tornadic_low_level_components(
 
 /// Supercell Composite Parameter (dimensionless). `[ny, nx]`
 ///
-/// Uses MUCAPE, effective SRH, and effective bulk wind difference (EBWD).
+/// Uses MUCAPE, effective SRH, effective bulk wind difference (EBWD), and the
+/// current SPC MUCIN factor: 1.0 at and above -40 J/kg, then -40/MUCIN for
+/// stronger inhibition. The experimental ECAPE analog intentionally retains
+/// its separately documented three-term definition.
+///
+/// Reference: <https://www.spc.noaa.gov/exper/mesoanalysis/help/help_scp.html>
 pub fn compute_scp(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let (mucape, _, _, _) =
-        crate::diag::cape::compute_cape_fields(f, t, "mu", None, opts.lake_interp)?;
+    let cape_fields = crate::diag::cape::compute_cape_fields(f, t, "mu", None, opts.lake_interp)?;
 
     let eff_srh = crate::diag::srh::compute_effective_srh(f, t, opts)?;
     let ebwd = compute_effective_bulk_wind_difference(f, t, opts)?;
 
-    Ok(scp_from_components(&mucape, &eff_srh, &ebwd))
+    Ok(registered_scp_from_cape_fields(
+        (
+            &cape_fields.0,
+            &cape_fields.1,
+            &cape_fields.2,
+            &cape_fields.3,
+        ),
+        &eff_srh,
+        &ebwd,
+    ))
 }
 
 /// Experimental ECAPE-based Supercell Composite Parameter (dimensionless). `[ny, nx]`
@@ -1242,6 +1285,41 @@ mod tests {
         assert_close(scp[0], 0.0);
         assert_close(scp[1], 0.75);
         assert_close(scp[2], 1.0);
+    }
+
+    #[test]
+    fn registered_scp_cape_tuple_seam_selects_the_mucin_component() {
+        let cape_fields = (
+            [1000.0; 3],
+            [-40.0, -80.0, -160.0],
+            [1000.0; 3],
+            [2000.0; 3],
+        );
+        let effective_srh = [50.0; 3];
+        let ebwd = [20.0; 3];
+
+        let three_term = scp_from_components(&cape_fields.0, &effective_srh, &ebwd);
+        let registered = registered_scp_from_cape_fields(
+            (
+                &cape_fields.0,
+                &cape_fields.1,
+                &cape_fields.2,
+                &cape_fields.3,
+            ),
+            &effective_srh,
+            &ebwd,
+        );
+
+        // The second tuple component is deliberately non-neutral MUCIN. The
+        // third and fourth components are LCL/LFC-like positive heights, so
+        // selecting either one (or reverting to the three-term helper) would
+        // incorrectly leave every value at 1.0.
+        for value in three_term {
+            assert_close(value, 1.0);
+        }
+        assert_close(registered[0], 1.0);
+        assert_close(registered[1], 0.5);
+        assert_close(registered[2], 0.25);
     }
 
     #[test]

@@ -1107,6 +1107,15 @@ mod tests {
     }
 
     #[test]
+    fn scp_registry_points_to_the_current_spc_compute_path() {
+        let registered = get_var_def("scp").unwrap().compute;
+        let expected =
+            dsevere::compute_scp as fn(&WrfFile, usize, &ComputeOpts) -> WrfResult<Vec<f64>>;
+
+        assert!(std::ptr::fn_addr_eq(registered, expected));
+    }
+
+    #[test]
     fn strict_wrfpython_srh_names_do_not_replace_bunkers_srh() {
         assert_eq!(get_var_def("srh").unwrap().name, "srh");
         assert_eq!(get_var_def("srh_rip").unwrap().name, "srh_wrfpython");
