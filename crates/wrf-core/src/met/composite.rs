@@ -1103,17 +1103,24 @@ pub fn derecho_composite_parameter(
         .collect()
 }
 
-/// Enhanced Supercell Composite Parameter (SCP).
+/// CIN-scaled Supercell Composite Parameter (SCP).
 ///
-/// SCP = (MUCAPE / 1000) * (SRH / 50) * (SHEAR_06 / 40) * CIN_term
+/// SCP = (MUCAPE / 1000) * (ESRH / 50) * (EBWD / 20) * CIN_term
 ///
 /// CIN_term = 1 if MUCIN > -40, else -40/MUCIN
+///
+/// The EBWD term is zero below 10 m/s, increases as EBWD/20 from
+/// 10--20 m/s, and is capped at one above 20 m/s.
+///
+/// References:
+/// - <https://www.spc.noaa.gov/exper/mesoanalysis/help/help_scp.html>
+/// - <https://github.com/sharppy/SHARPpy/blob/a5405e255ab696c32db578dff2c4f83699ec717e/sharppy/sharptab/params.py#L694-L729>
 ///
 /// All inputs are flattened 2D grids.
 pub fn supercell_composite_parameter(
     mu_cape: &[f64],
     srh: &[f64],
-    shear_06: &[f64],
+    ebwd: &[f64],
     mu_cin: &[f64],
     nx: usize,
     ny: usize,
@@ -1124,7 +1131,13 @@ pub fn supercell_composite_parameter(
         .map(|i| {
             let cape_term = (mu_cape[i] / 1000.0).max(0.0);
             let srh_term = (srh[i] / 50.0).max(0.0);
-            let shear_term = (shear_06[i] / 40.0).max(0.0);
+            let shear_term = if ebwd[i] < 10.0 {
+                0.0
+            } else if ebwd[i] > 20.0 {
+                1.0
+            } else {
+                ebwd[i] / 20.0
+            };
 
             let cin_term = if mu_cin[i] > -40.0 {
                 1.0
@@ -1611,6 +1624,40 @@ mod tests {
         );
 
         let expected = [1.0, 1.0, 0.5, 0.0, 0.0, 0.0, 0.625, 1.5, 1.5];
+        for (actual, expected) in out.into_iter().zip(expected) {
+            assert_close(actual, expected);
+        }
+    }
+
+    #[test]
+    fn exported_scp_helper_applies_spc_ebwd_limits() {
+        let out = supercell_composite_parameter(
+            &[1000.0; 5],
+            &[50.0; 5],
+            &[9.0, 10.0, 15.0, 20.0, 21.0],
+            &[-20.0; 5],
+            5,
+            1,
+        );
+
+        let expected = [0.0, 0.5, 0.75, 1.0, 1.0];
+        for (actual, expected) in out.into_iter().zip(expected) {
+            assert_close(actual, expected);
+        }
+    }
+
+    #[test]
+    fn exported_scp_helper_retains_the_spc_mucin_scaling() {
+        let out = supercell_composite_parameter(
+            &[1000.0; 4],
+            &[50.0; 4],
+            &[20.0; 4],
+            &[-20.0, -40.0, -80.0, -160.0],
+            4,
+            1,
+        );
+
+        let expected = [1.0, 1.0, 0.5, 0.25];
         for (actual, expected) in out.into_iter().zip(expected) {
             assert_close(actual, expected);
         }
