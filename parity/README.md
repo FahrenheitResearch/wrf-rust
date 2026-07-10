@@ -29,9 +29,11 @@ profile/recipe adapter is added.
 - `extract_wrfpython.py` and `extract_wrfrust.py` create implementation bundles.
 - `compare.py` checks bundle provenance, shapes, missing masks, and numerical
   tolerances and can emit a machine-readable report.
-- `probe_wrf_runner.py` exercises the candidate-only WRF-Runner API and shape
-  contract, including scalar/2-D `interplevel`, handle-based coordinate helpers,
-  projection construction, and its literal `getvar` calls.
+- `probe_wrf_runner.py` exercises the candidate-only WRF-Runner API, exact
+  default return types, and shape contract, including scalar/2-D `interplevel`,
+  handle-based coordinate helpers, projection construction, and its literal
+  `getvar` calls. It records raw concrete types before any NumPy conversion so
+  a DataArray or MaskedArray cannot pass merely because `numpy.asarray` works.
 
 ## SHARPpy severe-weather acceptance
 
@@ -164,6 +166,16 @@ uses wrf-rust extensions including `WrfFile`, handle-based `get_cartopy` and
 `latlon_coords`, parcel-specific/truncated CAPE, lake interpolation, Bunkers
 SRH, and effective-layer products.
 
+The P0 default-container contract is intentionally strict: `getvar` and
+`interplevel` return exact plain `numpy.ndarray` objects, `latlon_coords`
+returns an exact tuple of two plain arrays, and scalar `ll_to_xy` returns an
+exact tuple whose components are Python or NumPy floating scalars. Descending
+pressure interpolation retains WRF-Runner's v0.2.35 log-pressure convention;
+height interpolation remains linear. Explicit metadata options may still
+request wrf-python-style xarray output. The probe also samples the midpoint of
+the fixture's first horizontal grid cell to ensure scalar coordinates remain
+fractional instead of being rounded or clamped to a cell boundary.
+
 Its production performance also cannot be inferred solely from a single-process
 79-product benchmark. `generate_plots_for_timestep` submits products to separate
 processes, each constructing a fresh `WrfFile`; per-handle CAPE/EIL caches are
@@ -193,8 +205,9 @@ faithful multi-process call-sequence driver.
   bounds, dtype, and dimension order follow wrf-python 1.3.4.1 commit
   `31c923335227b22fa656fd589a5342b91103e939` while retaining WRF-Runner's
   2-D target-surface use case. Without optional xarray, the shim deliberately
-  still applies `squeeze` and keeps NaN in masked output buffers so existing
-  WRF-Runner `numpy.asarray`/`numpy.array` call paths remain safe.
+  still applies `squeeze` and keeps NaN in masked output buffers. WRF-Runner's
+  omitted-metadata default is separately gated as an exact plain ndarray with
+  NaN missing values; metadata containers are explicit opt-ins.
 
 ## Remaining gaps
 

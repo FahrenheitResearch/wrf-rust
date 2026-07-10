@@ -23,14 +23,57 @@ def _planes(values, ny=2, nx=2, dtype=np.float64):
 
 
 class InterplevelTests(unittest.TestCase):
-    def test_public_signature_matches_wrf_python(self):
+    def test_public_signature_exposes_legacy_meta_sentinel(self):
         signature = inspect.signature(interplevel)
         self.assertEqual(
             list(signature.parameters),
             ["field3d", "vert", "desiredlev", "missing", "squeeze", "meta"],
         )
         self.assertIs(signature.parameters["squeeze"].default, True)
-        self.assertIs(signature.parameters["meta"].default, True)
+        self.assertIsNone(signature.parameters["meta"].default)
+
+    def test_default_restores_legacy_plain_float64_log_pressure_result(self):
+        coordinate = _planes([1000.0, 500.0], dtype=np.float32)
+        field = _planes([0.0, 100.0], dtype=np.float32)
+
+        result = interplevel(field, coordinate, 750.0)
+
+        self.assertIs(type(result), np.ndarray)
+        self.assertEqual(result.dtype, np.dtype(np.float64))
+        expected = 100.0 * np.log(750.0 / 1000.0) / np.log(500.0 / 1000.0)
+        np.testing.assert_allclose(result, expected, rtol=0.0, atol=1e-12)
+
+    def test_default_legacy_two_dimensional_targets_leave_nan_out_of_range(self):
+        coordinate = _planes([1000.0, 500.0])
+        field = _planes([0.0, 100.0])
+        target = np.array([[900.0, 800.0], [700.0, 200.0]])
+
+        result = interplevel(field, coordinate, target)
+
+        self.assertIs(type(result), np.ndarray)
+        expected = 100.0 * np.log(target / 1000.0) / np.log(500.0 / 1000.0)
+        expected[-1, -1] = np.nan
+        np.testing.assert_allclose(result, expected, rtol=0.0, atol=1e-12)
+        self.assertTrue(np.isnan(result[-1, -1]))
+
+    def test_default_legacy_contract_is_stable_when_xarray_is_available(self):
+        try:
+            import xarray as xr
+        except ImportError:
+            self.skipTest("xarray is not installed")
+
+        coordinate = xr.DataArray(_planes([1000.0, 500.0]))
+        field = xr.DataArray(_planes([0.0, 100.0]))
+        target = np.array([[900.0, 800.0], [700.0, 200.0]])
+
+        result = interplevel(field, coordinate, target)
+
+        self.assertIs(type(result), np.ndarray)
+        self.assertEqual(result.dtype, np.dtype(np.float64))
+        expected = 100.0 * np.log(target / 1000.0) / np.log(500.0 / 1000.0)
+        expected[-1, -1] = np.nan
+        np.testing.assert_allclose(result, expected, rtol=0.0, atol=1e-12)
+        self.assertTrue(np.isnan(result[-1, -1]))
 
     def test_pressure_interpolation_is_linear_not_logarithmic(self):
         coordinate = _planes([1000.0, 500.0])
@@ -279,6 +322,7 @@ class InterplevelTests(unittest.TestCase):
             _planes([0.0, 100.0]),
             _planes([1000.0, 500.0]),
             750.0,
+            meta=True,
         )
 
         self.assertIsInstance(result, xr.DataArray)

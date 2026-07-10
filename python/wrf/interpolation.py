@@ -278,35 +278,119 @@ def _runner_safe_masked_fallback(masked, squeeze):
     return fallback.squeeze() if squeeze else fallback
 
 
+def _interplevel_legacy(field3d, vert, desiredlev):
+    """Return the established wrf-rust 0.2.35 three-argument result.
+
+    This path intentionally preserves the original public contract used by
+    WRF-Runner: exactly three-dimensional inputs, scalar or two-dimensional
+    targets, float64 ndarray output, NaN missing values, and logarithmic
+    interpolation when the supplied vertical coordinate decreases upward.
+    """
+    field = np.asarray(field3d, dtype=np.float64)
+    coordinate = np.asarray(vert, dtype=np.float64)
+
+    if field.ndim != 3 or coordinate.ndim != 3:
+        raise ValueError(
+            "field_3d and vert_coord_3d must be 3-D arrays (nz, ny, nx)"
+        )
+    if field.shape != coordinate.shape:
+        raise ValueError(
+            f"Shape mismatch: field_3d {field.shape} vs "
+            f"vert_coord_3d {coordinate.shape}"
+        )
+
+    nz, ny, nx = field.shape
+    target_array = np.asarray(desiredlev, dtype=np.float64)
+    if target_array.ndim == 0:
+        target = np.full((ny, nx), float(target_array))
+    elif target_array.ndim == 2:
+        if target_array.shape != (ny, nx):
+            raise ValueError(
+                f"2D target_level shape {target_array.shape} doesn't match "
+                f"field shape ({ny}, {nx})"
+            )
+        target = target_array
+    else:
+        raise ValueError("target_level must be a scalar or 2D array (ny, nx)")
+
+    mid_j, mid_i = ny // 2, nx // 2
+    descending = coordinate[0, mid_j, mid_i] > coordinate[-1, mid_j, mid_i]
+    result = np.full((ny, nx), np.nan, dtype=np.float64)
+
+    if descending:
+        log_coordinate = np.log(np.clip(coordinate, 1.0e-10, None))
+        log_target = np.log(target)
+        for k in range(nz - 1):
+            matches = (
+                (coordinate[k] >= target)
+                & (coordinate[k + 1] <= target)
+                & np.isnan(result)
+            )
+            if not np.any(matches):
+                continue
+
+            denominator = log_coordinate[k + 1] - log_coordinate[k]
+            safe_denominator = np.where(
+                np.abs(denominator) < 1.0e-12, 1.0, denominator
+            )
+            fraction = (log_target - log_coordinate[k]) / safe_denominator
+            interpolated = field[k] + fraction * (field[k + 1] - field[k])
+            result = np.where(matches, interpolated, result)
+    else:
+        for k in range(nz - 1):
+            matches = (
+                (coordinate[k] <= target)
+                & (coordinate[k + 1] >= target)
+                & np.isnan(result)
+            )
+            if not np.any(matches):
+                continue
+
+            denominator = coordinate[k + 1] - coordinate[k]
+            safe_denominator = np.where(
+                np.abs(denominator) < 1.0e-12, 1.0, denominator
+            )
+            fraction = (target - coordinate[k]) / safe_denominator
+            interpolated = field[k] + fraction * (field[k + 1] - field[k])
+            result = np.where(matches, interpolated, result)
+
+    return result
+
+
 def interplevel(
     field3d,
     vert,
     desiredlev,
     missing=DEFAULT_FILL_FLOAT64,
     squeeze=True,
-    meta=True,
+    meta=None,
 ):
     """Interpolate a field to one or more surfaces in a vertical coordinate.
 
-    This follows NCAR wrf-python 1.3.4.1 commit
+    The explicit ``meta`` modes follow NCAR wrf-python 1.3.4.1 commit
     ``31c923335227b22fa656fd589a5342b91103e939`` ``interplevel`` semantics.
-    The rightmost input dimensions are ``(nz, ny, nx)``; arbitrary matching
-    left dimensions are supported. ``field3d`` may additionally have one
-    leading product dimension, as used by vector diagnostics such as
-    ``wspd_wdir``.
+    In those modes, the rightmost input dimensions are ``(nz, ny, nx)``;
+    arbitrary matching left dimensions are supported. ``field3d`` may
+    additionally have one leading product dimension, as used by vector
+    diagnostics such as ``wspd_wdir``.
 
-    ``desiredlev`` may be a scalar, a one-dimensional level sequence, one
-    shared ``(ny, nx)`` target surface, or a target surface with left
-    dimensions matching ``vert``. Interpolation is linear in ``vert`` itself.
-    Out-of-range columns are returned as masked values using ``missing``.
+    The extended ``desiredlev`` may be a scalar, a one-dimensional level
+    sequence, one shared ``(ny, nx)`` target surface, or a target surface with
+    left dimensions matching ``vert``. Interpolation is linear in ``vert``
+    itself. Out-of-range columns are returned as masked values using
+    ``missing``.
 
-    When xarray is installed and ``meta`` is not false, an xarray DataArray is
-    returned with wrf-python-compatible level coordinates and attributes.
-    Otherwise a NumPy masked array is returned. If xarray is unavailable, the
-    masked-array fallback still honors ``squeeze`` so WRF-Runner's default
-    scalar calls retain their established ``(ny, nx)`` result shape, and its
-    masked data buffer uses NaN so ``numpy.asarray`` remains runner-safe.
+    Omitting ``meta`` preserves wrf-rust 0.2.35's three-argument contract: a
+    float64 NumPy ndarray, NaN missing values, scalar or 2-D target levels, and
+    logarithmic interpolation for descending pressure coordinates. Pass
+    ``meta=True`` or ``meta=False`` explicitly to select the extended strict
+    wrf-python-compatible path. In that path, ``meta=True`` returns an xarray
+    DataArray when xarray is available, while ``meta=False`` returns a NumPy
+    masked array.
     """
+    if meta is None:
+        return _interplevel_legacy(field3d, vert, desiredlev)
+
     field, coordinate, multiproduct = _validate_inputs(field3d, vert)
     levels, levels_are_surfaces = _normalize_levels(desiredlev, coordinate.shape)
 
@@ -327,7 +411,7 @@ def interplevel(
     )
     masked = np.ma.masked_values(output, missing_value)
 
-    use_meta = True if meta is None else bool(meta)
+    use_meta = bool(meta)
     if use_meta:
         xr = _load_xarray()
         if xr is not None:

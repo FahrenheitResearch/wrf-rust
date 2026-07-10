@@ -291,7 +291,43 @@ def _projection_dataset(attrs=None, ref_lat=0.0, ref_lon=10.0,
 
 
 class CoordinateCompatibilityTests(unittest.TestCase):
-    def test_scalar_defaults_to_integer_leading_axis_result(self):
+    def test_ordinary_scalar_restores_legacy_fractional_tuple(self):
+        latitudes = np.broadcast_to(
+            np.asarray([0.0, 1.0, 2.0])[:, np.newaxis], (3, 3)
+        )
+        longitudes = np.broadcast_to(
+            np.asarray([10.0, 11.0, 12.0])[np.newaxis, :], (3, 3)
+        )
+        with mock.patch.object(
+                WRF, "latlon_coords", return_value=(latitudes, longitudes)):
+            xy = WRF.ll_to_xy(object(), 0.7, 10.6)
+
+        self.assertIs(type(xy), tuple)
+        self.assertEqual(len(xy), 2)
+        self.assertTrue(all(isinstance(value, (float, np.floating)) for value in xy))
+        np.testing.assert_allclose(xy, (0.6, 0.7), atol=1e-12)
+
+    def test_ordinary_scalar_clamps_california_outside_point_to_edge(self):
+        # These bounds and dimensions mirror the approved d03 parity fixture.
+        # The Oklahoma target is east and south of that California domain.
+        latitudes = np.broadcast_to(
+            np.linspace(37.59369659423828, 39.44728469848633, 800)[:, None],
+            (800, 800),
+        )
+        longitudes = np.broadcast_to(
+            np.linspace(-122.66775512695312, -120.27229309082031, 800)[None, :],
+            (800, 800),
+        )
+        with mock.patch.object(
+                WRF, "latlon_coords", return_value=(latitudes, longitudes)):
+            xy = WRF.ll_to_xy(object(), 35.0, -97.0)
+
+        self.assertIs(type(xy), tuple)
+        self.assertIs(type(xy[0]), float)
+        self.assertIs(type(xy[1]), float)
+        self.assertEqual(xy, (799.0, 0.0))
+
+    def test_explicit_options_keep_analytic_integer_result(self):
         dataset = _projection_dataset()
         xy = WRF.ll_to_xy(
             wrfin=dataset, latitude=0.7, longitude=10.6, meta=False
@@ -301,14 +337,17 @@ class CoordinateCompatibilityTests(unittest.TestCase):
         self.assertTrue(np.issubdtype(xy.dtype, np.integer))
         np.testing.assert_array_equal(xy, [1, 1])
 
-        # WRF-Runner indexes scalar default results exactly this way. This is
-        # valid for either ndarray or optional xarray metadata output.
-        runner_xy = WRF.ll_to_xy(dataset, 0.7, 10.6)
-        self.assertEqual(int(runner_xy[0]), 1)
-        self.assertEqual(int(runner_xy[1]), 1)
-
         latlon = WRF.xy_to_ll(wrfin=dataset, x=1.0, y=1.0, meta=False)
         np.testing.assert_allclose(latlon, [1.0, 11.0], atol=1e-12)
+
+    def test_omitted_options_preserve_sequence_analytic_behavior(self):
+        dataset = _projection_dataset()
+        xy = WRF.ll_to_xy(dataset, [0.25, 0.75], [10.5, 10.75])
+
+        values = np.asarray(xy)
+        self.assertEqual(values.shape, (2, 2))
+        self.assertTrue(np.issubdtype(values.dtype, np.integer))
+        np.testing.assert_array_equal(values, [[0, 1], [0, 1]])
 
     def test_sequences_flatten_and_preserve_leading_coordinate_axis(self):
         dataset = _projection_dataset()
@@ -530,9 +569,12 @@ class CoordinateCompatibilityTests(unittest.TestCase):
             self.skipTest("xarray is optional")
 
         dataset = _projection_dataset()
-        xy = WRF.ll_to_xy(dataset, 0.25, 10.5, squeeze=False)
+        xy = WRF.ll_to_xy(
+            dataset, 0.25, 10.5, squeeze=False, meta=True, as_int=True
+        )
         self.assertEqual(xy.name, "xy")
         self.assertEqual(xy.dims, ("x_y", "idx"))
+        self.assertTrue(np.issubdtype(xy.dtype, np.integer))
         np.testing.assert_array_equal(xy.coords["x_y"], ["x", "y"])
         pair = xy.coords["latlon_coord"].values[0]
         self.assertIsInstance(pair, WRF.CoordPair)
