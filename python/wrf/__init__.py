@@ -63,7 +63,7 @@ __all__ = [
     "latlon_coords",
     "ll_to_xy",
 ]
-__version__ = "0.2.34"
+__version__ = "0.2.37"
 
 # ── Optional plotting imports (require matplotlib) ──
 try:
