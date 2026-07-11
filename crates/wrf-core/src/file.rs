@@ -116,10 +116,9 @@ mod backend {
 
 /// A handle to a WRF output file with dimension caching and memoized fields.
 ///
-/// When compiled with the default `netcdf-backend` feature the file is read
-/// through the `netcdf` crate (requires the HDF5 C library).  When compiled
-/// with `pure-rust-reader` instead, a zero-dependency pure-Rust HDF5 parser
-/// is used (only `flate2` for zlib decompression).
+/// When compiled with the `netcdf-backend` feature the file is read through
+/// the `netcdf` crate. When compiled with `pure-rust-reader`, classic NetCDF
+/// and NetCDF4/HDF5 files are read through Rust-only parsers.
 pub struct WrfFile {
     pub path: PathBuf,
 
@@ -127,7 +126,7 @@ pub struct WrfFile {
     #[cfg(feature = "netcdf-backend")]
     nc: netcdf::File,
     #[cfg(feature = "pure-rust-reader")]
-    hdf5: crate::hdf5_reader::PureRustFile,
+    hdf5: crate::pure_reader::PureRustFile,
 
     /// Unstaggered grid dimensions.
     pub nx: usize,
@@ -255,11 +254,10 @@ impl WrfFile {
 
 #[cfg(feature = "pure-rust-reader")]
 impl WrfFile {
-    /// Open a WRF output file and read grid dimensions using the pure-Rust
-    /// HDF5 reader (no C library dependencies).
+    /// Open a WRF output file and read grid dimensions using Rust-only readers.
     pub fn open<P: AsRef<Path>>(path: P) -> WrfResult<Self> {
         let path = path.as_ref().to_path_buf();
-        let hdf5 = crate::hdf5_reader::PureRustFile::open(&path)?;
+        let hdf5 = crate::pure_reader::PureRustFile::open(&path)?;
 
         // Derive dimensions from the shape of known variables.
         // netCDF4/WRF stores dimension information as attributes of _nc4_non_coord variables
@@ -304,7 +302,7 @@ impl WrfFile {
     /// Probe grid dimensions from the "T" variable shape
     /// which is [Time, bottom_top, south_north, west_east].
     fn probe_dims_pure(
-        hdf5: &crate::hdf5_reader::PureRustFile,
+        hdf5: &crate::pure_reader::PureRustFile,
     ) -> WrfResult<(usize, usize, usize, usize)> {
         let shape = hdf5.dataset_shape("T").map_err(|_| {
             WrfError::VarNotFound(
@@ -375,8 +373,8 @@ impl WrfFile {
         }
     }
 
-    /// Expose the pure-Rust HDF5 handle for advanced use.
-    pub fn hdf5(&self) -> &crate::hdf5_reader::PureRustFile {
+    /// Expose the pure-Rust file handle for advanced use.
+    pub fn hdf5(&self) -> &crate::pure_reader::PureRustFile {
         &self.hdf5
     }
 }

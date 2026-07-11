@@ -693,6 +693,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
+name = "memmap2"
+version = "0.9.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "memoffset"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -741,6 +750,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ndarray"
+version = "0.17.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "520080814a7a6b4a6e9070823bb24b4531daac8c4627e08ba5de8c5ef2f2752d"
+dependencies = [
+ "matrixmultiply",
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "portable-atomic",
+ "portable-atomic-util",
+ "rawpointer",
+]
+
+[[package]]
 name = "netcdf"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -748,9 +772,20 @@ checksum = "032d47fcd93a63a21232184aabfd202e1e50116d31bbd382580503308887d0f9"
 dependencies = [
  "bitflags 2.11.0",
  "libc",
- "ndarray",
+ "ndarray 0.16.1",
  "netcdf-sys",
  "semver",
+]
+
+[[package]]
+name = "netcdf-reader"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b81b0af8d7923153eda0e192f6d80649629df6557e3f488751f645de36df2b42"
+dependencies = [
+ "memmap2",
+ "ndarray 0.17.2",
+ "thiserror",
 ]
 
 [[package]]
@@ -827,7 +862,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b94caae805f998a07d33af06e6a3891e38556051b8045c615470a71590e13e78"
 dependencies = [
  "libc",
- "ndarray",
+ "ndarray 0.16.1",
  "num-complex",
  "num-integer",
  "num-traits",
@@ -1832,8 +1867,9 @@ version = "0.1.0"
 dependencies = [
  "ecape-rs",
  "flate2",
- "ndarray",
+ "ndarray 0.16.1",
  "netcdf",
+ "netcdf-reader",
  "rayon",
 ]
 
@@ -1841,7 +1877,7 @@ dependencies = [
 name = "wrf-py"
 version = "0.2.36"
 dependencies = [
- "ndarray",
+ "ndarray 0.16.1",
  "numpy",
  "pyo3",
  "wrf-core",
