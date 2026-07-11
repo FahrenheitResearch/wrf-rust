@@ -5,21 +5,28 @@ Rust-powered WRF post-processing with Python bindings. 96 diagnostic variables, 
 ## Install
 
 ```bash
-python -m pip install --force-reinstall "wrf-rust==0.2.36"
+python -m pip install --force-reinstall "wrf-rust==0.2.37"
 ```
 
 Pre-built wheels for Python 3.10-3.13 on Linux, macOS, and Windows. No Rust toolchain, no system libraries, no conda required.
 
-`0.2.36` is the conservative compatibility release for applications built
-against `0.2.35`, including WRF-Runner's `New-PC-Updates` branch. Because PyPI
-already contains numerically higher `0.4.x` releases, an unpinned
-`pip install -U wrf-rust` will not select `0.2.36`; pin the version exactly as
+`0.2.37` is the conservative compatibility release for applications built
+against `0.2.35` and `0.2.36`, including WRF-Runner's `New-PC-Updates` branch.
+Because PyPI already contains numerically higher `0.4.x` releases, an unpinned
+`pip install -U wrf-rust` will not select `0.2.37`; pin the version exactly as
 shown above.
 
-## 0.2.36 Compatibility and Performance
+## 0.2.37 Compatibility, Formula Lab, and Readers
 
-This release starts from the `v0.2.35` source and backports only
-output-preserving performance work: effective-inflow caching, parallel
+This release starts from `v0.2.36`, preserving its Python API and numerical
+diagnostics. It adds the standalone Rust `wrf-formula` crate, restores the
+all-Rust classic NetCDF reader for CDF-1/2/5 WRF files, and repairs decoding of
+fixed-width scalar HDF5 string attributes such as `START_DATE`. Formula Lab has
+no Python bindings on this compatibility line, and numerical science files are
+unchanged from `v0.2.36`.
+
+The underlying `v0.2.36` release starts from the `v0.2.35` source and backports
+only output-preserving performance work: effective-inflow caching, parallel
 depth-limited CAPE and EL columns, cached CAPE reuse in severe composites,
 parallel HDF5 chunk decoding, reduced CAPE allocations, and removal of full
 rotated-wind volume copies. It does not include the later science-formula,
