@@ -5,7 +5,8 @@
 //! rest of wrf-rust's severe-weather diagnostics.
 
 use ecape_rs::{
-    calc_ecape_parcel, CapeType, ParcelOptions, StormMotionType as EcapeStormMotionType,
+    calc_ecape_ncape, calc_ecape_parcel, CapeType, ParcelOptions,
+    StormMotionType as EcapeStormMotionType,
 };
 use rayon::prelude::*;
 
@@ -62,10 +63,83 @@ struct EcapeColumnResult {
 }
 
 const ECAPE_STACK_FIELDS: usize = 6;
+const WATER_VAPOR_MOLECULAR_WEIGHT_RATIO: f64 = 0.622;
 
 fn dewpoint_k_from_q(q_kgkg: f64, p_pa: f64, temp_k: f64) -> f64 {
     let td_c = crate::met::composite::dewpoint_from_q(q_kgkg, p_pa / 100.0);
     (td_c + 273.15).min(temp_k)
+}
+
+/// Match ecape-rs' dewpoint-to-specific-humidity conversion so the analytic
+/// and explicit parcel-path solvers receive the same moisture profile.
+fn specific_humidity_from_dewpoint_k(pressure_pa: f64, dewpoint_k: f64) -> f64 {
+    let vapor_pressure_pa = 611.2 * ((17.67 * (dewpoint_k - 273.15)) / (dewpoint_k - 29.65)).exp();
+    WATER_VAPOR_MOLECULAR_WEIGHT_RATIO * vapor_pressure_pa
+        / (pressure_pa - (1.0 - WATER_VAPOR_MOLECULAR_WEIGHT_RATIO) * vapor_pressure_pa)
+}
+
+fn solve_ecape_column(
+    height_m: &[f64],
+    pressure_pa: &[f64],
+    temp_k: &[f64],
+    dewpoint_k: &[f64],
+    u_ms: &[f64],
+    v_ms: &[f64],
+    parcel_opts: &ParcelOptions,
+) -> EcapeColumnResult {
+    let qv_kgkg = pressure_pa
+        .iter()
+        .zip(dewpoint_k.iter())
+        .map(|(&pressure, &dewpoint)| specific_humidity_from_dewpoint_k(pressure, dewpoint))
+        .collect::<Vec<_>>();
+
+    // These are deliberately two different products. `calc_ecape_ncape`
+    // supplies the standard Peters-style analytic ECAPE/NCAPE pair. The
+    // explicit entraining ascent supplies parcel-path CAPE/CIN/LFC/EL. In
+    // particular, calc_ecape_parcel().ecape_jkg is a second analytic step
+    // applied after that ascent and must not be published as standard ECAPE.
+    let analytic = calc_ecape_ncape(
+        height_m,
+        pressure_pa,
+        temp_k,
+        &qv_kgkg,
+        u_ms,
+        v_ms,
+        parcel_opts,
+    );
+    let entraining_path = calc_ecape_parcel(
+        height_m,
+        pressure_pa,
+        temp_k,
+        dewpoint_k,
+        u_ms,
+        v_ms,
+        parcel_opts,
+    );
+
+    let mut summary = EcapeSummary::default();
+    let mut failed = false;
+    match analytic {
+        Ok(result) => {
+            summary.ecape = result.ecape_jkg;
+            summary.ncape = result.ncape_jkg;
+        }
+        Err(_) => failed = true,
+    }
+    match entraining_path {
+        Ok(result) => {
+            summary.cape = result.cape_jkg;
+            summary.cin = result.cin_jkg;
+            summary.lfc = result.lfc_m.unwrap_or(0.0);
+            summary.el = result.el_m.unwrap_or(0.0);
+        }
+        Err(_) => failed = true,
+    }
+
+    EcapeColumnResult {
+        summary,
+        failure: failed.then_some(EcapeFailure::Solver),
+    }
 }
 
 fn validate_ecape_opts(opts: &ComputeOpts) -> WrfResult<()> {
@@ -300,7 +374,7 @@ fn ecape_cache_key(opts: &ComputeOpts, resolved: ResolvedEcapeOpts) -> Option<St
     };
 
     Some(format!(
-        "ecape_stack_{parcel_type}_{storm_motion_type}_{entrainment}_{pseudoadiabatic}_{lake_interp}_{storm_motion}_{strict}"
+        "ecape_stack_v2_analytic_{parcel_type}_{storm_motion_type}_{entrainment}_{pseudoadiabatic}_{lake_interp}_{storm_motion}_{strict}"
     ))
 }
 
@@ -445,7 +519,7 @@ fn compute_ecape_fields(
             }
 
             let parcel_opts = build_parcel_options(opts, ij, parcel_type, storm_motion_type);
-            match calc_ecape_parcel(
+            solve_ecape_column(
                 &height_m,
                 &pressure_pa,
                 &temp_k,
@@ -453,23 +527,7 @@ fn compute_ecape_fields(
                 &u_ms,
                 &v_ms,
                 &parcel_opts,
-            ) {
-                Ok(result) => EcapeColumnResult {
-                    summary: EcapeSummary {
-                        ecape: result.ecape_jkg,
-                        ncape: result.ncape_jkg,
-                        cape: result.cape_jkg,
-                        cin: result.cin_jkg,
-                        lfc: result.lfc_m.unwrap_or(0.0),
-                        el: result.el_m.unwrap_or(0.0),
-                    },
-                    failure: None,
-                },
-                Err(_) => EcapeColumnResult {
-                    summary: EcapeSummary::default(),
-                    failure: Some(EcapeFailure::Solver),
-                },
-            }
+            )
         })
         .collect();
 
@@ -744,7 +802,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_parity_fixture_matches_ecape_rs_expected_values() {
+    fn shared_fixture_selects_analytic_ecape_and_entraining_parcel_components() {
         let height_m = [
             0.0, 250.0, 500.0, 750.0, 1000.0, 1500.0, 2000.0, 2500.0, 3000.0, 4000.0, 5000.0,
             6000.0, 7500.0, 9000.0, 10500.0, 12000.0, 14000.0, 16000.0,
@@ -861,6 +919,27 @@ mod tests {
             assert_close(result.cin_jkg, expected.3);
             assert_close(result.lfc_m.unwrap_or(0.0), expected.4);
             assert_close(result.el_m.unwrap_or(0.0), expected.5);
+
+            let analytic_qv = pressure
+                .iter()
+                .zip(dewpoint.iter())
+                .map(|(&p, &td)| specific_humidity_from_dewpoint_k(p, td))
+                .collect::<Vec<_>>();
+            let analytic =
+                calc_ecape_ncape(&height, &pressure, &temp, &analytic_qv, &u, &v, &options)
+                    .unwrap();
+            let selected =
+                solve_ecape_column(&height, &pressure, &temp, &dewpoint, &u, &v, &options);
+
+            assert_eq!(selected.failure, None);
+            assert_close(selected.summary.ecape, analytic.ecape_jkg);
+            assert_close(selected.summary.ncape, analytic.ncape_jkg);
+            assert_close(selected.summary.cape, result.cape_jkg);
+            assert_close(selected.summary.cin, result.cin_jkg);
+            assert!(
+                (selected.summary.ecape - result.ecape_jkg).abs() > 1.0,
+                "standard ECAPE must not select the post-path analytic field"
+            );
         }
     }
 }

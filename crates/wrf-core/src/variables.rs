@@ -735,7 +735,7 @@ pub static VARS: &[VarDef] = &[
     VarDef {
         name: "ecape",
         aliases: &["entraining_cape"],
-        description: "Entraining CAPE from ecape-rs",
+        description: "Analytic ECAPE from ecape-rs calc_ecape_ncape",
         default_units: "J/kg",
         dim: VarDim::TwoD,
         compute: decape::compute_ecape,
@@ -743,7 +743,7 @@ pub static VARS: &[VarDef] = &[
     VarDef {
         name: "ncape",
         aliases: &["normalized_cape"],
-        description: "Normalized CAPE from ecape-rs",
+        description: "NCAPE paired with analytic ECAPE from ecape-rs",
         default_units: "J/kg",
         dim: VarDim::TwoD,
         compute: decape::compute_ncape,
@@ -848,5 +848,21 @@ mod tests {
         assert_eq!(get_var_def("helicity").unwrap().name, "uhel");
         assert_eq!(get_var_def("entraining_cape").unwrap().name, "ecape");
         assert_eq!(get_var_def("ecin").unwrap().name, "ecape_cin");
+    }
+
+    #[test]
+    fn ecape_registry_distinguishes_analytic_and_parcel_path_quantities() {
+        assert_eq!(
+            get_var_def("ecape").unwrap().description,
+            "Analytic ECAPE from ecape-rs calc_ecape_ncape"
+        );
+        assert_eq!(
+            get_var_def("ecape_cape").unwrap().description,
+            "Entraining parcel CAPE from ecape-rs"
+        );
+        assert_eq!(
+            get_var_def("ecape_cin").unwrap().description,
+            "Entraining parcel CIN from ecape-rs"
+        );
     }
 }
