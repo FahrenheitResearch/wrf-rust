@@ -5,16 +5,31 @@ Rust-powered WRF post-processing with Python bindings. 96 diagnostic variables, 
 ## Install
 
 ```bash
-python -m pip install --force-reinstall "wrf-rust==0.2.37"
+python -m pip install --force-reinstall "wrf-rust==0.2.38"
 ```
 
 Pre-built wheels for Python 3.10-3.13 on Linux, macOS, and Windows. No Rust toolchain, no system libraries, no conda required.
 
-`0.2.37` is the conservative compatibility release for applications built
+`0.2.38` is the conservative compatibility release for applications built
 against `0.2.35` and `0.2.36`, including WRF-Runner's `New-PC-Updates` branch.
 Because PyPI already contains numerically higher `0.4.x` releases, an unpinned
-`pip install -U wrf-rust` will not select `0.2.37`; pin the version exactly as
+`pip install -U wrf-rust` will not select `0.2.38`; pin the version exactly as
 shown above.
+
+## 0.2.38 Reflectivity Parity Fix
+
+This release retains the `0.2.37` Python API, NumPy return contract, performance
+work, Formula Lab crate, and all-Rust NetCDF readers. It corrects simulated
+`dbz`/`maxdbz` parity with NCAR wrf-python: the exact gas constant is used,
+an all-zero `QSNOW` field follows wrf-python's no-snow branch, non-finite
+hydrometeor cells are not silently converted into false echoes, `QRAIN` remains
+required, and genuine read errors are no longer mistaken for absent optional
+snow or graupel fields. The Solar7 lowest-level `dbz` plot is also labeled
+accurately instead of being described as a 1 km AGL product.
+
+Raw model-native `REFL_10CM` is intentionally distinct from the generic
+wrf-python-compatible `dbz` diagnostic and may differ according to the WRF
+microphysics scheme. `maxdbz` remains the vertical maximum of generic `dbz`.
 
 ## 0.2.37 Compatibility, Formula Lab, and Readers
 

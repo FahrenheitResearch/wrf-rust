@@ -610,7 +610,7 @@ def solar7_products() -> List[Dict[str, Any]]:
              units=None, category="severe"),
 
         # --- Radar ---
-        dict(name="dbz", title="Simulated Reflectivity (1 km AGL)",
+        dict(name="dbz", title="Simulated Reflectivity (Lowest Model Level)",
              cmap="solar7_reflectivity", levels=np.arange(-10, 80, 5),
              extend="max", units=None, category="radar"),
         dict(name="maxdbz", title="Composite Reflectivity",
