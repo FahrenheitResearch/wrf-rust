@@ -3,8 +3,8 @@
 //! Simulated reflectivity from hydrometeor mixing ratios following
 //! wrf-python's `wrf_user_dbz.f90` (`CALCDBZ`) subroutine.
 //!
-//! Uses constant intercept parameters (ivarint=0) and bright-band
-//! correction (iliqskin=1), matching the wrf-python defaults.
+//! Uses constant intercept parameters (ivarint=0) and no bright-band
+//! correction (iliqskin=0), matching the wrf-python defaults.
 
 use crate::compute::ComputeOpts;
 use crate::error::WrfResult;
@@ -14,7 +14,7 @@ use rayon::prelude::*;
 // --- Physical constants (wrf_constants) ---
 const GAMMA_SEVEN: f64 = 720.0;
 const PI: f64 = std::f64::consts::PI;
-const RD: f64 = 287.04;
+const RD: f64 = 287.0;
 const CELKEL: f64 = 273.15;
 const RHOWAT: f64 = 1000.0;
 const ALPHA: f64 = 0.224; // |K_ice|^2 / |K_water|^2
@@ -40,6 +40,27 @@ const RON_DELQR0: f64 = 0.25 * RON_QR0;
 const RON_CONST1R: f64 = (RON2 - RON_MIN) * 0.5;
 const RON_CONST2R: f64 = (RON2 + RON_MIN) * 0.5;
 
+/// Match NumPy's `qs.any()` check used by wrf-python to set CALCDBZ's
+/// `sn0` flag. An existing but entirely zero QSNOW field is treated the
+/// same as a missing QSNOW field.
+#[inline]
+fn snow_field_present(qs: &[f64]) -> bool {
+    qs.iter().any(|&value| value != 0.0)
+}
+
+#[inline]
+fn rain_and_snow_for_dbz(qrain: f64, qsnow: f64, sn0: bool, temperature_k: f64) -> (f64, f64) {
+    let mut rain = qrain.max(0.0);
+    let mut snow = qsnow.max(0.0);
+
+    if !sn0 && temperature_k < CELKEL {
+        snow = rain;
+        rain = 0.0;
+    }
+
+    (rain, snow)
+}
+
 /// Simulated reflectivity (dBZ). `[nz, ny, nx]`
 ///
 /// Matches wrf-python's `CALCDBZ` from `wrf_user_dbz.f90`.
@@ -47,7 +68,7 @@ const RON_CONST2R: f64 = (RON2 + RON_MIN) * 0.5;
 /// Set `opts.use_varint=true` for Thompson variable intercepts.
 /// Set `opts.use_liqskin=true` for bright-band correction.
 ///
-/// When QSNOW is not present in the file (sn0=0 behavior), rain mixing
+/// When QSNOW is missing or entirely zero (sn0=0 behavior), rain mixing
 /// ratio is reassigned to snow below freezing.
 pub fn compute_dbz(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let tk = f.temperature(t)?;
@@ -58,9 +79,10 @@ pub fn compute_dbz(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
     let qr = f
         .read_var("QRAIN", t)
         .unwrap_or_else(|_| vec![0.0; f.nxyz()]);
-    let have_snow = f.read_var("QSNOW", t);
-    let sn0 = have_snow.is_ok();
-    let qs = have_snow.unwrap_or_else(|_| vec![0.0; f.nxyz()]);
+    let qs = f
+        .read_var("QSNOW", t)
+        .unwrap_or_else(|_| vec![0.0; f.nxyz()]);
+    let sn0 = snow_field_present(&qs);
     let qg = f
         .read_var("QGRAUP", t)
         .unwrap_or_else(|_| vec![0.0; f.nxyz()]);
@@ -97,16 +119,8 @@ pub fn compute_dbz(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
             let rhoair = pres[i] / (RD * virtual_t);
 
             // Hydrometeor mixing ratios (clamp to zero)
-            let mut qra = qr[i].max(0.0);
-            let mut qsn = qs[i].max(0.0);
+            let (qra, qsn) = rain_and_snow_for_dbz(qr[i], qs[i], sn0, t_k);
             let qgr = qg[i].max(0.0);
-
-            // sn0=0 behavior: no separate snow variable, so below freezing
-            // move rain to snow
-            if !sn0 && t_k < CELKEL {
-                qsn = qra;
-                qra = 0.0;
-            }
 
             // Bright-band correction (iliqskin): above freezing, frozen
             // particles scatter as liquid (drop ALPHA factor).
@@ -169,4 +183,36 @@ pub fn compute_maxdbz(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Ve
         }
     }
     Ok(maxdbz)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_zero_qsnow_uses_wrf_python_no_snow_path() {
+        let qs = [0.0, -0.0, 0.0];
+        let sn0 = snow_field_present(&qs);
+        assert!(!sn0);
+
+        let (rain, snow) = rain_and_snow_for_dbz(1.0e-3, 0.0, sn0, 263.15);
+        assert_eq!(rain, 0.0);
+        assert_eq!(snow, 1.0e-3);
+    }
+
+    #[test]
+    fn any_nonzero_qsnow_keeps_separate_species() {
+        let qs = [0.0, 1.0e-12, 0.0];
+        let sn0 = snow_field_present(&qs);
+        assert!(sn0);
+
+        let (rain, snow) = rain_and_snow_for_dbz(1.0e-3, 0.0, sn0, 263.15);
+        assert_eq!(rain, 1.0e-3);
+        assert_eq!(snow, 0.0);
+    }
+
+    #[test]
+    fn radar_gas_constant_matches_wrf_python() {
+        assert_eq!(RD, 287.0);
+    }
 }
