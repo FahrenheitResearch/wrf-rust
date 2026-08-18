@@ -32,7 +32,7 @@ fn getvar<'py>(
     use_varint: Option<bool>,
     use_liqskin: Option<bool>,
     ecape_strict: Option<bool>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let opts = py_opts::build_compute_opts(
         py,
         wrffile.inner().ny,
@@ -94,7 +94,7 @@ fn getvar_all_times<'py>(
     use_varint: Option<bool>,
     use_liqskin: Option<bool>,
     ecape_strict: Option<bool>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let opts = py_opts::build_compute_opts(
         py,
         wrffile.inner().ny,

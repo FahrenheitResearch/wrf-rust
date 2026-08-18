@@ -180,8 +180,8 @@ mod tests {
 
     #[test]
     fn parses_uniform_storm_motion_tuple() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        Python::initialize();
+        Python::attach(|py| {
             let storm_motion = (12.0, 8.0).into_pyobject(py).unwrap().into_any();
             let parsed = parse_storm_motion(Some(&storm_motion), 2, 2).unwrap();
 
@@ -191,8 +191,8 @@ mod tests {
 
     #[test]
     fn parses_leading_component_axis_grid() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        Python::initialize();
+        Python::attach(|py| {
             let storm_motion = vec![
                 vec![vec![1.0, 2.0], vec![3.0, 4.0]],
                 vec![vec![5.0, 6.0], vec![7.0, 8.0]],

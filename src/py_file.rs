@@ -99,7 +99,7 @@ impl WrfFile {
         use_varint: Option<bool>,
         use_liqskin: Option<bool>,
         ecape_strict: Option<bool>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let opts = py_opts::build_compute_opts(
             py,
             self.inner.ny,
@@ -159,7 +159,7 @@ impl WrfFile {
         use_varint: Option<bool>,
         use_liqskin: Option<bool>,
         ecape_strict: Option<bool>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let opts = py_opts::build_compute_opts(
             py,
             self.inner.ny,
@@ -213,7 +213,7 @@ impl WrfFile {
 }
 
 /// Convert VarOutput to a numpy array with the correct shape.
-pub fn to_numpy(py: Python<'_>, result: wrf_core::VarOutput) -> PyResult<PyObject> {
+pub fn to_numpy(py: Python<'_>, result: wrf_core::VarOutput) -> PyResult<Py<PyAny>> {
     let err = |e: ndarray::ShapeError| -> PyErr {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
     };

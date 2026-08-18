@@ -8,7 +8,7 @@ license = "MIT"
 
 [package]
 name = "wrf-py"
-version = "0.2.38"
+version = "0.2.39"
 edition.workspace = true
 description = "Python bindings for wrf-rust — fast WRF post-processing"
 
@@ -18,6 +18,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wrf-core = { path = "crates/wrf-core" }
-pyo3 = { version = "0.23", features = ["extension-module"] }
-numpy = "0.23"
-ndarray = "0.16"
+pyo3 = { version = "0.29", features = ["extension-module"] }
+numpy = "0.29"
+ndarray = "0.17"
