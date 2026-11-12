@@ -17,7 +17,7 @@ impl WrfFile {
     /// Open a WRF output file.
     #[new]
     fn new(path: &str) -> PyResult<Self> {
-        let inner = wrf_core::WrfFile::open(path)
+        let inner = wrf_core::parallel::install(|| wrf_core::WrfFile::open(path))
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
         Ok(Self { inner })
     }
@@ -66,8 +66,7 @@ impl WrfFile {
 
     /// Time strings from the file.
     fn times(&self) -> PyResult<Vec<String>> {
-        self.inner
-            .times()
+        wrf_core::parallel::install(|| self.inner.times())
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
 
@@ -127,8 +126,9 @@ impl WrfFile {
             ecape_strict,
         )?;
 
-        let result = wrf_core::getvar(&self.inner, name, timeidx, &opts)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        let result =
+            wrf_core::parallel::install(|| wrf_core::getvar(&self.inner, name, timeidx, &opts))
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
         to_numpy(py, result)
     }
@@ -187,8 +187,9 @@ impl WrfFile {
             ecape_strict,
         )?;
 
-        let result = wrf_core::getvar_all_times(&self.inner, name, &opts)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        let result =
+            wrf_core::parallel::install(|| wrf_core::getvar_all_times(&self.inner, name, &opts))
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
         to_numpy(py, result)
     }

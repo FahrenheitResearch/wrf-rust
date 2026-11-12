@@ -60,8 +60,9 @@ fn getvar<'py>(
         ecape_strict,
     )?;
 
-    let result = wrf_core::getvar(wrffile.inner(), name, timeidx, &opts)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    let result =
+        wrf_core::parallel::install(|| wrf_core::getvar(wrffile.inner(), name, timeidx, &opts))
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
     py_file::to_numpy(py, result)
 }
@@ -122,8 +123,9 @@ fn getvar_all_times<'py>(
         ecape_strict,
     )?;
 
-    let result = wrf_core::getvar_all_times(wrffile.inner(), name, &opts)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    let result =
+        wrf_core::parallel::install(|| wrf_core::getvar_all_times(wrffile.inner(), name, &opts))
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
     py_file::to_numpy(py, result)
 }

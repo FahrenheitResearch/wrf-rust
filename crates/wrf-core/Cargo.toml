@@ -16,3 +16,6 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"],
 rayon = "1.10"
 ecape-rs = { git = "https://github.com/FahrenheitResearch/ecape-rs", rev = "82922534c02a888e773c50463b5a49d535606276" }
 netcdf-reader = { version = "0.5", default-features = false, optional = true }
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"

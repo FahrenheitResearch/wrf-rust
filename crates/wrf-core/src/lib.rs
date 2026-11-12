@@ -6,6 +6,7 @@ pub mod file;
 pub mod grid;
 pub mod met;
 pub mod multi;
+pub mod parallel;
 pub mod projection;
 pub mod units;
 pub mod variables;
