@@ -5,16 +5,47 @@ Rust-powered WRF post-processing with Python bindings. 96 diagnostic variables, 
 ## Install
 
 ```bash
-python -m pip install --force-reinstall "wrf-rust==0.2.38"
+python -m pip install --force-reinstall "wrf-rust==0.2.50"
 ```
 
-Pre-built wheels for Python 3.10-3.13 on Linux, macOS, and Windows. No Rust toolchain, no system libraries, no conda required.
+Pre-built wheels for Python 3.10-3.14 on Linux, macOS, and Windows. No Rust toolchain, no system libraries, no conda required.
 
-`0.2.38` is the conservative compatibility release for applications built
-against `0.2.35` and `0.2.36`, including WRF-Runner's `New-PC-Updates` branch.
-Because PyPI already contains numerically higher `0.4.x` releases, an unpinned
-`pip install -U wrf-rust` will not select `0.2.38`; pin the version exactly as
-shown above.
+`0.2.50` is the current release of the `0.2.x` compatibility line for
+applications built against `0.2.35` and later, including WRF-Runner. An
+unpinned `pip install -U wrf-rust` selects it; pinning the exact version as
+shown above keeps a plotting setup reproducible. The step from `0.2.39` to
+`0.2.50` is only a numbering choice: there are no `0.2.40` to `0.2.49`
+releases.
+
+## 0.2.50 Vorticity Fix, Fork-Safe Workers, Faster Frames
+
+`avo` and `pvo` give different values from this release on, because the old
+values were wrong: up to `0.2.39` both computed `du/dx - dv/dy` instead of the
+relative vorticity `dv/dx - du/dy`, so troughs and closed lows did not show up
+as vorticity maxima. `avo` now follows wrf-python's staggered form (map
+factors, the file's `F`, still in s^-1) and matches wrf-python 1.3.4.1 to a
+relative RMS of 3.7e-8 on a Lambert wrfout. On latitude-longitude (global)
+files `avo` and `pvo` use `MAPFAC_MX` and `MAPFAC_MY`, the spherical curl. On
+conformal grids `pvo` still uses no map factors (about 1.5 % in its relative
+vorticity part where the map factor is 0.985).
+
+Also fixed: worker processes that `ProcessPoolExecutor` forks on Linux no
+longer hang when the parent computed a diagnostic first; a `WrfFile` opened
+before the fork reads correctly in the workers; `dp2m` stays missing where
+`Q2` or `PSFC` is missing instead of showing -150 C; a history file without
+`T` opens.
+
+Faster, with the same values: `interplevel` (720 calls: 48.8 s to 13.3 s,
+bit-identical including NaN positions), multi-threaded unit conversions, wind
+rotation, `wspd`, `td`, `rh`, destaggering and full-field maps, and `dbz`
+kept per file and time so `maxdbz` reuses it. A WRF-Runner frame with 3 plot
+workers on a busy 8-core share of a Linux host went from 241 s to 153 s
+(global T383) and from 67 s to 46 s (450x360 Lambert), medians of 3 runs.
+
+All 96 registered diagnostics on a Lambert and a global latitude-longitude
+wrfout are bit-identical to `0.2.39` except `avo` and `pvo`. A full
+WRF-Runner frame wrote the same files, byte-identical except the Vorticity
+products and their readouts.
 
 ## 0.2.38 Reflectivity Parity Fix
 
