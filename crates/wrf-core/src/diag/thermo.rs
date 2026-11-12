@@ -4,6 +4,7 @@
 use crate::compute::ComputeOpts;
 use crate::error::WrfResult;
 use crate::file::WrfFile;
+use crate::grid::par_to_vec;
 use crate::units::PAR_MIN_LEN;
 use rayon::prelude::*;
 
@@ -26,17 +27,17 @@ pub fn compute_tv2m(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<
 
 /// Temperature (K). `[nz, ny, nx]`
 pub fn compute_temp(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    f.temperature(t).map(|v| v.to_vec())
+    f.temperature(t).map(|v| par_to_vec(&v))
 }
 
 /// Temperature (°C). `[nz, ny, nx]`
 pub fn compute_tc(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    f.temperature_c(t).map(|v| v.to_vec())
+    f.temperature_c(t).map(|v| par_to_vec(&v))
 }
 
 /// Potential temperature (K). `[nz, ny, nx]`
 pub fn compute_theta(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    f.full_theta(t).map(|v| v.to_vec())
+    f.full_theta(t).map(|v| par_to_vec(&v))
 }
 
 /// Equivalent potential temperature (K). `[nz, ny, nx]`

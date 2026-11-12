@@ -9,6 +9,7 @@
 use crate::compute::ComputeOpts;
 use crate::error::{WrfError, WrfResult};
 use crate::file::{SharedField, WrfFile};
+use crate::grid::par_to_vec;
 use rayon::prelude::*;
 
 // --- Physical constants (wrf_constants) ---
@@ -208,7 +209,7 @@ fn dbz_at_point(
 /// When QSNOW is missing or entirely zero (sn0=0 behavior), rain mixing
 /// ratio is reassigned to snow below freezing.
 pub fn compute_dbz(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    dbz_field(f, t, opts).map(|v| v.to_vec())
+    dbz_field(f, t, opts).map(|v| par_to_vec(&v))
 }
 
 fn dbz_cache_key(t: usize, opts: &ComputeOpts) -> String {

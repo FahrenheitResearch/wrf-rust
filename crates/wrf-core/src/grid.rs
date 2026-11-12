@@ -1,5 +1,18 @@
 use rayon::prelude::*;
 
+/// Values per rayon task when a cached field is copied out.
+const COPY_CHUNK: usize = 1 << 16;
+
+/// Copy of a field (a cached one, for a caller that gets its own array), made on all threads:
+/// a whole 3-D field is a few hundred MB, and one thread spends most of that copy on page faults.
+pub fn par_to_vec(src: &[f64]) -> Vec<f64> {
+    let mut out = vec![0.0; src.len()];
+    out.par_chunks_mut(COPY_CHUNK)
+        .zip(src.par_chunks(COPY_CHUNK))
+        .for_each(|(dst, part)| dst.copy_from_slice(part));
+    out
+}
+
 /// Destagger a 3D field along the X (west_east) axis.
 ///
 /// Input shape: `[nz, ny, nx_stag]` where `nx_stag = nx + 1`.

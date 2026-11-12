@@ -4,6 +4,7 @@
 use crate::compute::ComputeOpts;
 use crate::error::WrfResult;
 use crate::file::WrfFile;
+use crate::grid::par_to_vec;
 
 /// Precipitable water (mm). `[ny, nx]`
 pub fn compute_pw(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
@@ -71,7 +72,7 @@ pub fn dewpoint_2m_c(q: f64, p_pa: f64) -> f64 {
 
 /// Water vapor mixing ratio (kg/kg). `[nz, ny, nx]`
 pub fn compute_mixing_ratio(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    f.qvapor(t).map(|v| v.to_vec())
+    f.qvapor(t).map(|v| par_to_vec(&v))
 }
 
 /// Specific humidity (kg/kg). `[nz, ny, nx]`

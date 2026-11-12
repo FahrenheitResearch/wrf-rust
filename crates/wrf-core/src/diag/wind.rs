@@ -4,32 +4,33 @@
 use crate::compute::ComputeOpts;
 use crate::error::WrfResult;
 use crate::file::WrfFile;
+use crate::grid::par_to_vec;
 use crate::units::PAR_MIN_LEN;
 use rayon::prelude::*;
 
 /// U-wind destaggered (m/s). `[nz, ny, nx]`
 pub fn compute_ua(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    f.u_destag(t).map(|v| v.to_vec())
+    f.u_destag(t).map(|v| par_to_vec(&v))
 }
 
 /// V-wind destaggered (m/s). `[nz, ny, nx]`
 pub fn compute_va(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    f.v_destag(t).map(|v| v.to_vec())
+    f.v_destag(t).map(|v| par_to_vec(&v))
 }
 
 /// W-wind destaggered (m/s). `[nz, ny, nx]`
 pub fn compute_wa(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    f.w_destag(t).map(|v| v.to_vec())
+    f.w_destag(t).map(|v| par_to_vec(&v))
 }
 
 /// Latitude (degrees). `[ny, nx]`
 pub fn compute_lat(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    f.xlat(t).map(|v| v.to_vec())
+    f.xlat(t).map(|v| par_to_vec(&v))
 }
 
 /// Longitude (degrees). `[ny, nx]`
 pub fn compute_lon(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    f.xlong(t).map(|v| v.to_vec())
+    f.xlong(t).map(|v| par_to_vec(&v))
 }
 
 /// Rotate grid-relative (u, v) to earth-relative using SINALPHA/COSALPHA.
@@ -42,7 +43,20 @@ fn rotate_to_earth(
 ) -> (Vec<f64>, Vec<f64>) {
     let mut u_earth = vec![0.0; u.len()];
     let mut v_earth = vec![0.0; v.len()];
+    rotate_to_earth_into(u, v, sina, cosa, nxy, &mut u_earth, &mut v_earth);
+    (u_earth, v_earth)
+}
 
+/// `rotate_to_earth` into given output slices (uvmet writes both halves of one array).
+fn rotate_to_earth_into(
+    u: &[f64],
+    v: &[f64],
+    sina: &[f64],
+    cosa: &[f64],
+    nxy: usize,
+    u_earth: &mut [f64],
+    v_earth: &mut [f64],
+) {
     u_earth
         .par_iter_mut()
         .zip(v_earth.par_iter_mut())
@@ -55,8 +69,6 @@ fn rotate_to_earth(
             *ue = u[idx] * ca - v[idx] * sa;
             *ve = u[idx] * sa + v[idx] * ca;
         });
-
-    (u_earth, v_earth)
 }
 
 /// Wind speed from (u, v). `[nz, ny, nx]`
@@ -103,10 +115,10 @@ pub fn compute_uvmet(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Ve
     let sina = f.sinalpha(t)?;
     let cosa = f.cosalpha(t)?;
 
-    let (ue, ve) = rotate_to_earth(&u, &v, &sina, &cosa, f.nxy());
-
-    let mut out = ue;
-    out.extend(ve);
+    let n = u.len();
+    let mut out = vec![0.0; 2 * n];
+    let (ue, ve) = out.split_at_mut(n);
+    rotate_to_earth_into(&u, &v, &sina, &cosa, f.nxy(), ue, ve);
     Ok(out)
 }
 
@@ -117,10 +129,10 @@ pub fn compute_uvmet10(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<
     let sina = f.sinalpha(t)?;
     let cosa = f.cosalpha(t)?;
 
-    let (ue, ve) = rotate_to_earth(&u10, &v10, &sina, &cosa, f.nxy());
-
-    let mut out = ue;
-    out.extend(ve);
+    let n = u10.len();
+    let mut out = vec![0.0; 2 * n];
+    let (ue, ve) = out.split_at_mut(n);
+    rotate_to_earth_into(&u10, &v10, &sina, &cosa, f.nxy(), ue, ve);
     Ok(out)
 }
 

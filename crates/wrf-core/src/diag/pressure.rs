@@ -4,6 +4,7 @@
 use crate::compute::ComputeOpts;
 use crate::error::WrfResult;
 use crate::file::WrfFile;
+use crate::grid::par_to_vec;
 
 const G: f64 = 9.80665;
 const RD: f64 = 287.058;
@@ -18,22 +19,22 @@ const TC: f64 = 273.16 + 17.5; // ~290.66 K, temperature threshold for capping
 
 /// Full pressure (Pa). `[nz, ny, nx]`
 pub fn compute_pressure(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    f.full_pressure(t).map(|v| v.to_vec())
+    f.full_pressure(t).map(|v| par_to_vec(&v))
 }
 
 /// Full pressure (hPa). `[nz, ny, nx]`
 pub fn compute_pressure_hpa(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    f.pressure_hpa(t).map(|v| v.to_vec())
+    f.pressure_hpa(t).map(|v| par_to_vec(&v))
 }
 
 /// Height MSL (m). `[nz, ny, nx]`
 pub fn compute_height(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    f.height_msl(t).map(|v| v.to_vec())
+    f.height_msl(t).map(|v| par_to_vec(&v))
 }
 
 /// Height AGL (m). `[nz, ny, nx]`
 pub fn compute_height_agl(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    f.height_agl(t).map(|v| v.to_vec())
+    f.height_agl(t).map(|v| par_to_vec(&v))
 }
 
 /// Height on staggered Z levels (m). `[nz_stag, ny, nx]`
@@ -44,17 +45,17 @@ pub fn compute_zstag(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Ve
 
 /// Full geopotential (m^2/s^2), destaggered. `[nz, ny, nx]`
 pub fn compute_geopt(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    f.full_geopotential(t).map(|v| v.to_vec())
+    f.full_geopotential(t).map(|v| par_to_vec(&v))
 }
 
 /// Geopotential on staggered Z levels. `[nz_stag, ny, nx]`
 pub fn compute_geopt_stag(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    f.geopotential_stag(t).map(|v| v.to_vec())
+    f.geopotential_stag(t).map(|v| par_to_vec(&v))
 }
 
 /// Terrain height (m). `[ny, nx]`
 pub fn compute_terrain(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    f.terrain(t).map(|v| v.to_vec())
+    f.terrain(t).map(|v| par_to_vec(&v))
 }
 
 /// Sea-level pressure (hPa). `[ny, nx]`
