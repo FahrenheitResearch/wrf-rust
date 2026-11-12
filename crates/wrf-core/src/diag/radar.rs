@@ -8,7 +8,7 @@
 
 use crate::compute::ComputeOpts;
 use crate::error::{WrfError, WrfResult};
-use crate::file::WrfFile;
+use crate::file::{SharedField, WrfFile};
 use rayon::prelude::*;
 
 // --- Physical constants (wrf_constants) ---
@@ -208,6 +208,25 @@ fn dbz_at_point(
 /// When QSNOW is missing or entirely zero (sn0=0 behavior), rain mixing
 /// ratio is reassigned to snow below freezing.
 pub fn compute_dbz(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
+    dbz_field(f, t, opts).map(|v| v.to_vec())
+}
+
+fn dbz_cache_key(t: usize, opts: &ComputeOpts) -> String {
+    format!(
+        "dbz_{t}_varint{}_liqskin{}",
+        opts.use_varint.unwrap_or(false),
+        opts.use_liqskin.unwrap_or(false)
+    )
+}
+
+/// The 3-D reflectivity, computed once per file, time and reflectivity options
+/// (dbz and maxdbz are asked for by several plots of one time).
+fn dbz_field(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<SharedField> {
+    let cache_key = dbz_cache_key(t, opts);
+    if let Some(cached) = f.cached_field(&cache_key) {
+        return Ok(cached);
+    }
+
     let tk = f.temperature(t)?;
     let pres = f.full_pressure(t)?;
     let qv = f.qvapor(t)?;
@@ -256,12 +275,12 @@ pub fn compute_dbz(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f
         })
         .collect();
 
-    Ok(dbz)
+    Ok(f.store_cached_field(cache_key, dbz))
 }
 
 /// Maximum (composite) reflectivity (dBZ). `[ny, nx]`
 pub fn compute_maxdbz(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
-    let dbz_3d = compute_dbz(f, t, opts)?;
+    let dbz_3d = dbz_field(f, t, opts)?;
     let nxy = f.nxy();
     let nz = f.nz;
 

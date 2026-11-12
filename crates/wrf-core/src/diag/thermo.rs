@@ -4,6 +4,8 @@
 use crate::compute::ComputeOpts;
 use crate::error::WrfResult;
 use crate::file::WrfFile;
+use crate::units::PAR_MIN_LEN;
+use rayon::prelude::*;
 
 /// 2-m temperature (K). `[ny, nx]`
 pub fn compute_t2(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
@@ -91,8 +93,9 @@ pub fn compute_td(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f
     let qv = f.qvapor(t)?;
 
     Ok(p_hpa
-        .iter()
-        .zip(qv.iter())
+        .par_iter()
+        .zip(qv.par_iter())
+        .with_min_len(PAR_MIN_LEN)
         .map(|(p, q)| dewpoint_from_q(*q, *p))
         .collect())
 }
@@ -104,9 +107,10 @@ pub fn compute_rh(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f
     let qv = f.qvapor(t)?;
 
     Ok(p_hpa
-        .iter()
-        .zip(tc.iter())
-        .zip(qv.iter())
+        .par_iter()
+        .zip(tc.par_iter())
+        .zip(qv.par_iter())
+        .with_min_len(PAR_MIN_LEN)
         .map(|((p, t_c), q)| rh_from_q(*q, *p, *t_c).clamp(0.0, 100.0))
         .collect())
 }

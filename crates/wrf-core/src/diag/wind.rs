@@ -4,6 +4,8 @@
 use crate::compute::ComputeOpts;
 use crate::error::WrfResult;
 use crate::file::WrfFile;
+use crate::units::PAR_MIN_LEN;
+use rayon::prelude::*;
 
 /// U-wind destaggered (m/s). `[nz, ny, nx]`
 pub fn compute_ua(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
@@ -42,9 +44,10 @@ fn rotate_to_earth(
     let mut v_earth = vec![0.0; v.len()];
 
     u_earth
-        .iter_mut()
-        .zip(v_earth.iter_mut())
+        .par_iter_mut()
+        .zip(v_earth.par_iter_mut())
         .enumerate()
+        .with_min_len(PAR_MIN_LEN)
         .for_each(|(idx, (ue, ve))| {
             let ij = idx % nxy;
             let ca = cosa[ij];
@@ -61,8 +64,9 @@ pub fn compute_wspd(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec
     let u = f.u_destag(t)?;
     let v = f.v_destag(t)?;
 
-    Ok(u.iter()
-        .zip(v.iter())
+    Ok(u.par_iter()
+        .zip(v.par_iter())
+        .with_min_len(PAR_MIN_LEN)
         .map(|(u, v)| (u * u + v * v).sqrt())
         .collect())
 }
@@ -124,8 +128,9 @@ pub fn compute_uvmet10(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<
 pub fn compute_wspd10(f: &WrfFile, t: usize, _opts: &ComputeOpts) -> WrfResult<Vec<f64>> {
     let u = f.u10(t)?;
     let v = f.v10(t)?;
-    Ok(u.iter()
-        .zip(v.iter())
+    Ok(u.par_iter()
+        .zip(v.par_iter())
+        .with_min_len(PAR_MIN_LEN)
         .map(|(u, v)| (u * u + v * v).sqrt())
         .collect())
 }

@@ -1,4 +1,5 @@
 use crate::error::{WrfError, WrfResult};
+use rayon::prelude::*;
 
 /// Unit types supported by wrf-rust.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -190,6 +191,9 @@ pub fn convert_value(value: f64, from: WrfUnits, to: WrfUnits) -> WrfResult<f64>
     }
 }
 
+/// Values per rayon task for the element-wise loops over whole grids.
+pub(crate) const PAR_MIN_LEN: usize = 1 << 15;
+
 /// Convert an array of values in-place.
 pub fn convert_array(values: &mut [f64], from: WrfUnits, to: WrfUnits) -> WrfResult<()> {
     if from == to {
@@ -197,9 +201,13 @@ pub fn convert_array(values: &mut [f64], from: WrfUnits, to: WrfUnits) -> WrfRes
     }
     // Validate the conversion is possible with a test value first
     convert_value(0.0, from, to)?;
-    for v in values.iter_mut() {
-        // Safe to unwrap: we validated above
-        *v = convert_value(*v, from, to).unwrap();
-    }
+    // Each value is converted on its own, so doing it on all threads gives the same values
+    values
+        .par_iter_mut()
+        .with_min_len(PAR_MIN_LEN)
+        .for_each(|v| {
+            // Safe to unwrap: we validated above
+            *v = convert_value(*v, from, to).unwrap();
+        });
     Ok(())
 }
