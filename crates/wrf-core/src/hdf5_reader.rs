@@ -8,7 +8,7 @@
 //! This module is gated behind the `pure-rust-reader` feature flag.
 
 use std::collections::HashMap;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Read};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -63,19 +63,59 @@ fn io_err(e: std::io::Error) -> WrfError {
 // Low-level read helpers
 // ---------------------------------------------------------------------------
 
+/// Fill `buf` from byte `off` of the file with a positional read, which
+/// neither uses nor moves the file offset.
+///
+/// The offset belongs to the open file description, and a forked process
+/// shares it with its parent and its siblings: with seek-then-read, a
+/// `WrfFile` opened before `fork()` and then read by several workers (a
+/// `ProcessPoolExecutor` on Linux) read from each other's positions and got
+/// corrupt deflate streams or silently wrong values.
+#[cfg(unix)]
+fn read_exact_at(file: &std::fs::File, buf: &mut [u8], off: u64) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::read_exact_at(file, buf, off)
+}
+
+#[cfg(windows)]
+fn read_exact_at(file: &std::fs::File, mut buf: &mut [u8], mut off: u64) -> std::io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    while !buf.is_empty() {
+        match file.seek_read(buf, off) {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "failed to fill whole buffer",
+                ))
+            }
+            Ok(n) => {
+                buf = &mut buf[n..];
+                off += n as u64;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn read_exact_at(mut file: &std::fs::File, buf: &mut [u8], off: u64) -> std::io::Result<()> {
+    use std::io::{Seek, SeekFrom};
+    file.seek(SeekFrom::Start(off))?;
+    file.read_exact(buf)
+}
+
 fn read_u8_at(r: &Mutex<BufReader<std::fs::File>>, off: u64) -> WrfResult<u8> {
-    let mut f = r.lock().unwrap();
-    f.seek(SeekFrom::Start(off)).map_err(io_err)?;
+    let f = r.lock().unwrap();
     let mut b = [0u8; 1];
-    f.read_exact(&mut b).map_err(io_err)?;
+    read_exact_at(f.get_ref(), &mut b, off).map_err(io_err)?;
     Ok(b[0])
 }
 
 fn read_bytes(r: &Mutex<BufReader<std::fs::File>>, off: u64, n: usize) -> WrfResult<Vec<u8>> {
-    let mut f = r.lock().unwrap();
-    f.seek(SeekFrom::Start(off)).map_err(io_err)?;
+    let f = r.lock().unwrap();
     let mut buf = vec![0u8; n];
-    f.read_exact(&mut buf).map_err(io_err)?;
+    read_exact_at(f.get_ref(), &mut buf, off).map_err(io_err)?;
     Ok(buf)
 }
 
@@ -2851,5 +2891,77 @@ mod tests {
         assert_eq!(read_string_from_heap(heap_data, 22), "wind_u");
         // Past end returns empty
         assert_eq!(read_string_from_heap(heap_data, 100), "");
+    }
+}
+
+/// A reader opened before `fork()` must read the right bytes in the parent
+/// and in the child while both read at once (they share one file offset).
+#[cfg(all(test, unix))]
+mod fork_read_tests {
+    use super::*;
+    use std::io::Write;
+    use std::time::{Duration, Instant};
+
+    const LEN: usize = 1 << 20;
+
+    fn byte_at(i: usize) -> u8 {
+        ((i as u64).wrapping_mul(2_654_435_761) >> 13) as u8
+    }
+
+    /// Reads at pseudo-random offsets and checks every byte; false on any
+    /// wrong byte or read error.
+    fn reads_right(r: &Mutex<BufReader<std::fs::File>>, seed: u64, rounds: usize) -> bool {
+        let mut x = seed;
+        for _ in 0..rounds {
+            x = x
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let off = ((x >> 33) as usize) % (LEN - 4096);
+            let n = 1 + ((x >> 20) as usize) % 4096;
+            match read_bytes(r, off as u64, n) {
+                Ok(got) if got.iter().enumerate().all(|(j, &b)| b == byte_at(off + j)) => {}
+                _ => return false,
+            }
+            if read_u8_at(r, off as u64).ok() != Some(byte_at(off)) {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[test]
+    fn a_file_opened_before_fork_reads_right_in_parent_and_child() {
+        let path = std::env::temp_dir().join(format!("wrf-core-fork-read-{}.bin", std::process::id()));
+        let data: Vec<u8> = (0..LEN).map(byte_at).collect();
+        std::fs::File::create(&path).unwrap().write_all(&data).unwrap();
+        let reader = Mutex::new(BufReader::new(std::fs::File::open(&path).unwrap()));
+        assert!(reads_right(&reader, 1, 100));
+
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            let code = if reads_right(&reader, 2, 20_000) { 0 } else { 1 };
+            unsafe { libc::_exit(code) };
+        }
+        let parent_right = reads_right(&reader, 3, 20_000);
+
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut status = 0;
+        while unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) } != pid {
+            if Instant::now() > deadline {
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                    libc::waitpid(pid, &mut status, 0);
+                }
+                panic!("forked child did not finish reading");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::fs::remove_file(&path).ok();
+        assert!(parent_right, "the parent read wrong bytes while its forked child read the same file");
+        assert!(
+            libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
+            "the forked child read wrong bytes, wait status {status}"
+        );
     }
 }
