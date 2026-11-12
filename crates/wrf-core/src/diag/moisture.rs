@@ -55,7 +55,7 @@ pub fn compute_dp2m(f: &WrfFile, t: usize, opts: &ComputeOpts) -> WrfResult<Vec<
 ///
 /// Breakage this prevents: a converter from a limited-area MPAS mesh
 /// writes NaN at every point off the mesh, and `f64::max(NaN, 1e-10)`
-/// returns `1e-10`, so the floor turned each missing Q2 into a -150 C
+/// returns `1e-10`, so the floor turned each missing Q2 into a -121 C
 /// dewpoint and the whole frame outside the mesh
 /// was painted with the -40 F end of the 2 m dewpoint scale, while T2 and
 /// MSLP left it blank.  Finite inputs give the same bits as before.

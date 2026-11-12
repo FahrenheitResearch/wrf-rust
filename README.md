@@ -32,8 +32,8 @@ vorticity part where the map factor is 0.985).
 Also fixed: worker processes that `ProcessPoolExecutor` forks on Linux no
 longer hang when the parent computed a diagnostic first; a `WrfFile` opened
 before the fork reads correctly in the workers; `dp2m` stays missing where
-`Q2` or `PSFC` is missing instead of showing -150 C; a history file without
-`T` opens.
+`Q2` or `PSFC` is missing instead of showing about -121 C (missing `Q2`) or
+-138 C (missing `PSFC`); a history file without `T` opens.
 
 Faster, with the same values: `interplevel` (720 calls: 48.8 s to 13.3 s,
 bit-identical including NaN positions), multi-threaded unit conversions, wind
