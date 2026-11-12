@@ -1856,7 +1856,7 @@ dependencies = [
 
 [[package]]
 name = "wrf-py"
-version = "0.2.39"
+version = "0.2.50"
 dependencies = [
  "ndarray 0.17.2",
  "numpy",
