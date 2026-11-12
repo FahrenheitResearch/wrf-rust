@@ -580,52 +580,54 @@ def interplevel(field_3d, vert_coord_3d, target_level):
     is_pressure = vert_coord_3d[0, mid_j, mid_i] > vert_coord_3d[-1, mid_j, mid_i]
 
     result = np.full((ny, nx), np.nan, dtype=np.float64)
+    # Cells without a value yet. A cell takes the first level pair that
+    # brackets the target and gives a value (a NaN value leaves it open for
+    # the next pair).
+    unfilled = np.ones((ny, nx), dtype=bool)
 
     if is_pressure:
         # Log-pressure interpolation
-        log_vert = np.log(np.clip(vert_coord_3d, 1e-10, None))
         log_target = np.log(target_2d)
 
-        for k in range(nz - 1):
-            # Find grid cells where target is bracketed by levels k and k+1
+    # The arithmetic is done only on the cells a level pair brackets, with
+    # the same operations per cell as on whole levels, so the result is the
+    # same to the bit (a whole-cube log and whole-level temporaries made
+    # this several times slower).
+    for k in range(nz - 1):
+        # Find grid cells where target is bracketed by levels k and k+1
+        if is_pressure:
             # (pressure decreases upward, so vert[k] >= target >= vert[k+1])
-            above = vert_coord_3d[k, :, :] >= target_level
-            below = vert_coord_3d[k + 1, :, :] <= target_level
-            mask = above & below & np.isnan(result)
-
-            if not np.any(mask):
-                continue
-
-            denom = log_vert[k + 1, :, :] - log_vert[k, :, :]
-            # Avoid division by zero
-            safe_denom = np.where(np.abs(denom) < 1e-12, 1.0, denom)
-            frac = (log_target - log_vert[k, :, :]) / safe_denom
-            interped = field_3d[k, :, :] + frac * (
-                field_3d[k + 1, :, :] - field_3d[k, :, :]
+            mask = (vert_coord_3d[k] >= target_level) & (
+                vert_coord_3d[k + 1] <= target_level
             )
-            result = np.where(mask, interped, result)
-
-        # Points still NaN are underground or above model top -- leave as NaN
-    else:
-        # Linear height interpolation
-        for k in range(nz - 1):
-            above = vert_coord_3d[k, :, :] <= target_2d
-            below = vert_coord_3d[k + 1, :, :] >= target_2d
-            mask = above & below & np.isnan(result)
-
-            if not np.any(mask):
-                continue
-
-            denom = vert_coord_3d[k + 1, :, :] - vert_coord_3d[k, :, :]
-            safe_denom = np.where(np.abs(denom) < 1e-12, 1.0, denom)
-            frac = (target_2d - vert_coord_3d[k, :, :]) / safe_denom
-            interped = field_3d[k, :, :] + frac * (
-                field_3d[k + 1, :, :] - field_3d[k, :, :]
+        else:
+            mask = (vert_coord_3d[k] <= target_2d) & (
+                vert_coord_3d[k + 1] >= target_2d
             )
-            result = np.where(mask, interped, result)
+        mask &= unfilled
 
-        # Points still NaN are underground or above model top -- leave as NaN
+        if not mask.any():
+            continue
 
+        v_lo = vert_coord_3d[k][mask]
+        v_hi = vert_coord_3d[k + 1][mask]
+        if is_pressure:
+            v_lo = np.log(np.clip(v_lo, 1e-10, None))
+            v_hi = np.log(np.clip(v_hi, 1e-10, None))
+            target = log_target[mask]
+        else:
+            target = target_2d[mask]
+
+        denom = v_hi - v_lo
+        # Avoid division by zero
+        safe_denom = np.where(np.abs(denom) < 1e-12, 1.0, denom)
+        frac = (target - v_lo) / safe_denom
+        f_lo = field_3d[k][mask]
+        interped = f_lo + frac * (field_3d[k + 1][mask] - f_lo)
+        result[mask] = interped
+        unfilled[mask] = np.isnan(interped)
+
+    # Points still NaN are underground or above model top -- leave as NaN
     return result
 
 
